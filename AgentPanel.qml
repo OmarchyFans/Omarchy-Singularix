@@ -200,9 +200,11 @@ Panel {
     }
   }
 
+  // Focuses the agent's window if open, else reattaches to its tmux session
+  // (or starts it). The chat survives closing the window.
   function launchSaved() {
     if (savedName === "") return
-    Quickshell.execDetached([root.launcher, "--popup", "launch", savedName])
+    Quickshell.execDetached([root.launcher, "chat", savedName])
     root.close()
   }
   function openManager() { Quickshell.execDetached([root.launcher, "--popup", "manage"]); root.close() }
@@ -499,7 +501,7 @@ Panel {
           Column {
             width: parent.width; spacing: Style.spacing.labelGap
             visible: root.savedOptions.length > 0
-            FieldLabel { text: "SAVED AGENTS" }
+            FieldLabel { text: "SAVED AGENTS  ·  open a persistent chat window" }
             Row {
               width: parent.width; spacing: Style.spacing.controlGap
               PanelDropdown {
@@ -513,7 +515,7 @@ Panel {
                 foreground: root.foreground; fontFamily: root.fontFamily
                 onChanged: function(v) { root.savedName = v }
               }
-              Button { id: launchSavedBtn; text: "Launch"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.launchSaved() }
+              Button { id: launchSavedBtn; text: "Chat"; iconText: "󰭹"; tooltipText: "Open or focus this agent's window; the conversation persists"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.launchSaved() }
               Button { id: manageBtn; text: "Manage…"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.openManager() }
             }
           }

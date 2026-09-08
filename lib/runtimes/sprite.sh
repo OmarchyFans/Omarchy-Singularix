@@ -83,11 +83,10 @@ rt_oauth() {
   run sprite exec --tty -s "$sname" -- bash -lc "$(remote_cmd "$AGENT_BIN" "${args[@]}")"
 }
 
-rt_launch() { # rt_launch <name> <inline:0|1>
+rt_cmd() { # rt_cmd <name> [resume]
   local sname; sname=$(sprite_name "$1")
-  local -a args; mapfile -t args < <(agent_launch_args "$1")
-  local floating=0; [[ $(profile_get "$1" mode) == unattended ]] && floating=1
-  launch_session "$2" "$floating" sprite exec --tty -s "$sname" -- bash -lc "$(remote_cmd "$AGENT_BIN" "${args[@]}")"
+  local -a args; mapfile -t args < <(agent_launch_args "$1" "${2:-0}")
+  printf '%s\n' sprite exec --tty -s "$sname" -- bash -lc "$(remote_cmd "$AGENT_BIN" "${args[@]}")"
 }
 
 rt_console() { run sprite console -s "$(sprite_name "$1")"; }

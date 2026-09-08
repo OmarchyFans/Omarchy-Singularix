@@ -19,11 +19,9 @@ rt_oauth() { # interactive, in the current terminal (opens a browser)
   run "${cmd[@]}"
 }
 
-rt_launch() { # rt_launch <name> <inline:0|1>
-  local -a args cmd; mapfile -t args < <(agent_launch_args "$1")
-  mapfile -t cmd < <(rt_env_cmd "$1" "${args[@]}")
-  local floating=0; [[ $(profile_get "$1" mode) == unattended ]] && floating=1
-  launch_session "$2" "$floating" "${cmd[@]}"
+rt_cmd() { # rt_cmd <name> [resume] -> the session command, one word per line
+  local -a args; mapfile -t args < <(agent_launch_args "$1" "${2:-0}")
+  rt_env_cmd "$1" "${args[@]}"
 }
 
 rt_destroy() { :; }

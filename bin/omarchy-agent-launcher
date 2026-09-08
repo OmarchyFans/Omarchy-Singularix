@@ -11,7 +11,8 @@
 # Usage:
 #   omarchy-agent-launcher                 interactive menu (new / relaunch / manage)
 #   omarchy-agent-launcher new             the new-agent form
-#   omarchy-agent-launcher launch <name>   relaunch a saved agent
+#   omarchy-agent-launcher launch <name>   open (or focus) the agent's window and start it
+#   omarchy-agent-launcher chat <name>     same: focus the running session, or start one
 #   omarchy-agent-launcher manage          show / edit job / sign in / remove / destroy
 #   omarchy-agent-launcher list | show <name> | job <name> | sign-in <name>
 #   omarchy-agent-launcher remove <name>   forget a saved agent (and its local home)
@@ -27,12 +28,16 @@
 #     (never from argv); --launch then
 #     opens the session in a floating terminal (sign-in happens there if needed).
 #
-# Flags: --popup   re-open this command in a floating terminal (for keybindings)
-#        --inline  run the agent session in this terminal instead of a new window
+# Sessions run inside tmux (session oal-<name>) in a terminal titled
+# "Agent · <name>". Closing the window detaches; launch/chat reattaches.
+#
+# Flags: --popup   re-open this command in a floating terminal (for the wizard/menus)
+#        --inline  run the agent session in this terminal instead of its own window
 #        --dry-run print every command instead of running it (no side effects)
 set -uo pipefail
 
-OAL_ROOT="$(cd -- "$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+OAL_SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+OAL_ROOT="$(cd -- "$(dirname -- "$OAL_SELF")/.." && pwd)"
 OAL_LIB="$OAL_ROOT/lib"
 OAL_VERSION=$(jq -r .version "$OAL_ROOT/manifest.json" 2>/dev/null || echo dev)
 
@@ -228,18 +233,57 @@ cmd_new() {
 }
 
 # ================================================================== launch ====
-cmd_launch() {
-  local name=$1; profile_exists "$name" || fail "no saved agent named '$name' (see: omarchy-agent-launcher list)"
-  load_profile_adapters "$name"
-  title "Launching $name ($(agent_label "$(profile_get "$name" agent)") on $(runtime_label "$(profile_get "$name" runtime)"))"
+# Provision + prepare + first-time sign-in, in the current terminal.
+prepare_session() { # prepare_session <name>
+  local name=$1
   agent_provision "$name"
   rt_prepare "$name"
   if [[ $(profile_get "$name" auth) == oauth && $(profile_get "$name" signed_in) != true ]]; then
     hr; say "First launch: sign in to $(provider_label "$(profile_get "$name" provider)")."
+    say "(This prompt lives in the agent's tmux session: close or switch windows freely and come back.)"
     if rt_oauth "$name"; then profile_set "$name" signed_in true; else warn "sign-in did not complete; launching anyway"; fi
   fi
-  hr
-  rt_launch "$name" "$INLINE"
+}
+
+cmd_launch() {
+  local name=$1; profile_exists "$name" || fail "no saved agent named '$name' (see: omarchy-agent-launcher list)"
+  load_profile_adapters "$name"
+  if (( INLINE )); then
+    title "Launching $name ($(agent_label "$(profile_get "$name" agent)") on $(runtime_label "$(profile_get "$name" runtime)"))"
+    prepare_session "$name"
+    local -a cmd; mapfile -t cmd < <(rt_cmd "$name" 0)
+    hr
+    if (( OAL_DRY_RUN )); then say "[dry-run] would launch:"; show_cmd "${cmd[@]}"; return 0; fi
+    exec "${cmd[@]}"
+  fi
+  open_agent_window "$name"
+}
+
+# Runs inside the agent's tmux session: the whole lifecycle, then a menu so
+# the window never just vanishes on exit.
+cmd_session() {
+  local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
+  load_profile_adapters "$name"
+  local resume=0 code
+  while :; do
+    title "$name  ·  $(agent_label "$(profile_get "$name" agent)") on $(runtime_label "$(profile_get "$name" runtime)")"
+    if (( ! resume )); then prepare_session "$name"; fi
+    local -a cmd; mapfile -t cmd < <(rt_cmd "$name" "$resume")
+    hr
+    "${cmd[@]}"; code=$?
+    hr
+    if (( code == 0 )); then say "Session ended."; else say "Session ended with exit code $code."; fi
+    local pick
+    pick=$(choose "What next?" \
+      "chat     Open a chat that continues this agent's conversation" \
+      "restart  Run the job again from the start" \
+      "close    Close this window (the saved agent stays)") || pick=close
+    case "${pick%% *}" in
+      chat)    resume=1 ;;
+      restart) resume=0 ;;
+      *)       break ;;
+    esac
+  done
 }
 
 cmd_sign_in() {
@@ -291,7 +335,7 @@ cmd_manage() {
   (( ${#rows[@]} )) || { say "No saved agents yet."; return; }
   local pick; pick=$(choose "Which agent?" "${rows[@]}"); [[ -n $pick ]] || return
   n=${pick%% *}
-  local action; action=$(choose "$n" "launch" "show" "edit job" "sign in again" "remove (forget + delete local home)" "destroy (also remove container / sprite)" "console (sprite shell)")
+  local action; action=$(choose "$n" "launch (open or focus the agent window)" "show" "edit job" "sign in again" "remove (forget + delete local home)" "destroy (also remove container / sprite)" "console (sprite shell)")
   case "${action%% *}" in
     launch) cmd_launch "$n" ;; show) cmd_show "$n" ;; edit) cmd_job "$n" ;; sign) cmd_sign_in "$n" ;;
     remove) cmd_remove "$n" ;; destroy) cmd_destroy "$n" ;; console) cmd_console "$n" ;;
@@ -392,9 +436,8 @@ cmd_create() {
   profile_write "$name" "$agent" "$runtime" "$provider" "$auth" "$model" "$base_url" "$mode" "$(printf '%s\n' "${skills[@]}")"
   (( JSON )) && jq -c . "$(profile_path "$name")" || say "saved $name"
   if (( launch )); then
-    # Called from the panel there is no terminal: sign-in and the session need
-    # one, so hand off to a floating popup. From a shell, launch right here.
-    if [[ -t 1 ]] || (( OAL_DRY_RUN )); then cmd_launch "$name"; else unset OAL_API_KEY OAL_JOB; exec "${BASH_SOURCE[0]}" --popup launch "$name"; fi
+    unset OAL_API_KEY OAL_JOB     # the agent window must not inherit them
+    cmd_launch "$name"             # opens (or focuses) the agent window; --inline runs here
   fi
 }
 
@@ -406,6 +449,8 @@ case "${CMD[0]:-menu}" in
   info)    cmd_info ;;
   create)  cmd_create ;;
   launch)  cmd_launch "${CMD[1]:?launch needs a name}" ;;
+  chat|open) cmd_launch "${CMD[1]:?chat needs a name}" ;;
+  session) cmd_session "${CMD[1]:?session needs a name}" ;;
   sign-in) cmd_sign_in "${CMD[1]:?sign-in needs a name}" ;;
   list)    cmd_list ;;
   show)    cmd_show "${CMD[1]:?show needs a name}" ;;

@@ -100,14 +100,18 @@ agent_oauth_args() { # agent_oauth_args <name> <no_browser>
 }
 
 # Arguments after `hermes` that start the session (one per line).
-agent_launch_args() { # agent_launch_args <name>
-  local name=$1 mode skill
+# <resume:1> continues the latest session in this agent's home (the chat
+# after an unattended run, or picking up where a closed window left off).
+agent_launch_args() { # agent_launch_args <name> [resume]
+  local name=$1 resume=${2:-0} mode skill
   mode=$(profile_get "$name" mode)
   printf '%s\n' chat
   while IFS= read -r skill; do
     [[ -n $skill ]] && printf '%s\n' -s "$(agent_skill_short "$skill")"
   done < <(profile_skills "$name")
-  if [[ $mode == unattended ]]; then
+  if (( resume )); then
+    printf '%s\n' -c --create-if-missing
+  elif [[ $mode == unattended ]]; then
     printf '%s\n' -q "$KICKOFF_UNATTENDED" --oneshot --yolo
   else
     printf '%s\n' -q "$KICKOFF_INTERACTIVE"

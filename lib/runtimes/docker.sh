@@ -41,11 +41,9 @@ rt_oauth() {
   run "${cmd[@]}"
 }
 
-rt_launch() { # rt_launch <name> <inline:0|1>
-  local -a args cmd; mapfile -t args < <(agent_launch_args "$1")
-  mapfile -t cmd < <(rt_run_cmd "$1" "${args[@]}")
-  local floating=0; [[ $(profile_get "$1" mode) == unattended ]] && floating=1
-  launch_session "$2" "$floating" "${cmd[@]}"
+rt_cmd() { # rt_cmd <name> [resume]
+  local -a args; mapfile -t args < <(agent_launch_args "$1" "${2:-0}")
+  rt_run_cmd "$1" "${args[@]}"
 }
 
 rt_destroy() {

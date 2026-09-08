@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "fans.omarchy.agent-launcher",
   "name": "Agent Launcher",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "modpunk (omarchy.fans)",
   "license": "MIT",
   "description": "Spin up an AI agent (Hermes Agent or OpenClaw) from a keybinding: pick the agent, where it runs (local shell, Docker, or a Fly.io Sprite), the model and how to sign in (browser OAuth or API key), the skills to preload, and the job it should carry out. Each agent gets its own isolated profile.",

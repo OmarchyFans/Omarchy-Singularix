@@ -88,9 +88,11 @@ agent_oauth_args() { # agent_oauth_args <name> <no_browser>
   return 0
 }
 
-agent_launch_args() { # agent_launch_args <name>
-  local mode; mode=$(profile_get "$1" mode)
-  if [[ $mode == unattended ]]; then
+agent_launch_args() { # agent_launch_args <name> [resume]
+  local mode resume=${2:-0}; mode=$(profile_get "$1" mode)
+  if (( resume )); then
+    printf '%s\n' tui --local
+  elif [[ $mode == unattended ]]; then
     printf '%s\n' agent --local --message "$KICKOFF_UNATTENDED"
   else
     printf '%s\n' tui --local --message "$KICKOFF_INTERACTIVE"

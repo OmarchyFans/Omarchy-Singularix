@@ -30,7 +30,7 @@ y
 A
 if command -v hermes >/dev/null; then
   out=$("$L" --dry-run new 2>&1) || { echo "$out"; tfail "form exited non-zero"; }
-  grep -q "would launch" <<<"$out" || { echo "$out"; tfail "no launch line"; }
+  grep -q "would open window" <<<"$out" || { echo "$out"; tfail "no window line"; }
   P="$XDG_CONFIG_HOME/omarchy-agent-launcher/agents/release-notes-bot.json"
   [[ -f $P ]] || tfail "profile not saved"
   [[ $(jq -r .provider "$P") == anthropic && $(jq -r .mode "$P") == unattended ]] || tfail "profile fields"
@@ -38,7 +38,9 @@ if command -v hermes >/dev/null; then
   grep -q "^ANTHROPIC_API_KEY=sk-ant-test-123$" "$XDG_CONFIG_HOME/omarchy-agent-launcher/secrets.env" || tfail "secret not saved"
   [[ $(stat -c %a "$XDG_CONFIG_HOME/omarchy-agent-launcher/secrets.env") == 600 ]] || tfail "secrets.env mode"
   grep -q "Write release notes" "$XDG_CONFIG_HOME/omarchy-agent-launcher/agents/release-notes-bot.job.md" || tfail "job not saved"
+  out=$("$L" --dry-run --inline launch release-notes-bot 2>&1) || tfail "inline dry-run"
   grep -q -- "--oneshot --yolo" <<<"$out" || tfail "unattended flags"
+  out=$("$L" --dry-run --inline launch release-notes-bot 2>&1); grep -q -- "-s deep-research" <<<"$out" || tfail "skill preload flag"
   pass "form -> profile, secret, job, dry-run launch"
 else
   echo "  skip (hermes not installed): local form test"
@@ -73,9 +75,11 @@ echo "== dry-run launches for every agent × runtime"
 secret_set SPRITES_TOKEN org/id/secret
 for a in hermes openclaw; do for r in local docker sprite; do
   n="m-$a-$r"; profile_write "$n" "$a" "$r" openrouter api-key m - interactive ""; cp "$(job_path prov)" "$(job_path "$n")"
-  out=$("$L" --dry-run launch "$n" 2>&1) || { echo "$out"; tfail "dry-run $n"; }
-  grep -q "would launch" <<<"$out" || { echo "$out"; tfail "no launch line for $n"; }
-  case $r in docker) grep -q "docker run -it --rm" <<<"$out" || tfail "$n docker cmd";; sprite) grep -q "sprite exec --tty" <<<"$out" || tfail "$n sprite cmd";; esac
+  inl=$("$L" --dry-run --inline launch "$n" 2>&1) || { echo "$inl"; tfail "dry-run $n"; }
+  grep -q "would launch" <<<"$inl" || { echo "$inl"; tfail "no launch line for $n"; }
+  out=$("$L" --dry-run launch "$n" 2>&1) || { echo "$out"; tfail "dry-run window $n"; }
+  grep -q "would open window" <<<"$out" || { echo "$out"; tfail "no window line for $n"; }
+  case $r in docker) grep -q "docker run -it --rm" <<<"$inl" || tfail "$n docker cmd";; sprite) grep -q "sprite exec --tty" <<<"$inl" || tfail "$n sprite cmd";; esac
 done; done
 pass "6 combinations"
 
@@ -89,7 +93,7 @@ printf '# Job\nTriage issues.\n' | OAL_API_KEY=sk-test-999 "$L" create --json --
 grep -q "^ANTHROPIC_API_KEY=sk-test-999$" "$XDG_CONFIG_HOME/omarchy-agent-launcher/secrets.env" || tfail "create key"
 grep -q "Triage issues" "$XDG_CONFIG_HOME/omarchy-agent-launcher/agents/issue-triage.job.md" || tfail "create job"
 out=$(printf 'job\n' | "$L" --dry-run create --name t2 --agent openclaw --runtime docker --provider ollama --auth none --mode interactive --job-stdin --launch 2>&1) || tfail "create --launch"
-grep -q "would launch" <<<"$out" || tfail "create --launch output"
+grep -q "would open window\|would launch" <<<"$out" || tfail "create --launch output"
 "$L" create --name x --agent hermes --runtime local --provider openai --auth api-key --mode interactive --job-file /dev/null 2>/dev/null && tfail "create should reject empty job"
 pass "info --json, create, create --launch, validation"
 

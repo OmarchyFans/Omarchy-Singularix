@@ -28,24 +28,43 @@ run() {
 # Print a command the way run() would, without executing (for summaries).
 show_cmd() { printf '  $ %q' "$1"; printf ' %q' "${@:2}"; printf '\n'; }
 
-# Launch an interactive session in its own terminal window. Sessions share the
-# org.omarchy.agent app-id with Omarchy's own `omarchy-agent`, so users' window
-# rules for agent windows apply here too. --inline runs in the current terminal.
-launch_session() { # launch_session <inline:0|1> <floating:0|1> <cmd...>
-  local inline=$1 floating=$2; shift 2
-  if (( OAL_DRY_RUN )); then
-    say "[dry-run] would launch:"; show_cmd "$@"; return 0
+# ---- agent windows ---------------------------------------------------------
+# Every agent session runs inside a tmux session named oal-<name>, shown in a
+# terminal window titled "Agent · <name>" with app-id org.omarchy.agent (the
+# class Omarchy's own `omarchy agent` uses, so users' window rules apply).
+# Closing the window only detaches: the sign-in prompt or the chat keeps
+# running, and opening the agent again focuses the window or reattaches.
+window_title() { printf 'Agent · %s' "$1"; }
+tmux_session() { printf 'oal-%s' "$1"; }
+window_address() {
+  have hyprctl || return 0
+  hyprctl clients -j 2>/dev/null | jq -r --arg t "$(window_title "$1")" \
+    '.[] | select(.initialTitle==$t or .title==$t) | .address' | head -n1
+}
+session_alive() { have tmux && tmux has-session -t "$(tmux_session "$1")" 2>/dev/null; }
+
+# Focus the agent's window if it is open; otherwise open a terminal attached
+# to its tmux session (created on demand around `<launcher> session <name>`).
+open_agent_window() { # open_agent_window <name>
+  local name=$1 addr
+  addr=$(window_address "$name")
+  if [[ -n $addr ]]; then
+    run hyprctl dispatch focuswindow "address:$addr" >/dev/null
+    return 0
   fi
-  if (( inline )); then
-    exec "$@"
-  elif (( floating )); then
-    # Presented terminal: shows the Omarchy logo, runs the job, waits on the
-    # "done" screen so unattended output stays readable.
-    local quoted; quoted=$(printf '%q ' "$@")
-    exec omarchy-launch-floating-terminal-with-presentation "$quoted"
+  local -a inner
+  if have tmux; then
+    inner=(tmux new-session -A -s "$(tmux_session "$name")" -- "$OAL_SELF" session "$name")
   else
-    exec omarchy-launch-tui --app-id=org.omarchy.agent "$@"
+    warn "tmux not found; the session will not survive closing its window (omarchy pkg add tmux)"
+    inner=("$OAL_SELF" session "$name")
   fi
+  if (( OAL_DRY_RUN )); then say "[dry-run] would open window '$(window_title "$name")':"; show_cmd "${inner[@]}"; return 0; fi
+  have xdg-terminal-exec || fail "xdg-terminal-exec not found; run inline instead: $OAL_SELF --inline launch $name"
+  local -a launch=(xdg-terminal-exec "--app-id=org.omarchy.agent" "--title=$(window_title "$name")" -e "${inner[@]}")
+  if have uwsm-app; then setsid uwsm-app -- "${launch[@]}" >/dev/null 2>&1 </dev/null &
+  else setsid "${launch[@]}" >/dev/null 2>&1 </dev/null & fi
+  disown 2>/dev/null || true
 }
 
 # ------------------------------------------------------------------ gum ----

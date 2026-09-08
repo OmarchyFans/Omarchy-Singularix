@@ -104,7 +104,8 @@ From a terminal:
 ```bash
 omarchy-agent-launcher                # menu
 omarchy-agent-launcher new            # the form
-omarchy-agent-launcher launch NAME    # relaunch
+omarchy-agent-launcher launch NAME    # open (or focus) the agent's window and start it
+omarchy-agent-launcher chat NAME      # same; reattaches to a running session
 omarchy-agent-launcher manage         # show / edit job / sign in / remove / destroy
 omarchy-agent-launcher list | show NAME | job NAME | sign-in NAME
 omarchy-agent-launcher remove NAME    # forget + delete its local home
@@ -113,10 +114,26 @@ omarchy-agent-launcher --dry-run launch NAME   # print every command, run nothin
 omarchy-agent-launcher --inline launch NAME    # session in this terminal, not a new window
 ```
 
-Sessions open in a new terminal with app-id `org.omarchy.agent`, the same
-class Omarchy's own `omarchy agent` uses, so your window rules apply.
-Unattended runs open in a presented floating terminal that stays until you
-dismiss it.
+### Sessions persist
+
+Every agent runs inside a **tmux session** (`oal-<name>`) shown in a terminal
+window titled `Agent · <name>` with app-id `org.omarchy.agent`, the class
+Omarchy's own `omarchy agent` uses, so your window rules apply. That gives you:
+
+- **A chat window that survives.** Close the window, switch workspaces, log
+  out of the terminal: the agent keeps running. **Chat** in the panel (or
+  `omarchy-agent-launcher chat NAME`) focuses the window if it is open,
+  otherwise opens a new one reattached to the same conversation.
+- **Sign-in that can't be lost.** The browser sign-in prompt lives in that
+  session too. Go to the browser, copy the code, come back through the bar
+  button and Chat: the prompt is still waiting for the code.
+- **No vanishing windows.** When the agent exits, the window shows a menu:
+  continue chatting (the agent resumes its latest conversation), run the job
+  again, or close. After an unattended run, "chat" opens a conversation
+  that already contains the run.
+
+Without tmux the session still runs, just without the reattach behaviour
+(`omarchy pkg add tmux`).
 
 ## How each combination runs
 
@@ -138,6 +155,7 @@ Model ids drift. The provider table lives in one place,
 
 Built on Omarchy 4.x with Hermes Agent 0.21 installed locally.
 
+- ✅ Persistent sessions: a launched agent's window was killed outright; its tmux session survived and `chat` reopened a window attached to the same running conversation. Opening it twice focuses the existing window instead of duplicating it.
 - ✅ The setup panel: loads in the shell, reads live data from `info --json`, and renders every control (screenshot above is a real capture). Its Launch path was exercised piecewise: the environment handoff (`Process.environment` overlays, PATH intact) and the no-terminal `create … --launch` branch, which opened the floating launch terminal and surfaced a runtime error there. Keyboard entry into fields follows hyprmoncfg's proven KeyboardPanel pattern but was not typed into by hand.
 
 - ✅ Hermes · local: provisioning, config parsing, per-agent secrets, skill copy + preload, and the request path (verified with a deliberately invalid key that produced the provider's "incorrect API key" error).
