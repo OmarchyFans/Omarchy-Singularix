@@ -115,14 +115,23 @@ Panel {
   }
 
   // Keep dependent fields valid as the user moves through the form.
-  onAgentChanged: { provider = firstValue(providerOptions, provider); skills = []; skillFilter = "" }
+  // Change handlers call the functions directly: readonly bindings may not
+  // have re-evaluated yet when a handler runs, and a stale [] would wipe the
+  // selection.
+  onAgentChanged: { skills = []; skillFilter = ""; provider = firstValue(providersFor(agent), provider); applyProviderDefaults() }
   onProviderChanged: applyProviderDefaults()
-  onInfoChanged: { provider = firstValue(providerOptions, provider); applyProviderDefaults(); savedName = firstValue(savedOptions, savedName) }
+  onInfoChanged: {
+    provider = firstValue(providersFor(agent), provider)
+    applyProviderDefaults()
+    var saved = info ? info.saved.map(function(s) { return { value: s.name } }) : []
+    savedName = firstValue(saved, savedName)
+  }
   function applyProviderDefaults() {
-    auth = firstValue(authOptions, auth)
-    if (providerInfo) {
-      model = providerInfo.default_model
-      baseUrl = providerInfo.base_url === "-" ? "" : providerInfo.base_url
+    var p = findProvider(provider)
+    auth = firstValue(authOptionsFor(p), auth)
+    if (p) {
+      model = p.default_model
+      baseUrl = p.base_url === "-" ? "" : p.base_url
     }
   }
 
@@ -242,7 +251,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(560))
+    contentWidth: panel.fittedContentWidth(Style.space(800))
     contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(840))
 
     PanelKeyCatcher {
@@ -267,7 +276,7 @@ Panel {
         Column {
           id: column
           width: panelFlick.width
-          spacing: Style.space(10)
+          spacing: Style.space(8)
 
           PanelHero {
             width: parent.width
@@ -281,198 +290,181 @@ Panel {
           }
           PanelSeparator { width: parent.width; foreground: root.foreground }
 
-          // ---- name ---------------------------------------------------
-          Column {
-            width: parent.width; spacing: Style.spacing.labelGap
-            FieldLabel { text: "NAME" }
-            Field {
-              id: nameField
-              width: parent.width
-              placeholderText: root.defaultName()
-              text: root.name
-              onTextEdited: root.name = text
-            }
-          }
+          Row {
+            id: columns
+            width: parent.width
+            spacing: Style.space(18)
+            readonly property real colWidth: (width - spacing) / 2
 
-          // ---- agent + runtime ---------------------------------------
-          Column {
-            width: parent.width; spacing: Style.spacing.labelGap
-            FieldLabel { text: "AGENT" }
-            ButtonGroup {
-              options: [
-                { value: "hermes", label: "Hermes Agent" + (root.findAgent("hermes") && root.findAgent("hermes").installed ? "" : "  (not installed locally)") },
-                { value: "openclaw", label: "OpenClaw" + (root.findAgent("openclaw") && root.findAgent("openclaw").installed ? "" : "  (not installed locally)") }
-              ]
-              value: root.agent
-              foreground: root.foreground; fontFamily: root.fontFamily
-              onChanged: function(v) { root.agent = v }
-            }
-          }
-          Column {
-            width: parent.width; spacing: Style.spacing.labelGap
-            FieldLabel { text: "RUN IN" }
-            ButtonGroup {
-              options: [ { value: "local", label: "Local shell" }, { value: "docker", label: "Docker" }, { value: "sprite", label: "Fly.io Sprite" } ]
-              value: root.runtime
-              foreground: root.foreground; fontFamily: root.fontFamily
-              onChanged: function(v) { root.runtime = v }
-            }
-            Hint { width: parent.width; text: root.runtimeStatus; color: root.runtimeOk ? root.dim : root.urgent }
-          }
+            // ---- left: what runs, where, with which model -------------
+            Column {
+              width: columns.colWidth
+              spacing: Style.space(8)
 
-          // ---- provider + sign-in ------------------------------------
-          Column {
-            width: parent.width; spacing: Style.spacing.labelGap
-            FieldLabel { text: "MODEL PROVIDER" }
-            PanelDropdown {
-              id: providerDrop
-              width: parent.width
-              showLabel: false
-              options: root.providerOptions
-              value: root.provider
-              popupParent: keyCatcher
-              ownerOpen: root.opened
-              foreground: root.foreground; fontFamily: root.fontFamily
-              onChanged: function(v) { root.provider = v }
-            }
-          }
-          Column {
-            width: parent.width; spacing: Style.spacing.labelGap
-            FieldLabel { text: "SIGN-IN" }
-            ButtonGroup {
-              options: root.authOptions
-              value: root.auth
-              foreground: root.foreground; fontFamily: root.fontFamily
-              onChanged: function(v) { root.auth = v }
-            }
-            Field {
-              id: keyField
-              width: parent.width
-              visible: root.auth === "api-key"
-              password: true
-              placeholderText: (root.providerInfo ? root.providerInfo.env : "API key") + "  ·  saved once with mode 600, never shown again"
-              text: root.apiKey
-              onTextEdited: root.apiKey = text
-            }
-            Hint {
-              width: parent.width
-              visible: root.auth === "oauth"
-              text: "A browser sign-in with your own account runs in the launch terminal the first time."
-            }
-          }
-
-          // ---- model + base url --------------------------------------
-          Column {
-            width: parent.width; spacing: Style.spacing.labelGap
-            FieldLabel { text: "MODEL" }
-            Row {
-              width: parent.width; spacing: Style.spacing.controlGap
-              PanelDropdown {
-                id: modelDrop
-                width: Style.space(220)
-                showLabel: false
-                options: root.modelOptions
-                value: root.model
-                popupParent: keyCatcher
-                ownerOpen: root.opened
-                foreground: root.foreground; fontFamily: root.fontFamily
-                onChanged: function(v) { root.model = v }
+              Column {
+                width: parent.width; spacing: Style.spacing.labelGap
+                FieldLabel { text: "NAME" }
+                Field { id: nameField; width: parent.width; placeholderText: root.defaultName(); text: root.name; onTextEdited: root.name = text }
               }
-              Field {
-                id: modelField
-                width: parent.width - modelDrop.width - parent.spacing
-                placeholderText: "or type any model id"
-                text: root.model
-                onTextEdited: root.model = text
+              Column {
+                width: parent.width; spacing: Style.spacing.labelGap
+                FieldLabel { text: "AGENT" }
+                ButtonGroup {
+                  options: [ { value: "hermes", label: "Hermes Agent" }, { value: "openclaw", label: "OpenClaw" } ]
+                  value: root.agent
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onChanged: function(v) { root.agent = v }
+                }
               }
-            }
-            Field {
-              id: urlField
-              width: parent.width
-              visible: root.showBaseUrl
-              placeholderText: "endpoint URL"
-              text: root.baseUrl
-              onTextEdited: root.baseUrl = text
-            }
-          }
-
-          // ---- skills -------------------------------------------------
-          Column {
-            width: parent.width; spacing: Style.spacing.labelGap
-            FieldLabel { text: "SKILLS TO PRELOAD" + (root.skills.length ? "  ·  " + root.skills.length + " selected" : "") }
-            Field {
-              id: filterField
-              width: parent.width
-              visible: root.agentInfo && root.agentInfo.skills.length > 8
-              placeholderText: "filter skills"
-              text: root.skillFilter
-              onTextEdited: root.skillFilter = text
-            }
-            Hint {
-              width: parent.width
-              visible: !root.agentInfo || root.agentInfo.skills.length === 0
-              text: root.agent === "hermes" ? "No skills found in ~/.hermes/skills." : "No skills found in ~/.openclaw/skills."
-            }
-            BorderSurface {
-              width: parent.width
-              visible: root.skillList.length > 0
-              height: Math.min(skillColumn.implicitHeight + Style.spacing.md * 2, Style.space(150))
-              radius: Style.cornerRadius
-              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.04)
-              borderSpec: Border.flat(Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.10), 1)
-              Flickable {
-                anchors.fill: parent
-                anchors.margins: Style.spacing.md
-                contentWidth: width
-                contentHeight: skillColumn.implicitHeight
-                clip: true
-                boundsBehavior: Flickable.StopAtBounds
-                interactive: contentHeight > height
-                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                Column {
-                  id: skillColumn
+              Column {
+                width: parent.width; spacing: Style.spacing.labelGap
+                FieldLabel { text: "RUN IN" }
+                ButtonGroup {
+                  options: [ { value: "local", label: "Local" }, { value: "docker", label: "Docker" }, { value: "sprite", label: "Fly.io Sprite" } ]
+                  value: root.runtime
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onChanged: function(v) { root.runtime = v }
+                }
+                Hint {
                   width: parent.width
-                  Repeater {
-                    model: root.skillList
-                    delegate: SkillRow {
-                      required property string modelData
-                      width: skillColumn.width
-                      label: modelData
-                      selected: root.hasSkill(modelData)
-                      foreground: root.foreground; fontFamily: root.fontFamily
-                      onToggled: root.toggleSkill(modelData)
+                  text: (root.agentInfo && !root.agentInfo.installed && root.runtime === "local" ? root.agentInfo.label + " is not installed locally. " : "") + root.runtimeStatus
+                  color: root.runtimeOk ? root.dim : root.urgent
+                }
+              }
+              Column {
+                width: parent.width; spacing: Style.spacing.labelGap
+                FieldLabel { text: "MODEL PROVIDER" }
+                PanelDropdown {
+                  id: providerDrop
+                  width: parent.width
+                  showLabel: false
+                  options: root.providerOptions
+                  value: root.provider
+                  popupParent: keyCatcher
+                  ownerOpen: root.opened
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onChanged: function(v) { root.provider = v }
+                }
+              }
+              Column {
+                width: parent.width; spacing: Style.spacing.labelGap
+                FieldLabel { text: "SIGN-IN" }
+                ButtonGroup {
+                  options: root.authOptions
+                  value: root.auth
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onChanged: function(v) { root.auth = v }
+                }
+                Field {
+                  id: keyField
+                  width: parent.width
+                  visible: root.auth === "api-key"
+                  password: true
+                  placeholderText: (root.providerInfo ? root.providerInfo.env : "API key") + " (saved once, mode 600)"
+                  text: root.apiKey
+                  onTextEdited: root.apiKey = text
+                }
+                Hint { width: parent.width; visible: root.auth === "oauth"; text: "Browser sign-in with your own account runs in the launch terminal the first time." }
+              }
+              Column {
+                width: parent.width; spacing: Style.spacing.labelGap
+                FieldLabel { text: "MODEL" }
+                PanelDropdown {
+                  id: modelDrop
+                  width: parent.width
+                  showLabel: false
+                  options: root.modelOptions
+                  value: root.model
+                  popupParent: keyCatcher
+                  ownerOpen: root.opened
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onChanged: function(v) { root.model = v }
+                }
+                Field { id: modelField; width: parent.width; placeholderText: "or type any model id"; text: root.model; onTextEdited: root.model = text }
+                Field { id: urlField; width: parent.width; visible: root.showBaseUrl; placeholderText: "endpoint URL"; text: root.baseUrl; onTextEdited: root.baseUrl = text }
+              }
+            }
+
+            // ---- right: skills, job, session ---------------------------
+            Column {
+              width: columns.colWidth
+              spacing: Style.space(8)
+
+              Column {
+                width: parent.width; spacing: Style.spacing.labelGap
+                FieldLabel { text: "SKILLS TO PRELOAD" + (root.skills.length ? "  ·  " + root.skills.length + " selected" : "") }
+                Field {
+                  id: filterField
+                  width: parent.width
+                  visible: root.agentInfo && root.agentInfo.skills.length > 8
+                  placeholderText: "filter skills"
+                  text: root.skillFilter
+                  onTextEdited: root.skillFilter = text
+                }
+                Hint {
+                  width: parent.width
+                  visible: !root.agentInfo || root.agentInfo.skills.length === 0
+                  text: root.agent === "hermes" ? "No skills found in ~/.hermes/skills." : "No skills found in ~/.openclaw/skills."
+                }
+                BorderSurface {
+                  width: parent.width
+                  visible: root.skillList.length > 0
+                  height: Math.min(skillColumn.implicitHeight + Style.spacing.md * 2, Style.space(176))
+                  radius: Style.cornerRadius
+                  color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.04)
+                  borderSpec: Border.flat(Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.10), 1)
+                  Flickable {
+                    anchors.fill: parent
+                    anchors.margins: Style.spacing.md
+                    contentWidth: width
+                    contentHeight: skillColumn.implicitHeight
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    interactive: contentHeight > height
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                    Column {
+                      id: skillColumn
+                      width: parent.width
+                      Repeater {
+                        model: root.skillList
+                        delegate: SkillRow {
+                          required property string modelData
+                          width: skillColumn.width
+                          label: modelData
+                          selected: root.hasSkill(modelData)
+                          foreground: root.foreground; fontFamily: root.fontFamily
+                          onToggled: root.toggleSkill(modelData)
+                        }
+                      }
                     }
                   }
+                }
+              }
+              Column {
+                width: parent.width; spacing: Style.spacing.labelGap
+                FieldLabel { text: "JOB DESCRIPTION / INSTRUCTIONS" }
+                JobEditor {
+                  id: jobEditor
+                  width: parent.width
+                  height: Style.space(150)
+                  placeholderText: "What must this agent accomplish? Constraints, inputs, and what \"done\" looks like."
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onEscaped: root.backToPanel()
+                }
+              }
+              Column {
+                width: parent.width; spacing: Style.spacing.labelGap
+                FieldLabel { text: "SESSION" }
+                ButtonGroup {
+                  options: [ { value: "interactive", label: "Interactive chat" }, { value: "unattended", label: "Unattended run" } ]
+                  value: root.mode
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onChanged: function(v) { root.mode = v }
                 }
               }
             }
           }
 
-          // ---- job ----------------------------------------------------
-          Column {
-            width: parent.width; spacing: Style.spacing.labelGap
-            FieldLabel { text: "JOB DESCRIPTION / INSTRUCTIONS" }
-            JobEditor {
-              id: jobEditor
-              width: parent.width
-              height: Style.space(130)
-              placeholderText: "What must this agent accomplish? Constraints, inputs, and what \"done\" looks like."
-              foreground: root.foreground; fontFamily: root.fontFamily
-              onEscaped: root.backToPanel()
-            }
-          }
-
-          // ---- mode + actions ----------------------------------------
-          Column {
-            width: parent.width; spacing: Style.spacing.labelGap
-            FieldLabel { text: "SESSION" }
-            ButtonGroup {
-              options: [ { value: "interactive", label: "Interactive chat" }, { value: "unattended", label: "Unattended one-shot" } ]
-              value: root.mode
-              foreground: root.foreground; fontFamily: root.fontFamily
-              onChanged: function(v) { root.mode = v }
-            }
-          }
           Text {
             textFormat: Text.PlainText
             width: parent.width
@@ -495,15 +487,11 @@ Panel {
             }
             Button {
               text: "Terminal wizard"
-              tooltipText: "The same form as step-by-step prompts in a terminal"
+              tooltipText: "The same setup as step-by-step prompts in a terminal"
               foreground: root.foreground; fontFamily: root.fontFamily
               onClicked: { Quickshell.execDetached([root.launcher, "--popup", "new"]); root.close() }
             }
-            Button {
-              text: "Reload"
-              foreground: root.foreground; fontFamily: root.fontFamily
-              onClicked: root.loadInfo()
-            }
+            Button { text: "Reload"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.loadInfo() }
           }
 
           // ---- saved agents ------------------------------------------

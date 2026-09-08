@@ -5,7 +5,7 @@
 # each behind its own confirmation and each idempotent:
 #
 #   1. symlink bin/omarchy-agent-launcher into ~/.local/bin
-#   2. append a SUPER + ALT + A keybinding to ~/.config/hypr/bindings.lua
+#   2. append a SUPER + ALT + A keybinding (opens the setup panel) to ~/.config/hypr/bindings.lua
 #   3. append an "Agents" submenu to ~/.config/omarchy/extensions/omarchy-menu.jsonc
 #
 # Nothing is overwritten: existing lines are detected and skipped, and a
@@ -34,7 +34,7 @@ elif ask "Add keybinding SUPER + ALT + A -> Agent launcher to $B?"; then
   cat >>"$B" <<LUA
 
 -- Omarchy Agent Launcher ($MARK). SUPER + ALT + A was unbound by default.
-o.bind("SUPER + ALT + A", "Agent launcher", "$BIN --popup")
+o.bind("SUPER + ALT + A", "Agent launcher", "omarchy-shell shell toggle $MARK")
 LUA
   echo "  appended; run 'hyprctl reload && hyprctl configerrors' to verify"
 fi

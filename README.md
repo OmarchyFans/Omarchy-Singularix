@@ -1,11 +1,14 @@
 # Omarchy Agent Launcher
 
-**Spin up an AI agent from a keybinding.** Press a key, answer a short form,
-and an agent starts working on the job you gave it: in a shell on your
-machine, inside its official Docker image, or on a [Fly.io
+**Spin up an AI agent from a keybinding.** Press a key, fill in one page,
+click Launch, and an agent starts working on the job you gave it: in a shell
+on your machine, inside its official Docker image, or on a [Fly.io
 Sprite](https://fly.io/sprites) in the cloud.
 
-The form asks for:
+![The setup panel](preview.png)
+
+The single-page setup panel (a native Omarchy shell panel that drops down
+from the bar button) asks for:
 
 | Step | Choices |
 |------|---------|
@@ -34,8 +37,7 @@ omarchy plugin enable fans.omarchy.agent-launcher
 `omarchy plugin add` clones the repo into
 `~/.config/omarchy/plugins/fans.omarchy.agent-launcher/` and lands it
 **disabled** so you can read it first. It runs no code, no installer, no sudo.
-Enabling adds a robot button to the bar; clicking it opens the launcher in a
-floating terminal.
+Enabling adds a robot button to the bar; clicking it opens the setup panel.
 
 Requirements: Omarchy 4.x, `gum`, `jq` (both ship with Omarchy). Then, per
 runtime:
@@ -56,11 +58,15 @@ runtime:
 ### Keybinding (recommended)
 
 Plugins cannot ship keybindings, so add one line to `~/.config/hypr/bindings.lua`
-(SUPER + ALT + A is unbound by default; the launcher checks nothing else):
+(SUPER + ALT + A is unbound by default). It toggles the panel, so the widget
+must be enabled:
 
 ```lua
-o.bind("SUPER + ALT + A", "Agent launcher", "~/.config/omarchy/plugins/fans.omarchy.agent-launcher/bin/omarchy-agent-launcher --popup")
+o.bind("SUPER + ALT + A", "Agent launcher", "omarchy-shell shell toggle fans.omarchy.agent-launcher")
 ```
+
+Prefer a terminal? The same setup exists as step-by-step prompts:
+`omarchy-agent-launcher --popup new` (also the panel's "Terminal wizard" button).
 
 Hyprland reloads on save; verify with `hyprctl configerrors`.
 
@@ -82,9 +88,12 @@ the keybinding, append the menu entry. It is not run by `omarchy plugin add`.
 
 ## Use
 
-Press the key (or click the bar button). First visit: **New agent…**; later
-the menu also lists every saved agent for one-keystroke relaunch and a
-**Manage** entry (show, edit job, sign in again, remove, destroy, sprite console).
+Press the key (or click the bar button). Fill in the page and click
+**Launch**: the agent's profile is saved, its home directory is provisioned,
+and a terminal opens with the session (and the browser sign-in, the first
+time). Saved agents appear at the bottom of the panel for one-click relaunch;
+**Manage…** opens show / edit job / sign in again / remove / destroy / sprite
+console. Esc closes the panel; Tab enters the form.
 
 From a terminal:
 
@@ -125,6 +134,8 @@ Model ids drift. The provider table lives in one place,
 
 Built on Omarchy 4.x with Hermes Agent 0.21 installed locally.
 
+- ✅ The setup panel: loads in the shell, reads live data from `info --json`, and renders every control (screenshot above is a real capture).
+
 - ✅ Hermes · local: provisioning, config parsing, per-agent secrets, skill copy + preload, and the request path (verified with a deliberately invalid key that produced the provider's "incorrect API key" error).
 - ✅ Every agent × runtime combination in `--dry-run` (command generation).
 - ⚠️ Docker, Sprite, and OpenClaw paths are written against the official docs and CLIs but were **not exercised end to end** (no docker group, no Sprites account, OpenClaw not installed here). Treat them as beta; issues and PRs welcome.
@@ -139,8 +150,10 @@ Built on Omarchy 4.x with Hermes Agent 0.21 installed locally.
   the Sprites CLI takes its token as an argument once, at `sprite auth setup`.
 - `sudo` appears exactly once: `sudo docker …` when Omarchy's
   `omarchy-sudo-docker` says the daemon needs it.
-- The bar widget is a thin launcher (see `BarWidget.qml`); no network, no
-  secrets, nothing parsed inside the shell process.
+- The panel (`AgentPanel.qml`) only runs the plugin's own script: `info
+  --json` to read choices and `create … --launch` to submit. The API key and
+  the job text travel in that child's environment, never on a command line,
+  and the key is written once to the mode-600 secrets file.
 
 ## Remove
 

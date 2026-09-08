@@ -1,5 +1,5 @@
   // Omarchy Agent Launcher — append inside ~/.config/omarchy/extensions/omarchy-menu.jsonc
   "agents": {"icon":"󱚝","label":"Agents","aliases":["agent-launcher","launch-agent"],"description":"Launch Hermes or OpenClaw locally, in Docker, or on a Fly.io Sprite"},
-  "agents.new": {"icon":"","label":"New agent","description":"Pick agent, runtime, model, skills, and job","action":"$HOME/.config/omarchy/plugins/fans.omarchy.agent-launcher/bin/omarchy-agent-launcher --popup new"},
+  "agents.new": {"icon":"","label":"New agent","description":"One-page setup: agent, runtime, model, sign-in, skills, job","action":"omarchy-shell shell toggle fans.omarchy.agent-launcher"},
   "agents.launch": {"icon":"","label":"Launch saved agent","description":"Relaunch one of your saved agents","when":"compgen -G \"$HOME/.config/omarchy-agent-launcher/agents/*.json\"","action":"$HOME/.config/omarchy/plugins/fans.omarchy.agent-launcher/bin/omarchy-agent-launcher --popup"},
   "agents.manage": {"icon":"","label":"Manage agents","description":"Show, edit job, sign in, remove, destroy","when":"compgen -G \"$HOME/.config/omarchy-agent-launcher/agents/*.json\"","action":"$HOME/.config/omarchy/plugins/fans.omarchy.agent-launcher/bin/omarchy-agent-launcher --popup manage"},
