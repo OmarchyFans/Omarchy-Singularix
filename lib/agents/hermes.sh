@@ -157,9 +157,6 @@ hermes_home_signed_in() { # hermes_home_signed_in <name> <provider>
   profile_exists "$1" && [[ $(profile_get "$1" agent) == hermes && $(profile_get "$1" provider) == "$2" && $(profile_get "$1" auth) == oauth \
     && $(profile_get "$1" signed_in) == true && -s $(stage_dir "$1")/hermes/auth.json ]]
 }
-# Any home signed in to <provider>? (backends list uses this to say "ready")
-hermes_provider_signed_in() { local n; for n in $(profile_list); do hermes_home_signed_in "$n" "$1" && return 0; done; return 1; }
-
 # Arguments after `hermes` for the interactive OAuth sign-in. <no-browser:0|1>
 agent_oauth_args() { # agent_oauth_args <name> <no_browser>
   local provider; provider=$(profile_get "$1" provider)

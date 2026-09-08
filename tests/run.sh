@@ -232,6 +232,8 @@ if command -v hermes >/dev/null; then
   grep -q "would open window" <<<"$out" || tfail "delegate must launch the worker"
   out=$(printf 'x\n' | "$L" --dry-run delegate --backend anthropic --name summ2 --job-stdin --wait 2>&1); grep -q "would run and wait" <<<"$out" || { echo "$out"; tfail "delegate --wait dry-run"; }
   "$L" result summ >/dev/null 2>&1 && tfail "result without runs must fail"
+  out=$(printf 'x\n' | "$L" --dry-run delegate --backend gemini --name nokey --job-stdin 2>&1) && tfail "delegate to a keyless provider must fail"
+  grep -q "needs GEMINI_API_KEY" <<<"$out" || { echo "$out"; tfail "keyless provider message"; }
   mkdir -p "$XDG_DATA_HOME/omarchy-agent-launcher/agents/summ/runs"; printf '\033[32mdone\033[0m: 3 files\n' >"$XDG_DATA_HOME/omarchy-agent-launcher/agents/summ/runs/20260908-120000.log"
   "$L" result summ | grep -q "^done: 3 files$" || tfail "result strips ANSI"
   "$L" jarvis brief | grep -q "Jarvis brief" || tfail "jarvis brief"

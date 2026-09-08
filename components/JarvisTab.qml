@@ -27,7 +27,7 @@ Item {
   // ---- Dashboard contract -------------------------------------------------
   readonly property int rowCount: tasks.length
   readonly property bool editing: askField.activeFocus || addForm.editing
-  readonly property bool popupOpen: backendPick.popupOpen || addForm.popupOpen || confirm.opened
+  readonly property bool popupOpen: backendPick.popupOpen || taskAgentDrop.popupOpen || addForm.popupOpen || confirm.opened
   function activate(i) { if (tasks[i]) dash.chat(tasks[i].agent) }
 
   // ---- tasks table --------------------------------------------------------

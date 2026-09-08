@@ -57,9 +57,13 @@ backend_from_provider() {
     # A browser sign-in some Hermes home already has wins over a saved key (it is
     # the user's own plan): new homes inherit it (lib/agents/hermes.sh). Without
     # one, OAuth is offered but not "ready": the first launch needs the browser.
-    if ( load_agent hermes; hermes_provider_signed_in "$p" ) 2>/dev/null; then auth=oauth; ready=true; state="signed in"
+    local signed=${BACKEND_SIGNED-$(backends_signed_providers)}
+    if [[ " $signed " == *" $p "* ]]; then auth=oauth; ready=true; state="signed in"
     elif [[ $auth == none ]]; then auth=oauth; state="browser sign-in needed"; fi
   fi
+  # The static default model is enough for a list row; only the local server (no
+  # static entry) is asked what it serves. The catalog pass costs ~0.2 s per call.
+  local model; model=$(provider_default_model "$p"); [[ $model == - ]] && model=$(models_default_for_provider "$p")
   if [[ $p == local ]]; then
     state="local GPU"; ready=false
     declare -F local_status_json >/dev/null && local_status_json | jq -e '.agent_ready' >/dev/null 2>&1 && ready=true
@@ -67,7 +71,7 @@ backend_from_provider() {
   fi
   [[ $p == ollama ]] && { have ollama && ready=true; state="ollama"; }
   jq -nc --arg id "$p" --arg label "$label" --arg provider "$p" --arg auth "$auth" --argjson ready "$ready" --arg state "$state" \
-    --arg model "$(models_default_for_provider "$p")" --arg base_url "$(provider_base_url "$p")" --arg env "$env" \
+    --arg model "$model" --arg base_url "$(provider_base_url "$p")" --arg env "$env" \
     '{id:$id, label:$label, kind:"provider", provider:$provider, auth:$auth, model:$model, base_url:$base_url,
       key_var:(if $env == "-" then "" else $env end), ready:$ready, state:$state, hermes:true}'
 }
@@ -83,9 +87,18 @@ backend_get() {
   backend_from_provider "$1"
 }
 
+# Providers some Hermes home is signed in to (browser OAuth), space-separated.
+backends_signed_providers() {
+  local n
+  for n in $(profile_list); do
+    [[ $(profile_get "$n" agent) == hermes && $(profile_get "$n" auth) == oauth && $(profile_get "$n" signed_in) == true && -s $(stage_dir "$n")/hermes/auth.json ]] && profile_get "$n" provider
+  done | sort -u | tr '\n' ' '
+}
+
 # Every backend: registry entries + implicit providers. backends_list_json
 backends_list_json() {
   local id first=1
+  local BACKEND_SIGNED; BACKEND_SIGNED=$(backends_signed_providers)   # computed once for every row below
   {
     printf '['
     while IFS= read -r id; do [[ -n $id ]] || continue; (( first )) || printf ','; first=0; backend_get "$id"; done < <(backend_ids)
@@ -103,6 +116,8 @@ backend_resolve() {
   local b; b=$(backend_get "$1") || fail "unknown backend '$1' (see: omarchy-agent-launcher backends list)"
   local kind; kind=$(jq -r .kind <<<"$b")
   if [[ $kind == provider ]]; then
+    # A provider without any credentials would fail on its first request in a window nobody reads.
+    [[ $(jq -r .state <<<"$b") == needs\ * ]] && fail "backend '$1' is not ready: $(jq -r .state <<<"$b") (save the key on the New agent page, or pick another backend)"
     jq -c --arg m "${2:-}" '{provider, auth, model:(if $m != "" then $m else .model end), base_url, backend:.id, context_length:null}' <<<"$b"
   else
     jq -e '.url != null and .url != ""' <<<"$b" >/dev/null || fail "backend '$1' has no URL yet (deploy or start it first: omarchy-agent-launcher backends deploy $1)"
