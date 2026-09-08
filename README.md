@@ -1,14 +1,27 @@
 # Omarchy Agent Launcher
 
-**Spin up an AI agent from a keybinding.** Press a key, fill in one page,
-click Launch, and an agent starts working on the job you gave it: in a shell
-on your machine, inside its official Docker image, or on a [Fly.io
-Sprite](https://fly.io/sprites) in the cloud.
+**Run AI agents from your desktop.** Press a key and the **Agent Dashboard**
+opens: create and launch an agent on one page, see every agent's status, jump
+to any agent's chat, follow a sortable event log, and get notified when an
+agent needs you. Agents run in a shell on your machine, inside their official
+Docker image, or on a [Fly.io Sprite](https://fly.io/sprites) in the cloud.
 
-![The setup panel](preview.png)
+![The Agent Dashboard](preview.png)
 
-The single-page setup panel (a native Omarchy shell panel that drops down
-from the bar button) asks for:
+The dashboard is a persistent window (it stays until you close it) with four
+pages, switchable with `1`–`4`:
+
+| Page | What it shows |
+|------|---------------|
+| **Agents** | every saved agent with a status pill (running / blocked / done / idle), its job, last event, task count, and **Chat**, Stop, Edit job, Remove. Enter or Chat focuses the agent's window or reattaches its session. |
+| **New agent** | the one-page setup form (below) |
+| **Events** | the event log: filter by agent, task, level, or text; click a column header to sort |
+| **Notifications** | open blockers (things that need you) with Chat and Resolve, recent warnings, and the desktop-notification toggle |
+
+The bar button opens the dashboard; right-click opens a quick agent switcher;
+a red badge counts open blockers.
+
+The **New agent** page asks for:
 
 | Step | Choices |
 |------|---------|
@@ -63,18 +76,25 @@ runtime:
   `/home/sprite`, Node/Python/git preinstalled) that sleeps when idle and
   keeps its filesystem; you pay for CPU and RAM only while it is awake.
 
-### Keybinding (recommended)
+### Keybinding and window rule (recommended)
 
 Plugins cannot ship keybindings, so add one line to `~/.config/hypr/bindings.lua`
-(SUPER + ALT + A is unbound by default). It toggles the panel, so the widget
-must be enabled:
+(SUPER + ALT + A is unbound by default). It summons the dashboard, so the
+widget must be enabled:
 
 ```lua
 o.bind("SUPER + ALT + A", "Agent dashboard", "omarchy-shell shell summon fans.omarchy.agent-launcher '{}'")
 ```
 
+The dashboard is a Quickshell window (class `org.quickshell`); Omarchy tiles it
+unless you add a rule to `~/.config/hypr/looknfeel.lua`:
+
+```lua
+o.window({ class = "^org.quickshell$", title = "^Agent Dashboard$" }, { float = true, center = true, size = { 1180, 760 } })
+```
+
 Prefer a terminal? The same setup exists as step-by-step prompts:
-`omarchy-agent-launcher --popup new` (also the panel's "Terminal wizard" button).
+`omarchy-agent-launcher --popup new` (also the form's "Terminal wizard" button).
 
 Hyprland reloads on save; verify with `hyprctl configerrors`.
 
@@ -86,9 +106,10 @@ submenu (new / relaunch / manage) in the Omarchy menu.
 
 ### `install.sh` (optional helper)
 
-The repo also carries a small helper that does the three optional steps for
-you, each only after you confirm: symlink the CLI into `~/.local/bin`, append
-the keybinding, append the menu entry. It is not run by `omarchy plugin add`.
+The repo also carries a small helper that does the optional steps for you,
+each only after you confirm: symlink the CLI into `~/.local/bin`, add the
+keybinding, add the window rule, add the menu entries. It is not run by
+`omarchy plugin add`, and it upgrades an older keybinding line in place.
 
 ```bash
 ~/.config/omarchy/plugins/fans.omarchy.agent-launcher/install.sh
@@ -96,12 +117,12 @@ the keybinding, append the menu entry. It is not run by `omarchy plugin add`.
 
 ## Use
 
-Press the key (or click the bar button). Fill in the page and click
-**Launch**: the agent's profile is saved, its home directory is provisioned,
-and a terminal opens with the session (and the browser sign-in, the first
-time). Saved agents appear at the bottom of the panel for one-click relaunch;
-**Manage…** opens show / edit job / sign in again / remove / destroy / sprite
-console. Esc closes the panel; Tab enters the form.
+Press the key (or click the bar button). On **New agent**, fill in the page
+and click **Launch**: the profile is saved, the agent's home is provisioned,
+and its window opens with the session (and the browser sign-in, the first
+time). The dashboard switches to **Agents**, where the new row shows its
+status; **Chat** brings its window back at any time. Esc closes the dashboard,
+`j`/`k` move, Enter opens the selected agent's chat, `r` refreshes.
 
 From a terminal:
 
@@ -179,7 +200,18 @@ omarchy-agent-launcher event "$OAL_AGENT" blocker_cleared "" --key need-the-depl
 
 A **task** is the agent's job (first line of the job description), any `--task`
 name seen in its events, and, for Hermes agents, the cards on the agent's own
-kanban board (see below). `status --json` returns all of it per agent.
+kanban board. `status --json` returns all of it per agent.
+
+### Hermes kanban boards
+
+Hermes Agent keeps a SQLite task board at its home directory. Each launched
+Hermes agent has its own isolated home, so it has its own board
+(`…/agents/<name>/hermes/kanban.db`). Inside its session the agent can run
+`hermes kanban create|complete|block …` (its `HERMES_HOME` is already set) and
+the launcher mirrors the board **read-only**: cards appear as tasks, status
+changes become events, and a card blocked as `needs_input` or `capability`
+becomes a blocker until it is completed. The mirror runs whenever the
+dashboard refreshes and when a session ends; it never writes to the board.
 
 ### Models and prices
 
@@ -198,6 +230,8 @@ models are shown (default 14).
 
 Built on Omarchy 4.x with Hermes Agent 0.21 installed locally.
 
+- ✅ The dashboard: loads in the shell, persists when focus moves elsewhere, all four pages render with live data; Stop, Chat, Resolve, and the blocker badge were exercised.
+- ✅ Kanban mirror: fixture board → tasks in `status --json`, blocker on a `needs_input` card, idempotent re-sync, blocker cleared when the card completes.
 - ✅ Persistent sessions: a launched agent's window was killed outright; its tmux session survived and `chat` reopened a window attached to the same running conversation. Opening it twice focuses the existing window instead of duplicating it.
 - ✅ The setup panel: loads in the shell, reads live data from `info --json`, and renders every control (screenshot above is a real capture). Its Launch path was exercised piecewise: the environment handoff (`Process.environment` overlays, PATH intact) and the no-terminal `create … --launch` branch, which opened the floating launch terminal and surfaced a runtime error there. Keyboard entry into fields follows hyprmoncfg's proven KeyboardPanel pattern but was not typed into by hand.
 
@@ -215,10 +249,14 @@ Built on Omarchy 4.x with Hermes Agent 0.21 installed locally.
   the Sprites CLI takes its token as an argument once, at `sprite auth setup`.
 - `sudo` appears exactly once: `sudo docker …` when Omarchy's
   `omarchy-sudo-docker` says the daemon needs it.
-- The panel (`AgentPanel.qml`) only runs the plugin's own script: `info
-  --json` to read choices and `create … --launch` to submit. The API key and
-  the job text travel in that child's environment, never on a command line,
-  and the key is written once to the mode-600 secrets file.
+- The dashboard (`Dashboard.qml`, `components/`) only runs the plugin's own
+  script (`status --json`, `info --json`, `create … --launch`, `chat`, `stop`,
+  `event`, `remove --yes`, `settings`) with argv, never a shell string, and
+  tails the event log with `tail -F`. The API key and the job text travel in
+  the child's environment, never on a command line; the key is written once to
+  the mode-600 secrets file.
+- Kanban boards are opened with `sqlite3 -readonly`. Desktop notifications go
+  through `omarchy-notification-send`.
 
 ## Remove
 
@@ -227,9 +265,10 @@ omarchy plugin remove fans.omarchy.agent-launcher
 ```
 
 Then, if you used them: delete the `o.bind` line from
-`~/.config/hypr/bindings.lua`, the `agents.*` entries from
-`~/.config/omarchy/extensions/omarchy-menu.jsonc`, and the symlink
-`~/.local/bin/omarchy-agent-launcher` (`./uninstall.sh` does all three).
+`~/.config/hypr/bindings.lua`, the window rule from `~/.config/hypr/looknfeel.lua`,
+the `agents.*` entries from `~/.config/omarchy/extensions/omarchy-menu.jsonc`,
+and the symlink `~/.local/bin/omarchy-agent-launcher` (`./uninstall.sh` does all
+four). Event history lives in `~/.local/state/omarchy-agent-launcher/`.
 Saved agents and secrets stay in `~/.config/omarchy-agent-launcher/` and
 `~/.local/share/omarchy-agent-launcher/` until you delete them; `destroy`
 removes remote containers and sprites first.
