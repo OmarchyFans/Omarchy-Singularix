@@ -26,7 +26,7 @@ MODAL_GPUS=(
   "H100|80|3.95"
   "H200|141|4.54"
   "B200|180|6.25"
-  "B300|270|7.10"
+  "B300|288|7.10"
 )
 MODAL_PRICES_DATE="2026-09-08"
 
@@ -79,12 +79,13 @@ modal_backend_up() { # modal_backend_up <id>
   kind=$(jq -r .kind <<<"$b"); [[ $kind == modal-* ]] || fail "$id is a $kind backend, nothing to deploy"
   (( OAL_DRY_RUN )) || modal_need
   local -a env; mapfile -t env < <(modal_script_env "$b")
+  local -a shown=("${env[@]//OAL_API_KEY=*/OAL_API_KEY=<key>}"); shown=("${shown[@]//HF_TOKEN=*/HF_TOKEN=<token>}")   # for dry-run output only
   say "Backend $id: $(jq -r '"\(.model) on \(.gpu) ×\(.gpu_count) ($\(.gpu_hourly * .gpu_count)/h while a container runs)"' <<<"$b")"
   backend_patch "$id" '{state:"starting"}'
   event_emit "jarvis" backend_starting "Backend $id: $kind on $(jq -r .gpu <<<"$b") starting" --task "backend $id"
   if [[ $kind == modal-dedicated ]]; then
     local out
-    if (( OAL_DRY_RUN )); then run env "${env[@]//OAL_API_KEY=*/OAL_API_KEY=<key>}" modal deploy "$MODAL_SCRIPTS/vllm_endpoint.py"; backend_patch "$id" '{state:"configured"}'; return 0; fi
+    if (( OAL_DRY_RUN )); then run env "${shown[@]}" modal deploy "$MODAL_SCRIPTS/vllm_endpoint.py"; backend_patch "$id" '{state:"configured"}'; return 0; fi
     out=$(env "${env[@]}" modal deploy "$MODAL_SCRIPTS/vllm_endpoint.py" 2>&1 | tee /dev/stderr) || { backend_patch "$id" '{state:"error"}'; event_emit jarvis blocker "Backend $id failed to deploy on Modal (see the terminal)" --level blocker --key "backend-$id"; return 1; }
     local url; url=$(grep -oE 'https://[A-Za-z0-9._-]+\.modal\.run[^ ]*' <<<"$out" | head -n1)
     [[ -n $url ]] || url=$(env "${env[@]}" modal run "$MODAL_SCRIPTS/vllm_endpoint.py::url" 2>/dev/null | grep -oE 'https://[^ ]+' | tail -n1)
@@ -94,7 +95,7 @@ modal_backend_up() { # modal_backend_up <id>
     say "ready: $url  (first request wakes the container; it sleeps after $(jq -r .scaledown_min <<<"$b") idle minutes)"
   else
     local out
-    if (( OAL_DRY_RUN )); then run env "${env[@]//OAL_API_KEY=*/OAL_API_KEY=<key>}" modal run "$MODAL_SCRIPTS/vllm_sandbox.py::start"; backend_patch "$id" '{state:"configured"}'; return 0; fi
+    if (( OAL_DRY_RUN )); then run env "${shown[@]}" modal run "$MODAL_SCRIPTS/vllm_sandbox.py::start"; backend_patch "$id" '{state:"configured"}'; return 0; fi
     out=$(env "${env[@]}" modal run "$MODAL_SCRIPTS/vllm_sandbox.py::start" 2> >(tee /dev/stderr >&2)) || { backend_patch "$id" '{state:"error"}'; event_emit jarvis blocker "Backend $id: the Modal sandbox did not start (see the terminal)" --level blocker --key "backend-$id"; return 1; }
     local line; line=$(grep -E '^\{.*"sandbox_id"' <<<"$out" | tail -n1)
     [[ -n $line ]] || { backend_patch "$id" '{state:"error"}'; fail "sandbox started but printed no handle; run: modal sandbox list"; }

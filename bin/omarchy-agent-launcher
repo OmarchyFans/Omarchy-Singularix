@@ -658,6 +658,9 @@ cmd_result() {
   LC_ALL=C sed -E 's/\x1B\[[0-9;?]*[ -\/]*[@-~]//g; s/\r$//' "$latest"   # C locale: byte ranges, not collation order
 }
 
+# In a --popup terminal the window closes on success; hold it so the result stays readable.
+popup_hold() { [[ ${OAL_POPUP:-0} == 1 ]] && { hr; read -rp "Press Enter to close…" _; }; return 0; }
+
 cmd_backends() {
   local id=${CMD[2]:-}
   case "${CMD[1]:-list}" in
@@ -665,9 +668,9 @@ cmd_backends() {
     show)   backend_get "${id:?backends show needs an id}" | jq . ;;
     add)    backend_add_from_opts | jq . ;;
     remove) backend_exists "${id:?backends remove needs an id}" || fail "no such backend: $id"; backend_delete "$id"; say "removed backend $id" ;;
-    deploy|start) modal_backend_up "${id:?backends $1 needs an id}" ;;
-    stop)   modal_backend_down "${id:?backends stop needs an id}" ;;
-    test)   modal_backend_test "${id:?backends test needs an id}" ;;
+    deploy|start) modal_backend_up "${id:?backends $1 needs an id}"; popup_hold ;;
+    stop)   modal_backend_down "${id:?backends stop needs an id}"; popup_hold ;;
+    test)   modal_backend_test "${id:?backends test needs an id}"; popup_hold ;;
     *) fail "usage: omarchy-agent-launcher backends list|show ID|add --id ID --kind K …|remove ID|deploy ID|start ID|stop ID|test ID" ;;
   esac
 }
@@ -676,7 +679,7 @@ cmd_modal() {
   case "${CMD[1]:-status}" in
     status) modal_status_json | jq . ;;
     gpus)   if (( JSON )); then modal_gpus_json | jq .; else modal_gpus_json | jq -r '"Modal GPUs (USD per GPU-hour, modal.com/pricing as of \(.prices_date)):", (.gpus[] | "  \(.id)\t\(.vram_gb) GB\t$\(.hourly_usd)/h\tsuggested: \(.suggested_model)")' | column -t -s $'\t'; fi ;;
-    setup)  modal_installed || fail "install the modal CLI first: pipx install modal  (or: uv tool install modal)"; run modal setup ;;
+    setup)  modal_installed || fail "install the modal CLI first: pipx install modal  (or: uv tool install modal)"; run modal setup; popup_hold ;;
     *) fail "usage: omarchy-agent-launcher modal status|gpus|setup" ;;
   esac
 }

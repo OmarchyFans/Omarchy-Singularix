@@ -98,6 +98,18 @@ agent_provision() { # agent_provision <name>
     write_env_file "$home/.env" "" ""
   fi
 
+  # Browser sign-ins are per home. A new home (a delegated worker, Jarvis moving
+  # to a provider) inherits the credentials of a home already signed in to the
+  # same provider, so it never stalls on a sign-in prompt nobody is watching.
+  if [[ $auth == oauth && ! -f $home/auth.json ]]; then
+    local donor; donor=$(hermes_oauth_donor "$name" "$provider")
+    if [[ -n $donor ]]; then
+      cp -f "$donor/auth.json" "$home/auth.json"; chmod 600 "$home/auth.json"
+      profile_set "$name" signed_in true
+      info "signed in to $(provider_label "$provider") with the credentials of $(basename "$(dirname "$donor")")"
+    fi
+  fi
+
   if [[ $role == chief-of-staff ]]; then
     [[ -f $home/SOUL.md ]] || jarvis_soul "$name" >"$home/SOUL.md"
     # The bundled skill that teaches Jarvis the launcher's commands (refreshed every launch).
@@ -129,6 +141,24 @@ SOUL
     fi
   done < <(profile_skills "$name")
 }
+
+# A Hermes home signed in to <provider> whose credentials <name> may inherit:
+# the parent first, then any other. Prints the home directory, or nothing.
+hermes_oauth_donor() { # hermes_oauth_donor <name> <provider>
+  local me=$1 provider=$2 n parent
+  parent=$(profile_get "$me" parent 2>/dev/null || true)
+  for n in $parent $(profile_list); do
+    [[ -n $n && $n != "$me" ]] || continue
+    hermes_home_signed_in "$n" "$provider" && { printf '%s/hermes' "$(stage_dir "$n")"; return 0; }
+  done
+  return 1
+}
+hermes_home_signed_in() { # hermes_home_signed_in <name> <provider>
+  profile_exists "$1" && [[ $(profile_get "$1" agent) == hermes && $(profile_get "$1" provider) == "$2" && $(profile_get "$1" auth) == oauth \
+    && $(profile_get "$1" signed_in) == true && -s $(stage_dir "$1")/hermes/auth.json ]]
+}
+# Any home signed in to <provider>? (backends list uses this to say "ready")
+hermes_provider_signed_in() { local n; for n in $(profile_list); do hermes_home_signed_in "$n" "$1" && return 0; done; return 1; }
 
 # Arguments after `hermes` for the interactive OAuth sign-in. <no-browser:0|1>
 agent_oauth_args() { # agent_oauth_args <name> <no_browser>

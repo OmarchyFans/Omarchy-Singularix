@@ -239,6 +239,23 @@ if command -v hermes >/dev/null; then
   [[ $(jq -r '.agents[]|select(.name=="summ")|.parent' <<<"$st") == jarvis ]] || tfail "worker parent in status"
   "$L" remove summ --yes >/dev/null; "$L" remove summ2 --yes >/dev/null; "$L" remove jarvis --yes >/dev/null
   pass "jarvis"
+
+  echo "== oauth inheritance: a new home copies an existing sign-in for the same provider"
+  "$L" backends list --json | jq -e '.[] | select(.id=="anthropic") | .auth == "api-key"' >/dev/null || tfail "without a sign-in anthropic falls back to the saved key"
+  "$L" backends list --json | jq -e '.[] | select(.id=="nous") | .ready == false and .auth == "oauth"' >/dev/null || tfail "an OAuth-only provider is not ready before a sign-in"
+  profile_write donor hermes local anthropic oauth claude-sonnet-5 - interactive ""; printf '# Donor\nx\n' >"$(job_path donor)"
+  profile_set donor signed_in true; mkdir -p "$(stage_dir donor)/hermes"; printf '{"anthropic":{"token":"t"}}\n' >"$(stage_dir donor)/hermes/auth.json"
+  "$L" backends list --json | jq -e '.[] | select(.id=="anthropic") | .ready == true and .state == "signed in"' >/dev/null || tfail "anthropic ready after a sign-in"
+  printf 'w\n' | "$L" create --name heir --backend anthropic --mode unattended --job-stdin >/dev/null || tfail "create heir"
+  ( source "$ROOT/lib/agents/hermes.sh"; source "$ROOT/lib/backends.sh"; source "$ROOT/lib/jarvis.sh"; OAL_ROOT="$ROOT"; agent_provision heir )
+  [[ -s $(stage_dir heir)/hermes/auth.json && $(stat -c %a "$(stage_dir heir)/hermes/auth.json") == 600 ]] || tfail "auth.json inherited"
+  [[ $(jq -r .signed_in "$(profile_path heir)") == true ]] || tfail "heir marked signed in"
+  "$L" jarvis setup anthropic >/dev/null; ( source "$ROOT/lib/agents/hermes.sh"; source "$ROOT/lib/backends.sh"; source "$ROOT/lib/jarvis.sh"; OAL_ROOT="$ROOT"; agent_provision jarvis )
+  [[ $(jq -r .signed_in "$(profile_path jarvis)") == true ]] || tfail "jarvis inherits the sign-in"
+  "$L" jarvis setup anthropic >/dev/null; [[ $(jq -r .signed_in "$(profile_path jarvis)") == true ]] || tfail "jarvis setup must keep signed_in for the same provider"
+  secret_set HF_TOKEN hf_secret_123; out=$("$L" --dry-run backends deploy big 2>&1); grep -q "hf_secret_123" <<<"$out" && tfail "HF_TOKEN printed by dry-run"
+  "$L" remove heir --yes >/dev/null; "$L" remove donor --yes >/dev/null; "$L" remove jarvis --yes >/dev/null
+  pass "oauth inheritance, backend readiness, HF_TOKEN redaction"
 else
   echo "  skip (hermes not installed): jarvis"
 fi

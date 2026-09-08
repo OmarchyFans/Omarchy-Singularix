@@ -63,7 +63,8 @@ Item {
   }
 
   // ---- backends -----------------------------------------------------------
-  readonly property var readyBackends: backends.filter(function(b) { return b.ready }).map(function(b) { return { value: b.id, label: b.label + "  ·  " + b.model } })
+  // Ready backends, plus the local GPU even when it is not ready yet: it is the default and must stay visible.
+  readonly property var readyBackends: backends.filter(function(b) { return b.ready || b.id === "local" || (jarvis && b.id === jarvis.backend) }).map(function(b) { return { value: b.id, label: b.label + "  ·  " + b.model + (b.ready ? "" : "  ·  " + b.state) } })
   readonly property var customBackends: backends.filter(function(b) { return b.kind !== "provider" })
   readonly property var providerBackends: backends.filter(function(b) { return b.kind === "provider" })
   property string pendingRemove: ""

@@ -79,8 +79,13 @@ jarvis_setup() {
   have hermes || fail "Jarvis is a Hermes agent and hermes is not installed (see the README)"
   local -a skills=(); [[ -d $HOME/.hermes/skills/productivity/chief-of-staff ]] && skills+=(productivity/chief-of-staff)
   mkdir -p "$OAL_PROFILES"
-  local existing_job=""; profile_exists "$JARVIS_NAME" && [[ -s $(job_path "$JARVIS_NAME") ]] && existing_job=1
+  local existing_job="" keep_signin=""
+  if profile_exists "$JARVIS_NAME"; then
+    [[ -s $(job_path "$JARVIS_NAME") ]] && existing_job=1
+    [[ $(profile_get "$JARVIS_NAME" provider) == "$provider" && $(profile_get "$JARVIS_NAME" signed_in) == true ]] && keep_signin=1
+  fi
   profile_write "$JARVIS_NAME" hermes local "$provider" "$auth" "$m" "$base_url" interactive "$(printf '%s\n' "${skills[@]}")"
+  [[ -n $keep_signin ]] && profile_set "$JARVIS_NAME" signed_in true
   profile_set "$JARVIS_NAME" role '"chief-of-staff"'
   profile_set "$JARVIS_NAME" backend "$(jq -Rn --arg v "$backend" '$v')"
   [[ -n $existing_job ]] || jarvis_job >"$(job_path "$JARVIS_NAME")"
@@ -114,8 +119,13 @@ jarvis_brief() {
 jarvis_ask() { # jarvis_ask "<question>"
   jarvis_exists || fail "Jarvis is not set up yet: omarchy-agent-launcher jarvis setup"
   load_profile_adapters "$JARVIS_NAME"
+  # No window here, so no browser sign-in can happen: provisioning may inherit one, else say so.
+  agent_provision "$JARVIS_NAME" >/dev/null 2>&1 || true
+  if [[ $(profile_get "$JARVIS_NAME" auth) == oauth && $(profile_get "$JARVIS_NAME" signed_in) != true ]]; then
+    fail "Jarvis is not signed in to $(provider_label "$(profile_get "$JARVIS_NAME" provider)") yet: open its chat once (omarchy-agent-launcher jarvis) to sign in"
+  fi
   prepare_session "$JARVIS_NAME" >/dev/null 2>&1 || true
-  local -a cmd; mapfile -t cmd < <(rt_env_cmd "$JARVIS_NAME" chat -s jarvis -Q --oneshot -q "$1")
+  local -a cmd; mapfile -t cmd < <(rt_env_cmd "$JARVIS_NAME" chat -s jarvis -Q --oneshot --run-budget 600 -q "$1")
   export OAL_AGENT="$JARVIS_NAME" PATH="$OAL_ROOT/bin:$PATH"
   if (( OAL_DRY_RUN )); then say "[dry-run] would ask Jarvis:"; show_cmd "${cmd[@]}"; return 0; fi
   "${cmd[@]}"

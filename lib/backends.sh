@@ -50,10 +50,15 @@ backend_from_provider() {
   label=$(provider_label "$p") || return 1
   env=$(provider_env "$p")
   [[ $p == endpoint ]] && return 1        # not a backend by itself: its entries live in the registry
-  if provider_hermes_oauth "$p"; then auth=oauth; ready=true; state="browser sign-in"; fi
   if [[ $env != - ]]; then
-    if [[ -n $(secret_get "$env") ]]; then auth=api-key; ready=true; state="API key saved"
-    elif [[ $auth == none ]]; then state="needs $env"; fi
+    if [[ -n $(secret_get "$env") ]]; then auth=api-key; ready=true; state="API key saved"; else state="needs $env"; fi
+  fi
+  if provider_hermes_oauth "$p"; then
+    # A browser sign-in some Hermes home already has wins over a saved key (it is
+    # the user's own plan): new homes inherit it (lib/agents/hermes.sh). Without
+    # one, OAuth is offered but not "ready": the first launch needs the browser.
+    if ( load_agent hermes; hermes_provider_signed_in "$p" ) 2>/dev/null; then auth=oauth; ready=true; state="signed in"
+    elif [[ $auth == none ]]; then auth=oauth; state="browser sign-in needed"; fi
   fi
   if [[ $p == local ]]; then
     state="local GPU"; ready=false

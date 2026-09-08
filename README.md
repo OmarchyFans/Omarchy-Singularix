@@ -58,8 +58,9 @@ omarchy plugin enable fans.omarchy.agent-launcher
 **disabled** so you can read it first. It runs no code, no installer, no sudo.
 Enabling adds a robot button to the bar; clicking it opens the **Agent
 Dashboard** window (right click: quick agent switcher). Updating from a
-version before 0.5 adds and renames QML files, so run `omarchy restart shell`
-once after `omarchy plugin update`.
+version before 0.5, or from 0.6 to 0.7 (which adds the Jarvis page's QML
+files), adds and renames QML files, so run `omarchy restart shell` once after
+`omarchy plugin update`.
 
 After an `omarchy plugin update` that adds or renames QML files, run
 `omarchy restart shell`: the shell's QML engine caches a plugin folder's type
@@ -175,7 +176,7 @@ backends list` shows four kinds:
 
 | Kind | What it is | Cost basis |
 |------|-----------|------------|
-| **provider** | a row of the provider table: Anthropic, OpenAI, Nous, xAI, … with an API key or **browser sign-in with your own account** (OAuth); also the local GPU and Ollama | per token (models.dev prices, or Hermes' own estimate) |
+| **provider** | a row of the provider table: Anthropic, OpenAI, Nous, xAI, … with an API key or **browser sign-in with your own account** (OAuth: ready once any of your agents has signed in; new agents inherit that sign-in); also the local GPU and Ollama | per token (models.dev prices, or Hermes' own estimate) |
 | **endpoint** | any OpenAI-compatible `/v1` URL plus key: a Modal endpoint a teammate shares, a team vLLM server, a gateway | per token if you enter a price, else unknown |
 | **modal-dedicated** | a **vLLM server we deploy to your Modal workspace** (`modal/vllm_endpoint.py`) on the GPU and count you choose. Scales to zero after the idle window; the first request wakes it | **GPU time**, Modal's per-second price × your GPU count |
 | **modal-sandbox** | the same server inside a **Modal Sandbox** (`modal/vllm_sandbox.py`): one isolated container nothing else shares, alive for the lifetime you set (max 24 h) or until you stop it | GPU time from start to stop |
@@ -207,7 +208,7 @@ as read on 2026-09-08; Modal bills per second; `omarchy-agent-launcher modal gpu
 | L4 | 24 GB | 0.80 | RTX-PRO-6000 | 96 GB | 3.03 |
 | A10 | 24 GB | 1.10 | H100 | 80 GB | 3.95 |
 | L40S | 48 GB | 1.95 | H200 | 141 GB | 4.54 |
-| A100-40GB | 40 GB | 2.10 | B200 · B300 | 180 · 270 GB | 6.25 · 7.10 |
+| A100-40GB | 40 GB | 2.10 | B200 · B300 | 180 · 288 GB | 6.25 · 7.10 |
 
 Agents on a backend endpoint are ordinary Hermes agents: their home gets
 `model.provider: custom`, the backend's URL as `base_url`, the backend's
@@ -405,7 +406,8 @@ Built on Omarchy 4.x with Hermes Agent 0.21 installed locally.
 - ✅ Backends registry: add / list / remove, generated keys, endpoint agents provisioned with `provider: custom` + `OPENAI_API_KEY`; `create --backend`; refusing to launch on an undeployed Modal backend.
 - ✅ Jarvis: setup, SOUL and bundled skill in its home, `-s jarvis` preload, `delegate` (parent, role, task title, launch), `delegate --wait` and `result` (ANSI stripped), `jarvis brief`, workers in `status --json`.
 - ⚠️ **Modal** is written against Modal's documented CLI and Python API (`modal deploy`, `modal run`, `Sandbox.create` with `encrypted_ports`, `Function.from_name(...).get_web_url()`) and verified in `--dry-run` plus `py_compile` only: **no Modal account was available** on the development machine. vLLM is installed unpinned in the image; set `OAL_VLLM_VERSION` to pin. Treat the Modal paths as beta and report what breaks.
-- ⚠️ The Jarvis page and the backend form were written to the same Quickshell contract as the other pages but not opened in a live shell during this version.
+- ⚠️ The Jarvis page and the backend form were written to the same Quickshell contract as the other pages but not opened in a live shell during this version. The endpoint path (Hermes `custom` provider against a backend URL) is verified at the config level only, not against a live server.
+- ✅ Browser sign-ins are inherited: a new Hermes home for a provider some other home is already signed in to copies that home's `auth.json` (fixture test), so delegated workers and Jarvis never wait on a sign-in prompt nobody is watching. `backends list` calls an OAuth provider ready only when such a sign-in exists.
 
 - ✅ The dashboard: loads in the shell, persists when focus moves elsewhere, all four pages render with live data; Stop, Chat, Resolve, and the blocker badge were exercised.
 - ✅ Kanban mirror: fixture board → tasks in `status --json`, blocker on a `needs_input` card, idempotent re-sync, blocker cleared when the card completes.
