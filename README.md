@@ -38,7 +38,10 @@ omarchy plugin enable fans.omarchy.agent-launcher
 `omarchy plugin add` clones the repo into
 `~/.config/omarchy/plugins/fans.omarchy.agent-launcher/` and lands it
 **disabled** so you can read it first. It runs no code, no installer, no sudo.
-Enabling adds a robot button to the bar; clicking it opens the setup panel.
+Enabling adds a robot button to the bar; clicking it opens the **Agent
+Dashboard** window (right click: quick agent switcher). Updating from a
+version before 0.5 adds and renames QML files, so run `omarchy restart shell`
+once after `omarchy plugin update`.
 
 After an `omarchy plugin update` that adds or renames QML files, run
 `omarchy restart shell`: the shell's QML engine caches a plugin folder's type
