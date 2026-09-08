@@ -1,0 +1,24 @@
+name: validate
+on: [push, pull_request]
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n
+        run: bash -n bin/omarchy-agent-launcher lib/*.sh lib/agents/*.sh lib/runtimes/*.sh install.sh uninstall.sh
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck jq
+          shellcheck -x -S warning bin/omarchy-agent-launcher lib/*.sh lib/agents/*.sh lib/runtimes/*.sh install.sh uninstall.sh
+      - name: manifest
+        run: |
+          jq -e '.schemaVersion == 1 and (.id|startswith("omarchy.")|not) and (.entryPoints.barWidget|length>0)' manifest.json
+          test -f "$(jq -r .entryPoints.barWidget manifest.json)"
+          ! find . -path ./.git -prune -o -type l -print | grep .
+      - name: form test (stubbed UI)
+        run: |
+          sudo apt-get install -y -qq curl >/dev/null
+          GUM_VER=0.16.2
+          curl -fsSLo /tmp/gum.deb "https://github.com/charmbracelet/gum/releases/download/v${GUM_VER}/gum_${GUM_VER}_amd64.deb" && sudo dpkg -i /tmp/gum.deb
+          tests/run.sh

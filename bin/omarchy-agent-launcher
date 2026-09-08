@@ -1,0 +1,310 @@
+#!/bin/bash
+#
+# omarchy-agent-launcher — spin up an AI agent from a keybinding.
+#
+# A gum form (in a floating Omarchy terminal) asks for: the agent (Hermes Agent,
+# OpenClaw), where it runs (local shell, Docker, Fly.io Sprite), the model and
+# how to sign in (browser OAuth or API key), the skills to preload, and the job
+# description. The answers are saved as a named profile, the agent gets its own
+# isolated home directory, and a session opens in a new terminal window.
+#
+# Usage:
+#   omarchy-agent-launcher                 interactive menu (new / relaunch / manage)
+#   omarchy-agent-launcher new             the new-agent form
+#   omarchy-agent-launcher launch <name>   relaunch a saved agent
+#   omarchy-agent-launcher list | show <name> | job <name> | sign-in <name>
+#   omarchy-agent-launcher remove <name>   forget a saved agent (and its local home)
+#   omarchy-agent-launcher destroy <name>  also destroy its container / sprite
+#   omarchy-agent-launcher console <name>  shell into the agent's sprite
+#
+# Flags: --popup   re-open this command in a floating terminal (for keybindings)
+#        --inline  run the agent session in this terminal instead of a new window
+#        --dry-run print every command instead of running it (no side effects)
+set -uo pipefail
+
+OAL_ROOT="$(cd -- "$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+OAL_LIB="$OAL_ROOT/lib"
+OAL_VERSION=$(jq -r .version "$OAL_ROOT/manifest.json" 2>/dev/null || echo dev)
+
+source "$OAL_LIB/common.sh"
+source "$OAL_LIB/providers.sh"
+# Tests replace the gum wrappers with scripted answers (see tests/run.sh).
+[[ -n ${OAL_UI_STUBS:-} ]] && source "$OAL_UI_STUBS"
+
+POPUP=0 INLINE=0 CMD=() 
+for arg in "$@"; do
+  case "$arg" in
+    --popup)   POPUP=1 ;;
+    --inline)  INLINE=1 ;;
+    --dry-run) OAL_DRY_RUN=1 ;;
+    -h|--help) sed -n '3,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --version) echo "omarchy-agent-launcher $OAL_VERSION"; exit 0 ;;
+    *) CMD+=("$arg") ;;
+  esac
+done
+export OAL_DRY_RUN
+
+# --popup: float this command in an Omarchy terminal, then run it there.
+if (( POPUP )); then
+  have omarchy-launch-tui || fail "--popup needs Omarchy (omarchy-launch-tui not found)"
+  rest=(); (( OAL_DRY_RUN )) && rest+=(--dry-run); (( INLINE )) && rest+=(--inline)
+  exec omarchy-launch-tui --app-id=TUI.float env OAL_POPUP=1 "${BASH_SOURCE[0]}" "${rest[@]}" "${CMD[@]}"
+fi
+
+# In a popup the window closes on exit, so hold it open after a failure.
+if [[ ${OAL_POPUP:-0} == 1 ]]; then
+  fail() { warn "$*"; hr; read -rp "Press Enter to close…" _; exit 1; }
+  trap 'if (( $? != 0 && $? != 130 )); then read -rp "Press Enter to close…" _; fi' EXIT
+fi
+
+need gum jq
+[[ -f /usr/share/omarchy/bin/omarchy-restart-gum ]] && source omarchy-restart-gum 2>/dev/null   # theme colors
+
+# ================================================================ helpers ====
+agent_label() { case "$1" in hermes) echo "Hermes Agent";; openclaw) echo "OpenClaw";; *) echo "$1";; esac; }
+runtime_label() { case "$1" in local) echo "local shell";; docker) echo "Docker container";; sprite) echo "Fly.io Sprite";; *) echo "$1";; esac; }
+
+# Load adapters for a profile (sets AGENT_BIN, rt_* functions, ...).
+load_profile_adapters() {
+  local agent runtime
+  agent=$(profile_get "$1" agent); runtime=$(profile_get "$1" runtime)
+  [[ -f $OAL_LIB/agents/$agent.sh ]] || fail "unknown agent '$agent' in profile $1"
+  [[ -f $OAL_LIB/runtimes/$runtime.sh ]] || fail "unknown runtime '$runtime' in profile $1"
+  load_agent "$agent"; load_runtime "$runtime"
+}
+
+# Status line for a runtime × agent combination (for the form's annotations).
+runtime_status() { # runtime_status <agent> <runtime>
+  ( load_agent "$1"; load_runtime "$2"; rt_check ) 2>/dev/null || true
+}
+
+edit_job_file() { # edit_job_file <path>
+  local editor=${VISUAL:-${EDITOR:-}}
+  if [[ -z $editor ]]; then for e in nvim vim nano vi; do have "$e" && { editor=$e; break; }; done; fi
+  [[ -n $editor ]] || fail "no editor found; set \$EDITOR"
+  "$editor" "$1"
+}
+
+# ===================================================================== new ====
+cmd_new() {
+  title "New agent"
+  hr
+
+  # 1. Name -----------------------------------------------------------------
+  local name
+  name=$(ask "Name for this agent" "e.g. release-notes-bot" "agent-$(date +%m%d%H%M)")
+  name=$(slugify "$name"); [[ -n $name ]] || fail "a name is required"
+  if profile_exists "$name"; then confirm "'$name' exists. Overwrite its settings?" || exit 130; fi
+
+  # 2. Agent ----------------------------------------------------------------
+  local agent pick
+  pick=$(choose "Agent" \
+    "hermes    Hermes Agent (Nous Research)   $( have hermes && echo installed || echo 'not installed locally')" \
+    "openclaw  OpenClaw                        $( have openclaw && echo installed || echo 'not installed locally')")
+  [[ -n $pick ]] || exit 130
+  agent=${pick%% *}
+
+  # 3. Runtime --------------------------------------------------------------
+  local runtime
+  pick=$(choose "Where should it run?" \
+    "local    Shell on this machine          [$(runtime_status "$agent" local)]" \
+    "docker   Official Docker image          [$(runtime_status "$agent" docker)]" \
+    "sprite   Fly.io Sprite (cloud VM)       [$(runtime_status "$agent" sprite)]")
+  [[ -n $pick ]] || exit 130
+  runtime=${pick%% *}
+  load_agent "$agent"; load_runtime "$runtime"
+  if [[ $runtime == local ]] && ! agent_available_local; then agent_install_hint; fail "cannot run $agent locally"; fi
+  if [[ $runtime == docker ]] && ! have docker; then fail "docker is not installed (try: omarchy install docker)"; fi
+  if [[ $runtime == sprite ]] && ! have sprite; then fail "$SPRITE_INSTALL_HINT"; fi
+
+  # 4. Provider -------------------------------------------------------------
+  local -a rows=(); local id
+  while IFS= read -r id; do
+    [[ -n $id ]] || continue
+    local tag=""
+    { [[ $agent == hermes ]] && provider_hermes_oauth "$id"; } || { [[ $agent == openclaw ]] && provider_openclaw_oauth "$id"; } && tag=" · browser sign-in"
+    [[ $(provider_env "$id") != - ]] && tag="$tag · API key"
+    rows+=("$(printf '%-13s %s%s' "$id" "$(provider_label "$id")" "$tag")")
+  done < <(providers_for_agent "$agent")
+  pick=$(choose "Model provider" "${rows[@]}"); [[ -n $pick ]] || exit 130
+  local provider=${pick%% *}
+
+  # 5. Auth -----------------------------------------------------------------
+  local auth=none var base_url; var=$(provider_env "$provider"); base_url=$(provider_base_url "$provider")
+  local -a auths=()
+  if { [[ $agent == hermes ]] && provider_hermes_oauth "$provider"; } || { [[ $agent == openclaw ]] && provider_openclaw_oauth "$provider"; }; then
+    auths+=("oauth      Sign in with your account in the browser")
+  fi
+  if [[ $var != - ]]; then
+    if [[ -n $(secret_get "$var") ]]; then
+      auths+=("saved-key  Use the saved $var" "new-key    Enter a new $var")
+    else
+      auths+=("new-key    Enter an API key ($var)")
+    fi
+  fi
+  if (( ${#auths[@]} == 0 )); then
+    auth=none
+  else
+    pick=$(choose "How should $agent authenticate with $(provider_label "$provider")?" "${auths[@]}"); [[ -n $pick ]] || exit 130
+    case "${pick%% *}" in
+      oauth)     auth=oauth ;;
+      saved-key) auth=api-key ;;
+      new-key)   auth=api-key
+                 local key; key=$(ask_secret "$var" "paste the key"); [[ -n $key ]] || fail "no key given"
+                 secret_set "$var" "$key"; info "saved to $OAL_SECRETS (mode 600)" ;;
+    esac
+  fi
+  if [[ $provider == ollama ]]; then
+    base_url=$(ask "Ollama endpoint" "" "$base_url")
+  fi
+
+  # 6. Model ----------------------------------------------------------------
+  local -a models=(); mapfile -t models < <(provider_models "$provider")
+  pick=$(choose "Model" "${models[@]}" "Custom…"); [[ -n $pick ]] || exit 130
+  local model=$pick
+  [[ $pick == "Custom…" ]] && { model=$(ask "Model id" "$(provider_default_model "$provider")"); [[ -n $model ]] || fail "a model id is required"; }
+
+  # 7. Skills ---------------------------------------------------------------
+  local skills="" ; local -a available=(); mapfile -t available < <(agent_skills_list)
+  if [[ $agent == hermes && $runtime == local ]] && confirm "Install a skill from the hub first? (hermes skills install …)"; then
+    local ident; ident=$(ask "Skill identifier" "e.g. openai/skills/skill-creator or a SKILL.md URL")
+    [[ -n $ident ]] && { run hermes skills install "$ident" --yes || warn "skill install failed"; mapfile -t available < <(agent_skills_list); }
+  fi
+  if (( ${#available[@]} )); then
+    skills=$(choose_many "Skills to preload (space toggles, enter confirms)" "${available[@]}") || true
+  else
+    info "No local skills found for $agent; skipping skill selection."
+  fi
+
+  # 8. Job description ------------------------------------------------------
+  mkdir -p "$OAL_PROFILES"; local jobf; jobf=$(job_path "$name")
+  pick=$(choose "Job description / instructions" \
+    "editor   Write it in \$EDITOR" \
+    "type     Type it here (multi-line, Ctrl-D to finish)" \
+    "file     Use an existing Markdown or text file"); [[ -n $pick ]] || exit 130
+  case "${pick%% *}" in
+    editor) [[ -s $jobf ]] || printf '# Job for %s\n\nDescribe what this agent must accomplish, the constraints, and what "done" looks like.\n' "$name" >"$jobf"
+            edit_job_file "$jobf" ;;
+    type)   gum write --header "Job description" --placeholder "What should $name do?" --width 100 --height 15 >"$jobf" ;;
+    file)   local src; src=$(gum file "$HOME"); [[ -f $src ]] || fail "no file chosen"; cp -f "$src" "$jobf" ;;
+  esac
+  [[ -s $jobf ]] || fail "the job description is empty"
+
+  # 9. Mode -----------------------------------------------------------------
+  pick=$(choose "Session mode" \
+    "interactive  Open a chat session that starts on the job" \
+    "unattended   Run the job once, unattended, and show the result"); [[ -n $pick ]] || exit 130
+  local mode=${pick%% *}
+
+  # 10. Summary + save ------------------------------------------------------
+  hr; title "Summary"
+  info "name      $name"
+  info "agent     $(agent_label "$agent")  on  $(runtime_label "$runtime")"
+  info "model     $provider / $model   (auth: $auth)"
+  info "skills    ${skills:-none}" | tr '\n' ' '; echo
+  info "job       $jobf"
+  info "mode      $mode"
+  hr
+  profile_write "$name" "$agent" "$runtime" "$provider" "$auth" "$model" "$base_url" "$mode" "$skills"
+  info "saved $(profile_path "$name")"
+  confirm "Launch $name now?" || { info "Saved. Launch later with: omarchy-agent-launcher launch $name"; exit 0; }
+  cmd_launch "$name"
+}
+
+# ================================================================== launch ====
+cmd_launch() {
+  local name=$1; profile_exists "$name" || fail "no saved agent named '$name' (see: omarchy-agent-launcher list)"
+  load_profile_adapters "$name"
+  title "Launching $name ($(agent_label "$(profile_get "$name" agent)") on $(runtime_label "$(profile_get "$name" runtime)"))"
+  agent_provision "$name"
+  rt_prepare "$name"
+  if [[ $(profile_get "$name" auth) == oauth && $(profile_get "$name" signed_in) != true ]]; then
+    hr; say "First launch: sign in to $(provider_label "$(profile_get "$name" provider)")."
+    if rt_oauth "$name"; then profile_set "$name" signed_in true; else warn "sign-in did not complete; launching anyway"; fi
+  fi
+  hr
+  rt_launch "$name" "$INLINE"
+}
+
+cmd_sign_in() {
+  local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
+  load_profile_adapters "$name"
+  [[ $(profile_get "$name" auth) == oauth ]] || fail "$name uses $(profile_get "$name" auth), not OAuth"
+  agent_provision "$name"; rt_prepare "$name"
+  rt_oauth "$name" && profile_set "$name" signed_in true
+}
+
+# ================================================================== manage ====
+cmd_list() {
+  local n; local any=0
+  while IFS= read -r n; do [[ -n $n ]] || continue; any=1; profile_summary "$n"; done < <(profile_list)
+  (( any )) || say "No saved agents yet. Run: omarchy-agent-launcher new"
+}
+cmd_show() {
+  profile_exists "$1" || fail "no saved agent named '$1'"
+  jq . "$(profile_path "$1")"; hr; say "--- job ($(job_path "$1")) ---"; cat "$(job_path "$1")"
+}
+cmd_job() { profile_exists "$1" || fail "no saved agent named '$1'"; edit_job_file "$(job_path "$1")"; }
+
+cmd_remove() {
+  local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
+  confirm "Forget '$name' and delete its local agent home?" || exit 130
+  run rm -rf "$(stage_dir "$name")"
+  run rm -f "$(profile_path "$name")" "$(job_path "$name")"
+  say "removed $name"
+}
+cmd_destroy() {
+  local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
+  load_profile_adapters "$name"
+  confirm "Destroy the $(runtime_label "$(profile_get "$name" runtime)") for '$name' (remote data is lost) and forget it?" || exit 130
+  rt_destroy "$name"
+  run rm -rf "$(stage_dir "$name")"
+  run rm -f "$(profile_path "$name")" "$(job_path "$name")"
+  say "destroyed and removed $name"
+}
+cmd_console() {
+  local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
+  load_profile_adapters "$name"
+  [[ $(profile_get "$name" runtime) == sprite ]] || fail "console is only for sprite agents"
+  rt_console "$name"
+}
+
+cmd_manage() {
+  local -a rows=(); local n
+  while IFS= read -r n; do [[ -n $n ]] && rows+=("$(profile_summary "$n")"); done < <(profile_list)
+  (( ${#rows[@]} )) || { say "No saved agents yet."; return; }
+  local pick; pick=$(choose "Which agent?" "${rows[@]}"); [[ -n $pick ]] || return
+  n=${pick%% *}
+  local action; action=$(choose "$n" "launch" "show" "edit job" "sign in again" "remove (forget + delete local home)" "destroy (also remove container / sprite)" "console (sprite shell)")
+  case "${action%% *}" in
+    launch) cmd_launch "$n" ;; show) cmd_show "$n" ;; edit) cmd_job "$n" ;; sign) cmd_sign_in "$n" ;;
+    remove) cmd_remove "$n" ;; destroy) cmd_destroy "$n" ;; console) cmd_console "$n" ;;
+  esac
+}
+
+cmd_menu() {
+  local -a rows=("new       New agent…"); local n
+  while IFS= read -r n; do [[ -n $n ]] && rows+=("▶ $(profile_summary "$n")"); done < <(profile_list)
+  (( ${#rows[@]} > 1 )) && rows+=("manage    Manage saved agents…")
+  local pick; pick=$(choose "Omarchy Agent Launcher $OAL_VERSION" "${rows[@]}"); [[ -n $pick ]] || exit 130
+  case "$pick" in
+    new*)    cmd_new ;;
+    manage*) cmd_manage ;;
+    "▶ "*)   set -- ${pick#▶ }; cmd_launch "$1" ;;
+  esac
+}
+
+# ==================================================================== main ====
+case "${CMD[0]:-menu}" in
+  menu)    cmd_menu ;;
+  new)     cmd_new ;;
+  launch)  cmd_launch "${CMD[1]:?launch needs a name}" ;;
+  sign-in) cmd_sign_in "${CMD[1]:?sign-in needs a name}" ;;
+  list)    cmd_list ;;
+  show)    cmd_show "${CMD[1]:?show needs a name}" ;;
+  job)     cmd_job "${CMD[1]:?job needs a name}" ;;
+  remove)  cmd_remove "${CMD[1]:?remove needs a name}" ;;
+  destroy) cmd_destroy "${CMD[1]:?destroy needs a name}" ;;
+  console) cmd_console "${CMD[1]:?console needs a name}" ;;
+  *) fail "unknown command: ${CMD[0]} (try --help)" ;;
+esac
