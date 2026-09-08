@@ -5,8 +5,9 @@
 # each behind its own confirmation and each idempotent:
 #
 #   1. symlink bin/omarchy-agent-launcher into ~/.local/bin
-#   2. append a SUPER + ALT + A keybinding (opens the setup panel) to ~/.config/hypr/bindings.lua
-#   3. append an "Agents" submenu to ~/.config/omarchy/extensions/omarchy-menu.jsonc
+#   2. add a SUPER + ALT + A keybinding (opens the Agent Dashboard) to ~/.config/hypr/bindings.lua
+#   3. add a window rule that floats the dashboard to ~/.config/hypr/looknfeel.lua
+#   4. append an "Agents" submenu to ~/.config/omarchy/extensions/omarchy-menu.jsonc
 #
 # Nothing is overwritten: existing lines are detected and skipped, and a
 # timestamped backup is taken before either config file is appended to.
@@ -25,21 +26,42 @@ if ask "Symlink omarchy-agent-launcher into ~/.local/bin?"; then
   echo "  linked ~/.local/bin/omarchy-agent-launcher"
 fi
 
-# 2. Keybinding
+# 2. Keybinding (summon + focus: never hides a dashboard sitting on another workspace)
 B="$HOME/.config/hypr/bindings.lua"
+BIND="o.bind(\"SUPER + ALT + A\", \"Agent dashboard\", \"omarchy-shell shell summon $MARK '{}'\")"
 if [[ -f $B ]] && grep -q "$MARK" "$B"; then
-  echo "  keybinding already present in $B"
-elif ask "Add keybinding SUPER + ALT + A -> Agent launcher to $B?"; then
+  if grep -qF "$BIND" "$B"; then
+    echo "  keybinding already present in $B"
+  else
+    cp -a "$B" "$B.bak.$(date +%s)"
+    sed -i "/-- Omarchy Agent Launcher ($MARK)\./{n;s|.*|$BIND|}" "$B"
+    echo "  keybinding updated in $B (now opens the dashboard)"
+  fi
+elif ask "Add keybinding SUPER + ALT + A -> Agent dashboard to $B?"; then
   [[ -f $B ]] && cp -a "$B" "$B.bak.$(date +%s)"
   cat >>"$B" <<LUA
 
 -- Omarchy Agent Launcher ($MARK). SUPER + ALT + A was unbound by default.
-o.bind("SUPER + ALT + A", "Agent launcher", "omarchy-shell shell toggle $MARK")
+$BIND
 LUA
   echo "  appended; run 'hyprctl reload && hyprctl configerrors' to verify"
 fi
 
-# 3. Menu entry
+# 3. Window rule: the dashboard is a Quickshell toplevel (class org.quickshell), matched by title.
+LF="$HOME/.config/hypr/looknfeel.lua"
+if [[ -f $LF ]] && grep -q "$MARK) dashboard" "$LF"; then
+  echo "  dashboard window rule already present in $LF"
+elif ask "Float and center the Agent Dashboard window (rule in $LF)?"; then
+  [[ -f $LF ]] && cp -a "$LF" "$LF.bak.$(date +%s)"
+  cat >>"$LF" <<LUA
+
+-- Omarchy Agent Launcher ($MARK) dashboard window: float it (it tiles without this).
+o.window({ class = "^org.quickshell$", title = "^Agent Dashboard$" }, { float = true, center = true, size = { 1180, 760 } })
+LUA
+  echo "  appended; hyprctl reload picks it up"
+fi
+
+# 4. Menu entry
 M="$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
 if [[ -f $M ]] && grep -q '"agents"' "$M"; then
   echo "  menu entry already present in $M"

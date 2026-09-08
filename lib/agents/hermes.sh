@@ -61,6 +61,7 @@ agent_provision() { # agent_provision <name>
     echo "  cwd: ."
     echo "skills:"
     echo "  disabled: []"
+    echo "hooks_auto_accept: true"   # shell hooks (if any) run without a consent prompt
   } >"$home/config.yaml"
 
   # Secrets: only the one key this agent needs, never the whole secrets file.
@@ -76,6 +77,13 @@ agent_provision() { # agent_provision <name>
 You are "$name", an autonomous agent launched from an Omarchy desktop. You
 have one job, described in your system prompt. Be direct, keep the user
 informed of progress, and ask before doing anything irreversible.
+
+# Reporting
+The desktop shows an event log for you. Post short progress notes with:
+  omarchy-agent-launcher event "\$OAL_AGENT" note "what happened" [--task <name>]
+Use kind task_started / task_done / task_blocked for sub-tasks, and
+  omarchy-agent-launcher event "\$OAL_AGENT" blocker "what you need" --level blocker
+when you need the user (they get a notification).
 SOUL
   printf 'This home was created by Omarchy Agent Launcher with an explicit skill selection.\nDelete this file to let `hermes update` seed bundled skills here.\n' >"$home/.no-bundled-skills"
 
@@ -119,7 +127,9 @@ agent_launch_args() { # agent_launch_args <name> [resume]
 }
 
 # Environment the local runtime exports (VAR=value lines).
-agent_local_env() { printf 'HERMES_HOME=%s\n' "$(agent_home "$1")"; }
+agent_local_env() {
+  printf 'HERMES_HOME=%s\nOAL_AGENT=%s\nPATH=%s/bin:%s\n' "$(agent_home "$1")" "$1" "$OAL_ROOT" "$PATH"
+}
 
 # Docker: image, mount target for the agent home, extra `docker run` flags.
 agent_docker_image() { printf '%s' "$HERMES_IMAGE"; }

@@ -18,6 +18,13 @@
 #   omarchy-agent-launcher remove <name>   forget a saved agent (and its local home)
 #   omarchy-agent-launcher destroy <name>  also destroy its container / sprite
 #   omarchy-agent-launcher console <name>  shell into the agent's sprite
+#   omarchy-agent-launcher stop <name>     end the agent's session (the saved agent stays)
+#   omarchy-agent-launcher switch          graphical picker: jump to an agent's chat
+#   omarchy-agent-launcher status --json   every agent with status, window, blockers, tasks
+#   omarchy-agent-launcher event <agent> <kind> "<message>" [--task T] [--level info|warn|blocker] [--key K]
+#                                          append to the event log (agents and hooks may call this;
+#                                          OAL_AGENT holds the agent's own name inside its session)
+#   omarchy-agent-launcher settings get|set <key> [value]   e.g. notify_blockers false
 #
 # Non-interactive (used by the Quickshell panel, handy for scripts):
 #   omarchy-agent-launcher info --json     agents, runtimes, providers, models, skills, saved agents
@@ -44,6 +51,7 @@ OAL_VERSION=$(jq -r .version "$OAL_ROOT/manifest.json" 2>/dev/null || echo dev)
 source "$OAL_LIB/common.sh"
 source "$OAL_LIB/providers.sh"
 source "$OAL_LIB/models.sh"
+source "$OAL_LIB/events.sh"
 # Tests replace the gum wrappers with scripted answers (see tests/run.sh).
 # shellcheck source=/dev/null
 [[ -n ${OAL_UI_STUBS:-} ]] && source "$OAL_UI_STUBS"
@@ -57,7 +65,7 @@ while (($#)); do
     --json)    JSON=1 ;;
     -h|--help) sed -n '3,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --version) echo "omarchy-agent-launcher $OAL_VERSION"; exit 0 ;;
-    --name|--agent|--runtime|--provider|--auth|--model|--base-url|--mode|--skill|--job-file)
+    --name|--agent|--runtime|--provider|--auth|--model|--base-url|--mode|--skill|--job-file|--task|--level|--key)
                OPTS+=("$1" "${2:-}"); shift ;;   # create's valued options
     --*)       OPTS+=("$1") ;;                    # create's flags
     *)         CMD+=("$1") ;;
@@ -79,8 +87,10 @@ if [[ ${OAL_POPUP:-0} == 1 ]]; then
   trap 'if (( $? != 0 && $? != 130 )); then read -rp "Press Enter to close…" _; fi' EXIT
 fi
 
-need gum jq
-[[ -f /usr/share/omarchy/bin/omarchy-restart-gum ]] && source omarchy-restart-gum 2>/dev/null   # theme colors
+need jq
+ui_need() { need gum; [[ -f /usr/share/omarchy/bin/omarchy-restart-gum ]] && source omarchy-restart-gum 2>/dev/null; return 0; }   # gum + theme colors, interactive commands only
+opt_flag() { local o; for o in "${OPTS[@]}"; do [[ $o == "$1" ]] && return 0; done; return 1; }
+opt_value() { local i; for ((i=0; i<${#OPTS[@]}; i++)); do [[ ${OPTS[i]} == "$1" ]] && { printf '%s' "${OPTS[i+1]:-}"; return 0; }; done; return 1; }
 
 # ================================================================ helpers ====
 agent_label() { case "$1" in hermes) echo "Hermes Agent";; openclaw) echo "OpenClaw";; *) echo "$1";; esac; }
@@ -109,6 +119,7 @@ edit_job_file() { # edit_job_file <path>
 
 # ===================================================================== new ====
 cmd_new() {
+  ui_need
   title "New agent"
   hr
 
@@ -239,11 +250,17 @@ cmd_new() {
 prepare_session() { # prepare_session <name>
   local name=$1
   agent_provision "$name"
-  rt_prepare "$name"
+  if ! rt_prepare "$name"; then
+    event_emit "$name" blocker "Runtime could not be prepared ($(profile_get "$name" runtime))" --level blocker --key prepare
+    return 1
+  fi
   if [[ $(profile_get "$name" auth) == oauth && $(profile_get "$name" signed_in) != true ]]; then
-    hr; say "First launch: sign in to $(provider_label "$(profile_get "$name" provider)")."
+    local plabel; plabel=$(provider_label "$(profile_get "$name" provider)")
+    event_emit "$name" signin_required "Sign-in required ($plabel): open the agent's window and finish the browser sign-in" --level blocker --key signin
+    hr; say "First launch: sign in to $plabel."
     say "(This prompt lives in the agent's tmux session: close or switch windows freely and come back.)"
-    if rt_oauth "$name"; then profile_set "$name" signed_in true; else warn "sign-in did not complete; launching anyway"; fi
+    if rt_oauth "$name"; then profile_set "$name" signed_in true; event_emit "$name" signed_in "Signed in to $plabel"
+    else warn "sign-in did not complete; launching anyway"; fi
   fi
 }
 
@@ -264,17 +281,31 @@ cmd_launch() {
 # Runs inside the agent's tmux session: the whole lifecycle, then a menu so
 # the window never just vanishes on exit.
 cmd_session() {
+  ui_need
   local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
   load_profile_adapters "$name"
   local resume=0 code
   while :; do
     title "$name  ·  $(agent_label "$(profile_get "$name" agent)") on $(runtime_label "$(profile_get "$name" runtime)")"
-    if (( ! resume )); then prepare_session "$name"; fi
+    if (( ! resume )); then prepare_session "$name" || true; fi
     local -a cmd; mapfile -t cmd < <(rt_cmd "$name" "$resume")
+    export OAL_AGENT="$name" PATH="$OAL_ROOT/bin:$PATH"
+    event_emit "$name" session_started "$( (( resume )) && echo "Chat resumed" || echo "Session started" ) ($(profile_get "$name" mode))" --task "$(job_title "$name")"
     hr
     "${cmd[@]}"; code=$?
     hr
-    if (( code == 0 )); then say "Session ended."; else say "Session ended with exit code $code."; fi
+    if (( code == 0 )); then
+      say "Session ended."
+      if [[ $(profile_get "$name" mode) == unattended && $resume == 0 ]]; then
+        event_emit "$name" job_done "Unattended run finished" --task "$(job_title "$name")"
+      else
+        event_emit "$name" session_exited "Session ended" --code 0
+      fi
+    else
+      say "Session ended with exit code $code."
+      event_emit "$name" session_exited "Session exited with code $code" --level blocker --key exit --code "$code"
+    fi
+    cmd_kanban_sync "$name" >/dev/null 2>&1 || true
     local pick
     pick=$(choose "What next?" \
       "chat     Open a chat that continues this agent's conversation" \
@@ -310,18 +341,29 @@ cmd_job() { profile_exists "$1" || fail "no saved agent named '$1'"; edit_job_fi
 
 cmd_remove() {
   local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
-  confirm "Forget '$name' and delete its local agent home?" || exit 130
+  if ! opt_flag --yes; then ui_need; confirm "Forget '$name' and delete its local agent home?" || exit 130; fi
+  session_kill "$name" || true
   run rm -rf "$(stage_dir "$name")"
   run rm -f "$(profile_path "$name")" "$(job_path "$name")"
+  event_emit "$name" removed "Agent removed"
   say "removed $name"
+}
+cmd_stop() {
+  local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
+  if session_alive "$name"; then
+    event_emit "$name" stopped "Session stopped by the user"
+    session_kill "$name"; say "stopped $name"
+  else say "$name is not running"; fi
 }
 cmd_destroy() {
   local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
   load_profile_adapters "$name"
-  confirm "Destroy the $(runtime_label "$(profile_get "$name" runtime)") for '$name' (remote data is lost) and forget it?" || exit 130
+  if ! opt_flag --yes; then ui_need; confirm "Destroy the $(runtime_label "$(profile_get "$name" runtime)") for '$name' (remote data is lost) and forget it?" || exit 130; fi
+  session_kill "$name" || true
   rt_destroy "$name"
   run rm -rf "$(stage_dir "$name")"
   run rm -f "$(profile_path "$name")" "$(job_path "$name")"
+  event_emit "$name" destroyed "Agent destroyed (runtime removed)"
   say "destroyed and removed $name"
 }
 cmd_console() {
@@ -332,6 +374,7 @@ cmd_console() {
 }
 
 cmd_manage() {
+  ui_need
   local -a rows=(); local n
   while IFS= read -r n; do [[ -n $n ]] && rows+=("$(profile_summary "$n")"); done < <(profile_list)
   (( ${#rows[@]} )) || { say "No saved agents yet."; return; }
@@ -345,6 +388,7 @@ cmd_manage() {
 }
 
 cmd_menu() {
+  ui_need
   local -a rows=("new       New agent…"); local n
   while IFS= read -r n; do [[ -n $n ]] && rows+=("▶ $(profile_summary "$n")"); done < <(profile_list)
   (( ${#rows[@]} > 1 )) && rows+=("manage    Manage saved agents…")
@@ -438,11 +482,99 @@ cmd_create() {
   if (( job_stdin )); then cat >"$(job_path "$name")"; elif (( job_env )); then printf '%s\n' "${OAL_JOB:-}" >"$(job_path "$name")"; elif [[ -n $job_file ]]; then cp -f "$job_file" "$(job_path "$name")"; else fail "create: --job-file, --job-stdin, or --job-env is required"; fi
   [[ -s $(job_path "$name") ]] || fail "create: the job description is empty"
   profile_write "$name" "$agent" "$runtime" "$provider" "$auth" "$model" "$base_url" "$mode" "$(printf '%s\n' "${skills[@]}")"
+  event_emit "$name" created "Agent created: $agent on $runtime, $provider/$model ($mode)" --task "$(job_title "$name")"
   (( JSON )) && jq -c . "$(profile_path "$name")" || say "saved $name"
   if (( launch )); then
     unset OAL_API_KEY OAL_JOB     # the agent window must not inherit them
     cmd_launch "$name"             # opens (or focuses) the agent window; --inline runs here
   fi
+}
+
+# ============================================================ status & events ====
+# Kanban mirror: filled in by lib/agents/hermes.sh (agent_kanban_sync); no-op otherwise.
+cmd_kanban_sync() { # cmd_kanban_sync [name]
+  local n
+  for n in ${1:-$(profile_list)}; do
+    profile_exists "$n" || continue
+    ( load_agent "$(profile_get "$n" agent)"; declare -F agent_kanban_sync >/dev/null && agent_kanban_sync "$n" ) || true
+  done
+}
+
+# Everything the dashboard's Agents tab needs.
+cmd_status() {
+  (( JSON )) || { cmd_list; return; }
+  cmd_kanban_sync >/dev/null 2>&1 || true
+  local clients="[]"; have hyprctl && clients=$(hyprctl clients -j 2>/dev/null || echo "[]")
+  local recent blockers; recent=$(events_recent 4000); blockers=$(blockers_json)
+  local n running window tasks_extra p
+  {
+    printf '{"version":%s,"blockers":%s,"agents":[' "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")"
+    local first=1
+    while IFS= read -r n; do
+      [[ -n $n ]] || continue; (( first )) || printf ','; first=0
+      running=false; session_alive "$n" && running=true
+      window=$(jq -r --arg t "$(window_title "$n")" '.[] | select(.initialTitle==$t or .title==$t) | .address' <<<"$clients" 2>/dev/null | head -n1)
+      tasks_extra=$( ( load_agent "$(profile_get "$n" agent)"; agent_tasks_json "$n" ) 2>/dev/null ); [[ $tasks_extra == \[* ]] || tasks_extra="[]"
+      jq -c --arg n "$n" --argjson running "$running" --arg window "${window:-}" --arg job "$(job_title "$n")" \
+         --argjson recent "$recent" --argjson blockers "$blockers" --argjson extra "$tasks_extra" '
+        ($recent | map(select(.agent == $n))) as $ev
+        | ($blockers | to_entries | map(.value) | map(select(.agent == $n))) as $open
+        | ($ev | map(select(.task != "" and .task != $job)) | group_by(.task) | map({source:"cli", id:.[-1].task, title:.[-1].task,
+             status: (.[-1].kind | if . == "task_done" then "done" elif . == "task_blocked" then "blocked" elif . == "task_review" then "review" elif . == "task_started" then "running" else "noted" end)})) as $cli
+        | . + {
+            job_title: $job, running: $running, window: $window,
+            signed_in: ((.signed_in // false) == true),
+            last: ($ev | last // null | if . == null then null else {t, ts, kind, level, message} end),
+            open_blockers: $open,
+            status: (if ($open|length) > 0 then "blocked" elif $running then "running" elif (($ev|last // {}).kind == "job_done") then "done" else "idle" end),
+            tasks: ([{source:"job", id:"job", title:$job, status:(if $running then "running" elif (($ev|last // {}).kind == "job_done") then "done" else "idle" end)}] + $cli + $extra)
+          }' "$(profile_path "$n")"
+    done < <(profile_list)
+    printf ']}'
+  } | jq .
+}
+
+cmd_event() { # event <agent> <kind> <message> [--task T] [--level L] [--key K]
+  local agent=${CMD[1]:-} kind=${CMD[2]:-} message=${CMD[3]:-}
+  [[ -n $agent && -n $kind && ( -n $message || $kind == blocker_cleared ) ]] || fail "usage: omarchy-agent-launcher event <agent> <kind> \"<message>\" [--task T] [--level info|warn|blocker] [--key K]"
+  local -a extra=()
+  local v
+  v=$(opt_value --task) && extra+=(--task "$v")
+  v=$(opt_value --level) && extra+=(--level "$v")
+  v=$(opt_value --key) && extra+=(--key "$v")
+  [[ $kind == blocker ]] && ! opt_value --level >/dev/null && extra+=(--level blocker)
+  event_emit "$agent" "$kind" "$message" --source cli "${extra[@]}"
+}
+
+cmd_settings() {
+  case "${CMD[1]:-}" in
+    get) settings_get "${CMD[2]:?settings get <key>}" ""; echo ;;
+    set) settings_set "${CMD[2]:?settings set <key> <value>}" "${CMD[3]:?settings set <key> <value>}"; say "ok" ;;
+    *)   [[ -f $OAL_CONF/settings.json ]] && jq . "$OAL_CONF/settings.json" || say "{}" ;;
+  esac
+}
+
+# Graphical quick switcher: pick an agent, jump to its chat.
+cmd_switch() {
+  local -a rows=(); local n status model
+  while IFS= read -r n; do
+    [[ -n $n ]] || continue
+    status=idle; session_alive "$n" && status=running
+    [[ $(blockers_json | jq --arg n "$n" '[.[] | select(.agent == $n)] | length') -gt 0 ]] && status=blocked
+    model=$(profile_get "$n" model)
+    rows+=("$(printf '󱚝\t%s\t%s · %s' "$n" "$status" "$model")")
+  done < <(profile_list)
+  (( ${#rows[@]} )) || fail "no saved agents yet (open the dashboard to create one)"
+  local pick
+  if (( OAL_DRY_RUN )); then say "[dry-run] would offer:"; printf '  %s\n' "${rows[@]}"; return 0; fi
+  if have omarchy-menu-select; then
+    pick=$(omarchy-menu-select "Agent" "${rows[@]}" 2>/dev/null) || return 130   # returns "<name><TAB><subtext>"
+  else
+    ui_need; pick=$(choose "Agent" "${rows[@]}") || return 130                 # returns the full row
+  fi
+  n=$(awk -F'\t' '{ if ($1 == "󱚝") print $2; else print $1 }' <<<"$pick")
+  profile_exists "$n" || fail "unknown agent: $pick"
+  cmd_launch "$n"
 }
 
 # ==================================================================== main ====
@@ -462,5 +594,11 @@ case "${CMD[0]:-menu}" in
   remove)  cmd_remove "${CMD[1]:?remove needs a name}" ;;
   destroy) cmd_destroy "${CMD[1]:?destroy needs a name}" ;;
   console) cmd_console "${CMD[1]:?console needs a name}" ;;
+  stop)    cmd_stop "${CMD[1]:?stop needs a name}" ;;
+  status)  cmd_status ;;
+  event)   cmd_event ;;
+  settings) cmd_settings ;;
+  switch)  cmd_switch ;;
+  kanban-sync) cmd_kanban_sync "${CMD[1]:-}" ;;
   *) fail "unknown command: ${CMD[0]} (try --help)" ;;
 esac

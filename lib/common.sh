@@ -130,6 +130,15 @@ profile_write() {
      >"$(profile_path "$1")"
 }
 
+# First non-empty line of the job description, without a leading "#".
+job_title() { sed -n '/[^[:space:]]/{s/^#\+[[:space:]]*//;p;q}' "$(job_path "$1")" 2>/dev/null | cut -c1-120; }
+
+# Kill the agent's tmux session (the window closes with it).
+session_kill() { have tmux && tmux kill-session -t "$(tmux_session "$1")" 2>/dev/null; }
+
+# Agents that keep a task board override this (hermes: kanban). JSON array.
+agent_tasks_json() { printf '[]'; }
+
 profile_summary() { # one line for menus
   jq -r '"\(.name)  ·  \(.agent) · \(.runtime) · \(.provider)/\(.model) · \(.mode)"' "$(profile_path "$1")"
 }

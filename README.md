@@ -67,7 +67,7 @@ Plugins cannot ship keybindings, so add one line to `~/.config/hypr/bindings.lua
 must be enabled:
 
 ```lua
-o.bind("SUPER + ALT + A", "Agent launcher", "omarchy-shell shell toggle fans.omarchy.agent-launcher")
+o.bind("SUPER + ALT + A", "Agent dashboard", "omarchy-shell shell summon fans.omarchy.agent-launcher '{}'")
 ```
 
 Prefer a terminal? The same setup exists as step-by-step prompts:
@@ -111,6 +111,9 @@ omarchy-agent-launcher manage         # show / edit job / sign in / remove / des
 omarchy-agent-launcher list | show NAME | job NAME | sign-in NAME
 omarchy-agent-launcher remove NAME    # forget + delete its local home
 omarchy-agent-launcher destroy NAME   # also remove its container / sprite
+omarchy-agent-launcher stop NAME      # end the session (the saved agent stays)
+omarchy-agent-launcher switch         # graphical picker: jump to an agent's chat
+omarchy-agent-launcher status --json  # every agent with status, window, blockers, tasks
 omarchy-agent-launcher --dry-run launch NAME   # print every command, run nothing
 omarchy-agent-launcher --inline launch NAME    # session in this terminal, not a new window
 ```
@@ -148,6 +151,32 @@ workspace `AGENTS.md`; the session opens with a short kickoff message.
 Browser sign-in runs `hermes auth add <provider> --type oauth` or
 `openclaw models auth login --provider <id>` inside the chosen runtime
 (with `--no-browser` in containers and sprites, which print a URL to open).
+
+### Events, tasks, and blockers
+
+Everything that happens is appended to
+`~/.local/state/omarchy-agent-launcher/events.jsonl` (one JSON object per line,
+rotated at 2 MiB): agent created, sign-in required / signed in, session started,
+session exited, unattended job done, stopped, removed. Events with
+`level: blocker` are things that need you (sign-in, a crashed session, a runtime
+that could not be prepared); they are kept in `blockers.json` until cleared and,
+unless you turn it off (`omarchy-agent-launcher settings set notify_blockers false`),
+sent as Omarchy desktop notifications whose click opens the dashboard.
+
+Agents and hooks can post their own events. Inside a local session the plugin's
+`bin` is on `PATH` and `OAL_AGENT` holds the agent's name, so an agent (or a
+Hermes hook) can run:
+
+```bash
+omarchy-agent-launcher event "$OAL_AGENT" note "Parsed 12 issues" --task triage
+omarchy-agent-launcher event "$OAL_AGENT" task_done "Release notes drafted" --task notes
+omarchy-agent-launcher event "$OAL_AGENT" blocker "Need the deploy token" --level blocker
+omarchy-agent-launcher event "$OAL_AGENT" blocker_cleared "" --key need-the-deploy-token
+```
+
+A **task** is the agent's job (first line of the job description), any `--task`
+name seen in its events, and, for Hermes agents, the cards on the agent's own
+kanban board (see below). `status --json` returns all of it per agent.
 
 ### Models and prices
 

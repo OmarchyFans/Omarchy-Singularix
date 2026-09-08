@@ -68,6 +68,12 @@ agent_provision() { # agent_provision <name>
 You are "$name", an autonomous agent launched from an Omarchy desktop. Your
 job is in AGENTS.md. Be direct, report progress, and ask before doing
 anything irreversible.
+
+# Reporting
+Post progress to the desktop event log with:
+  omarchy-agent-launcher event "\$OAL_AGENT" note "what happened" [--task <name>]
+and raise a blocker when you need the user:
+  omarchy-agent-launcher event "\$OAL_AGENT" blocker "what you need" --level blocker
 SOUL
   [[ -f $ws/IDENTITY.md ]] || printf '# Identity\nName: %s\nVibe: focused, concise\nEmoji: 🦞\n' "$name" >"$ws/IDENTITY.md"
 
@@ -101,7 +107,7 @@ agent_launch_args() { # agent_launch_args <name> [resume]
 
 agent_local_env() {
   local home; home=$(agent_home "$1")
-  printf 'OPENCLAW_STATE_DIR=%s\nOPENCLAW_WORKSPACE_DIR=%s/workspace\n' "$home" "$home"
+  printf 'OPENCLAW_STATE_DIR=%s\nOPENCLAW_WORKSPACE_DIR=%s/workspace\nOAL_AGENT=%s\nPATH=%s/bin:%s\n' "$home" "$home" "$1" "$OAL_ROOT" "$PATH"
 }
 
 agent_docker_image() { printf '%s' "$OPENCLAW_IMAGE"; }
