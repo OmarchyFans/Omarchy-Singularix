@@ -394,7 +394,7 @@ cmd_create() {
   if (( launch )); then
     # Called from the panel there is no terminal: sign-in and the session need
     # one, so hand off to a floating popup. From a shell, launch right here.
-    if [[ -t 1 ]] || (( OAL_DRY_RUN )); then cmd_launch "$name"; else exec "${BASH_SOURCE[0]}" --popup launch "$name"; fi
+    if [[ -t 1 ]] || (( OAL_DRY_RUN )); then cmd_launch "$name"; else unset OAL_API_KEY OAL_JOB; exec "${BASH_SOURCE[0]}" --popup launch "$name"; fi
   fi
 }
 

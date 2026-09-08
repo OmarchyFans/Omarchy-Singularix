@@ -30,7 +30,7 @@ rt_check() {
 # Authenticate the CLI once. Already signed in (e.g. via `sprite org auth`
 # with your Fly.io account) means nothing to do; otherwise offer the browser
 # flow or a pasted API token (https://sprites.dev/account).
-sprite_authenticated() { sprite list >/dev/null 2>&1; }
+sprite_authenticated() { timeout 5 sprite list >/dev/null 2>&1; }   # info --json calls this on every panel open
 sprite_ensure_auth() {
   (( OAL_DRY_RUN )) && { info "[dry-run] would verify sprite CLI auth"; return 0; }
   sprite_authenticated && return 0

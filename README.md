@@ -39,6 +39,10 @@ omarchy plugin enable fans.omarchy.agent-launcher
 **disabled** so you can read it first. It runs no code, no installer, no sudo.
 Enabling adds a robot button to the bar; clicking it opens the setup panel.
 
+After an `omarchy plugin update` that adds or renames QML files, run
+`omarchy restart shell`: the shell's QML engine caches a plugin folder's type
+list, and a stale cache surfaces as a bogus "File name case mismatch" error.
+
 Requirements: Omarchy 4.x, `gum`, `jq` (both ship with Omarchy). Then, per
 runtime:
 
@@ -134,7 +138,7 @@ Model ids drift. The provider table lives in one place,
 
 Built on Omarchy 4.x with Hermes Agent 0.21 installed locally.
 
-- ✅ The setup panel: loads in the shell, reads live data from `info --json`, and renders every control (screenshot above is a real capture).
+- ✅ The setup panel: loads in the shell, reads live data from `info --json`, and renders every control (screenshot above is a real capture). Its Launch path was exercised piecewise: the environment handoff (`Process.environment` overlays, PATH intact) and the no-terminal `create … --launch` branch, which opened the floating launch terminal and surfaced a runtime error there. Keyboard entry into fields follows hyprmoncfg's proven KeyboardPanel pattern but was not typed into by hand.
 
 - ✅ Hermes · local: provisioning, config parsing, per-agent secrets, skill copy + preload, and the request path (verified with a deliberately invalid key that produced the provider's "incorrect API key" error).
 - ✅ Every agent × runtime combination in `--dry-run` (command generation).
