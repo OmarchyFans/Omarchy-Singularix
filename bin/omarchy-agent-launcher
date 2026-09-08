@@ -351,7 +351,7 @@ cmd_info() {
 
 # Save (and optionally launch) an agent from flags: no prompts at all.
 cmd_create() {
-  local name= agent= runtime= provider= auth=none model= base_url=- mode=interactive job_file= job_stdin=0 job_env=0 key_env=0 launch=0
+  local name='' agent='' runtime='' provider='' auth=none model='' base_url=- mode=interactive job_file='' job_stdin=0 job_env=0 key_env=0 launch=0
   local -a skills=()
   local i=0 n=${#OPTS[@]} o v
   while (( i < n )); do
