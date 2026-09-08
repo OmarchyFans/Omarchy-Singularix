@@ -47,6 +47,11 @@ models_for_provider() { # models_for_provider <provider>
   local p=$1 key; key=$(models_catalog_key "$p")
   local priced=true; [[ $(provider_env "$p") == - ]] && priced=false
   if [[ $p == local ]] && declare -F local_models_json >/dev/null; then local_models_json; return 0; fi
+  if [[ $p == endpoint ]]; then   # the served models of every configured backend
+    if declare -F backends_json >/dev/null; then backends_json | jq -c '[.[] | select(.kind != "provider") | {id: .model, name: (.model + "  ·  " + .label), input: .input_per_m, output: .output_per_m, context: .model_ctx, release: null}] | unique_by(.id)'
+    else printf '[]'; fi
+    return 0
+  fi
   if [[ $p == ollama ]] && have ollama; then
     ollama list 2>/dev/null | awk 'NR>1 && $1 != "" {print $1}' | jq -R . | jq -sc 'map({id: ., name: ., input: null, output: null, context: null, release: null})'
     return 0

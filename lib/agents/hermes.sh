@@ -38,6 +38,7 @@ agent_provision() { # agent_provision <name>
   provider=$(profile_get "$name" provider); model=$(profile_get "$name" model)
   base_url=$(profile_get "$name" base_url); auth=$(profile_get "$name" auth)
   mode=$(profile_get "$name" mode)
+  local role backend_id; role=$(profile_get "$name" role); backend_id=$(profile_get "$name" backend)
   local hp; hp=$(provider_hermes "$provider")
 
   run mkdir -p "$home/skills" "$home/sessions" "$home/logs" "$home/memories"
@@ -59,6 +60,10 @@ agent_provision() { # agent_provision <name>
       local per=0; declare -F local_status_json >/dev/null && per=$(local_status_json 2>/dev/null | jq -r '.ctx_per_request // 0' 2>/dev/null)
       [[ $per =~ ^[0-9]+$ && $per -gt 0 ]] || per=32768
       echo "  context_length: $per"
+    elif [[ $provider == endpoint ]]; then
+      # A backend we run (Modal) or were given: its vLLM --max-model-len.
+      local bctx=""; [[ -n $backend_id ]] && declare -F backend_get >/dev/null && bctx=$(backend_get "$backend_id" 2>/dev/null | jq -r '.model_ctx // empty' 2>/dev/null)
+      echo "  context_length: ${bctx:-32768}"
     fi
     echo "agent:"
     echo "  system_prompt: |"
@@ -85,10 +90,19 @@ agent_provision() { # agent_provision <name>
     write_env_file "$home/.env" "$var" "$(secret_get "$var")"
   elif [[ $provider == local ]]; then
     write_env_file "$home/.env" LM_API_KEY local     # llama.cpp ignores it; Hermes' LM Studio path wants one
+  elif [[ $provider == endpoint ]]; then
+    # Hermes' custom provider = base_url + OPENAI_API_KEY; the key is the backend's own.
+    local bkey=""; [[ -n $backend_id ]] && declare -F backend_key_var >/dev/null && bkey=$(secret_get "$(backend_key_var "$backend_id")")
+    write_env_file "$home/.env" OPENAI_API_KEY "${bkey:-none}"
   else
     write_env_file "$home/.env" "" ""
   fi
 
+  if [[ $role == chief-of-staff ]]; then
+    [[ -f $home/SOUL.md ]] || jarvis_soul "$name" >"$home/SOUL.md"
+    # The bundled skill that teaches Jarvis the launcher's commands (refreshed every launch).
+    rm -rf "$home/skills/omarchy/jarvis"; mkdir -p "$home/skills/omarchy"; cp -R "$OAL_ROOT/skills/jarvis" "$home/skills/omarchy/jarvis"
+  fi
   [[ -f $home/SOUL.md ]] || cat >"$home/SOUL.md" <<SOUL
 # Identity
 You are "$name", an autonomous agent launched from an Omarchy desktop. You
@@ -131,6 +145,7 @@ agent_launch_args() { # agent_launch_args <name> [resume]
   local name=$1 resume=${2:-0} mode skill
   mode=$(profile_get "$name" mode)
   printf '%s\n' chat
+  [[ $(profile_get "$name" role) == chief-of-staff ]] && printf '%s\n' -s jarvis
   while IFS= read -r skill; do
     [[ -n $skill ]] && printf '%s\n' -s "$(agent_skill_short "$skill")"
   done < <(profile_skills "$name")

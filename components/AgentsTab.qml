@@ -87,11 +87,19 @@ Item {
           spacing: Style.spacing.rowGap
           Text { text: row.agent ? row.agent.name : ""; color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.subtitle; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
           StatusPill { status: row.agent ? row.agent.status : "idle"; foreground: dash.foreground; fontFamily: dash.fontFamily; anchors.verticalCenter: parent.verticalCenter }
+          Text { visible: row.agent && row.agent.role === "chief-of-staff"; text: "chief of staff"; color: dash.accent; font.family: dash.fontFamily; font.pixelSize: Style.font.caption; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+          Text { visible: row.agent && row.agent.parent !== ""; text: row.agent ? "for " + row.agent.parent : ""; color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption; anchors.verticalCenter: parent.verticalCenter }
           Text { visible: row.agent && row.agent.window !== ""; text: "window open"; color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption; anchors.verticalCenter: parent.verticalCenter }
         }
         Text {
           width: parent.width; elide: Text.ElideRight
-          text: row.agent ? (row.agent.agent + " · " + row.agent.runtime + " · " + row.agent.provider + "/" + row.agent.model + " · " + row.agent.mode + (row.agent.tasks ? "  ·  " + row.agent.tasks.length + " task" + (row.agent.tasks.length === 1 ? "" : "s") : "")) : ""
+          text: row.agent ? (row.agent.agent + " · " + row.agent.runtime + " · " + (row.agent.backend || row.agent.provider) + "/" + row.agent.model + " · " + row.agent.mode + (row.agent.tasks ? "  ·  " + row.agent.tasks.length + " task" + (row.agent.tasks.length === 1 ? "" : "s") : "")) : ""
+          color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+        }
+        Text {
+          width: parent.width; elide: Text.ElideRight
+          visible: row.agent && row.agent.usage && row.agent.usage.sessions > 0
+          text: row.agent && row.agent.usage ? (dash.fmtK(row.agent.usage.prompt) + " prompt · " + dash.fmtK(row.agent.usage.output) + " output tokens  ·  " + dash.fmtUsd(row.agent.usage.cost_usd) + (row.agent.usage.cost_unknown ? " (+" + row.agent.usage.cost_unknown + " unpriced)" : "") + "  ·  " + row.agent.usage.sessions + " session" + (row.agent.usage.sessions === 1 ? "" : "s")) : ""
           color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
         }
         Text {
