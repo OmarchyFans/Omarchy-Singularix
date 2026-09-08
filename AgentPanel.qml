@@ -50,7 +50,20 @@ Panel {
   readonly property var providerInfo: findProvider(provider)
   readonly property var providerOptions: providersFor(agent)
   readonly property var authOptions: authOptionsFor(providerInfo)
-  readonly property var modelOptions: providerInfo ? providerInfo.models : []
+  readonly property var modelOptions: modelOptionsFor(providerInfo)
+  property bool customModel: false
+  function fmtPrice(v) { return (v === null || v === undefined) ? "" : (v % 1 === 0 ? String(v) : String(Math.round(v * 100) / 100)) }
+  function modelOptionsFor(p) {
+    var out = []
+    if (p) for (var i = 0; i < p.models.length; i++) {
+      var m = p.models[i]
+      var label = m.name && m.name !== m.id ? m.name + "  ·  " + m.id : m.id
+      if (m.input !== null && m.input !== undefined) label += "  ·  $" + fmtPrice(m.input) + " in / $" + fmtPrice(m.output) + " out per M"
+      out.push({ value: m.id, label: label })
+    }
+    out.push({ value: "__custom__", label: "Custom model id…" })
+    return out
+  }
   readonly property var skillList: filteredSkills()
   readonly property var savedOptions: info ? info.saved.map(function(s) { return { value: s.name, label: s.name + "  ·  " + s.agent + " / " + s.runtime + " / " + s.model } }) : []
   readonly property string runtimeStatus: agentInfo && agentInfo.runtimes[runtime] ? agentInfo.runtimes[runtime].status : ""
@@ -129,6 +142,7 @@ Panel {
   function applyProviderDefaults() {
     var p = findProvider(provider)
     auth = firstValue(authOptionsFor(p), auth)
+    customModel = false
     if (p) {
       model = p.default_model
       baseUrl = p.base_url === "-" ? "" : p.base_url
@@ -370,19 +384,22 @@ Panel {
               }
               Column {
                 width: parent.width; spacing: Style.spacing.labelGap
-                FieldLabel { text: "MODEL" }
+                FieldLabel { text: "MODEL" + (root.info && root.info.catalog.source === "models.dev" ? "  ·  prices per 1M tokens (models.dev)" : "") }
                 PanelDropdown {
                   id: modelDrop
                   width: parent.width
                   showLabel: false
                   options: root.modelOptions
-                  value: root.model
+                  value: root.customModel ? "__custom__" : root.model
                   popupParent: keyCatcher
                   ownerOpen: root.opened
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onChanged: function(v) { root.model = v }
+                  onChanged: function(v) {
+                    if (v === "__custom__") { root.customModel = true; root.model = ""; Qt.callLater(function() { modelField.forceActiveFocus() }) }
+                    else { root.customModel = false; root.model = v }
+                  }
                 }
-                Field { id: modelField; width: parent.width; placeholderText: "or type any model id"; text: root.model; onTextEdited: root.model = text }
+                Field { id: modelField; width: parent.width; visible: root.customModel; placeholderText: "model id, exactly as the provider names it"; text: root.model; onTextEdited: root.model = text }
                 Field { id: urlField; width: parent.width; visible: root.showBaseUrl; placeholderText: "endpoint URL"; text: root.baseUrl; onTextEdited: root.baseUrl = text }
               }
             }

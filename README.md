@@ -14,7 +14,7 @@ from the bar button) asks for:
 |------|---------|
 | **Agent** | [Hermes Agent](https://github.com/NousResearch/hermes-agent) (Nous Research) · [OpenClaw](https://openclaw.ai) |
 | **Runtime** | local shell · Docker container · Fly.io Sprite (needs your Sprites API token) |
-| **Model** | Anthropic, OpenAI, OpenAI Codex, Nous Portal, xAI, OpenRouter, Gemini, DeepSeek, local Ollama, or any custom model id |
+| **Model** | Anthropic, OpenAI, OpenAI Codex, Nous Portal, xAI, OpenRouter, Gemini, DeepSeek, local Ollama, or any custom model id. The list is live: the newest models of each provider with **prices per million tokens**, from the open [models.dev](https://models.dev) catalog |
 | **Sign-in** | browser OAuth with your own account (where the agent supports it) or an API key, saved once with mode 600 |
 | **Skills** | checkboxes over your installed skill library, plus hub install for Hermes |
 | **Job** | the instructions / job description, written in `$EDITOR`, typed inline, or taken from a file |
@@ -22,7 +22,8 @@ from the bar button) asks for:
 
 Every agent gets **its own isolated home** (config, keys, skills, memory)
 under `~/.local/share/omarchy-agent-launcher/agents/<name>/`. Your real
-`~/.hermes` and `~/.openclaw` are never read or written. Saved agents can be
+`~/.hermes` and `~/.openclaw` are never written; only their skill libraries
+are read so you can pick skills. Saved agents can be
 relaunched, edited, or destroyed from the same menu.
 
 A project of [omarchy.fans](https://omarchy.fans).
@@ -148,8 +149,18 @@ Browser sign-in runs `hermes auth add <provider> --type oauth` or
 `openclaw models auth login --provider <id>` inside the chosen runtime
 (with `--no-browser` in containers and sprites, which print a URL to open).
 
-Model ids drift. The provider table lives in one place,
-[`lib/providers.sh`](lib/providers.sh); "Custom…" is always offered.
+### Models and prices
+
+The model dropdown lists each provider's newest tool-capable models with
+input and output prices in USD per million tokens, taken from the open
+[models.dev](https://models.dev) catalog (`https://models.dev/api.json`,
+fetched at most once a day into `~/.cache/omarchy-agent-launcher/models.json`,
+never with your keys). Subscription sign-ins (ChatGPT, xAI browser sign-in,
+Nous Portal) show no prices because the plan covers usage; Ollama lists what
+`ollama list` reports. Offline, the static suggestions in
+[`lib/providers.sh`](lib/providers.sh) are used. "Custom model id…" is always
+offered for anything not listed. Set `OAL_MODELS_LIMIT` to change how many
+models are shown (default 14).
 
 ## What has been tested
 

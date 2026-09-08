@@ -43,6 +43,7 @@ OAL_VERSION=$(jq -r .version "$OAL_ROOT/manifest.json" 2>/dev/null || echo dev)
 
 source "$OAL_LIB/common.sh"
 source "$OAL_LIB/providers.sh"
+source "$OAL_LIB/models.sh"
 # Tests replace the gum wrappers with scripted answers (see tests/run.sh).
 # shellcheck source=/dev/null
 [[ -n ${OAL_UI_STUBS:-} ]] && source "$OAL_UI_STUBS"
@@ -179,11 +180,12 @@ cmd_new() {
     base_url=$(ask "Ollama endpoint" "" "$base_url")
   fi
 
-  # 6. Model ----------------------------------------------------------------
-  local -a models=(); mapfile -t models < <(provider_models "$provider")
-  pick=$(choose "Model" "${models[@]}" "Custom…"); [[ -n $pick ]] || exit 130
-  local model=$pick
-  [[ $pick == "Custom…" ]] && { model=$(ask "Model id" "$(provider_default_model "$provider")"); [[ -n $model ]] || fail "a model id is required"; }
+  # 6. Model (newest models from models.dev with prices per million tokens) --
+  [[ ${OAL_OFFLINE:-0} == 1 ]] || models_catalog_refresh >/dev/null 2>&1 || true
+  local -a models=(); mapfile -t models < <(models_for_provider "$provider" | jq -c '.[]' | while IFS= read -r m; do model_line "$m"; done)
+  pick=$(choose "Model  (prices: USD per 1M tokens, from models.dev)" "${models[@]}" "Custom…"); [[ -n $pick ]] || exit 130
+  local model=${pick%% *}
+  [[ $pick == "Custom…" ]] && { model=$(ask "Model id" "$(models_default_for_provider "$provider")"); [[ -n $model ]] || fail "a model id is required"; }
 
   # 7. Skills ---------------------------------------------------------------
   local skills="" ; local -a available=(); mapfile -t available < <(agent_skills_list)
@@ -358,6 +360,7 @@ cmd_menu() {
 # Everything the single-page panel needs, as one JSON document.
 cmd_info() {
   (( JSON )) || { say "use: omarchy-agent-launcher info --json"; return 1; }
+  [[ ${OAL_OFFLINE:-0} == 1 ]] || models_catalog_refresh >/dev/null 2>&1 || true
   local a r id row
   {
     echo '{"version":'"$(jq -Rn --arg v "$OAL_VERSION" '$v')"',"agents":['
@@ -381,15 +384,16 @@ cmd_info() {
       jq -nc --arg id "$id" --arg label "$(provider_label "$id")" --arg env "$(provider_env "$id")" \
         --arg hermes "$(provider_hermes "$id")" --argjson hoauth "$(provider_hermes_oauth "$id" && echo true || echo false)" \
         --arg openclaw "$(provider_openclaw "$id")" --argjson ooauth "$(provider_openclaw_oauth "$id" && echo true || echo false)" \
-        --arg base_url "$(provider_base_url "$id")" --arg default_model "$(provider_default_model "$id")" \
-        --argjson models "$(provider_models "$id" | jq -R . | jq -sc .)" \
+        --arg base_url "$(provider_base_url "$id")" --arg default_model "$(models_default_for_provider "$id")" \
+        --argjson models "$(models_for_provider "$id")" \
         --argjson saved_key "$([[ $(provider_env "$id") != - && -n $(secret_get "$(provider_env "$id")") ]] && echo true || echo false)" \
         '{id:$id,label:$label,env:$env,hermes:$hermes,hermes_oauth:$hoauth,openclaw:$openclaw,openclaw_oauth:$ooauth,base_url:$base_url,default_model:$default_model,models:$models,saved_key:$saved_key}'
     done
     echo '],"saved":['
     first=1
     while IFS= read -r id; do [[ -n $id ]] || continue; (( first )) || echo ','; first=0; jq -c . "$(profile_path "$id")"; done < <(profile_list)
-    echo '],"paths":{"config":'"$(jq -Rn --arg v "$OAL_CONF" '$v')"',"data":'"$(jq -Rn --arg v "$OAL_DATA" '$v')"'}}'
+    echo '],"catalog":{"source":"'"$(models_catalog_available && echo models.dev || echo static)"'","updated":'"$(jq -Rn --arg v "$(models_catalog_updated || true)" '$v')"',"url":"https://models.dev"}'
+    echo ',"paths":{"config":'"$(jq -Rn --arg v "$OAL_CONF" '$v')"',"data":'"$(jq -Rn --arg v "$OAL_DATA" '$v')"'}}'
   } | jq .
 }
 
@@ -418,7 +422,7 @@ cmd_create() {
   provider_label "$provider" >/dev/null 2>&1 || fail "create: unknown --provider '$provider'"
   [[ $auth == oauth || $auth == api-key || $auth == none ]] || fail "create: --auth must be oauth, api-key, or none"
   [[ $mode == interactive || $mode == unattended ]] || fail "create: --mode must be interactive or unattended"
-  [[ -n $model ]] || model=$(provider_default_model "$provider")
+  [[ -n $model ]] || model=$(models_default_for_provider "$provider")
   [[ -n $base_url && $base_url != - ]] || base_url=$(provider_base_url "$provider")
   local var; var=$(provider_env "$provider")
   if (( key_env )); then
