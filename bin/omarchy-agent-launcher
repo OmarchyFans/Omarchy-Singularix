@@ -18,6 +18,15 @@
 #   omarchy-agent-launcher destroy <name>  also destroy its container / sprite
 #   omarchy-agent-launcher console <name>  shell into the agent's sprite
 #
+# Non-interactive (used by the Quickshell panel, handy for scripts):
+#   omarchy-agent-launcher info --json     agents, runtimes, providers, models, skills, saved agents
+#   omarchy-agent-launcher create --name N --agent hermes|openclaw --runtime local|docker|sprite \
+#       --provider P --auth oauth|api-key|none --model M [--base-url U] [--skill S]... \
+#       --mode interactive|unattended (--job-file F | --job-stdin | --job-env) [--api-key-env] [--launch]
+#     --api-key-env reads the key from $OAL_API_KEY, --job-env the job from $OAL_JOB
+#     (never from argv); --launch then
+#     opens the session in a floating terminal (sign-in happens there if needed).
+#
 # Flags: --popup   re-open this command in a floating terminal (for keybindings)
 #        --inline  run the agent session in this terminal instead of a new window
 #        --dry-run print every command instead of running it (no side effects)
@@ -33,16 +42,21 @@ source "$OAL_LIB/providers.sh"
 # shellcheck source=/dev/null
 [[ -n ${OAL_UI_STUBS:-} ]] && source "$OAL_UI_STUBS"
 
-POPUP=0 INLINE=0 CMD=() 
-for arg in "$@"; do
-  case "$arg" in
+POPUP=0 INLINE=0 JSON=0 CMD=() OPTS=()
+while (($#)); do
+  case "$1" in
     --popup)   POPUP=1 ;;
     --inline)  INLINE=1 ;;
     --dry-run) OAL_DRY_RUN=1 ;;
-    -h|--help) sed -n '3,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --json)    JSON=1 ;;
+    -h|--help) sed -n '3,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --version) echo "omarchy-agent-launcher $OAL_VERSION"; exit 0 ;;
-    *) CMD+=("$arg") ;;
+    --name|--agent|--runtime|--provider|--auth|--model|--base-url|--mode|--skill|--job-file)
+               OPTS+=("$1" "${2:-}"); shift ;;   # create's valued options
+    --*)       OPTS+=("$1") ;;                    # create's flags
+    *)         CMD+=("$1") ;;
   esac
+  shift
 done
 export OAL_DRY_RUN
 
@@ -50,7 +64,7 @@ export OAL_DRY_RUN
 if (( POPUP )); then
   have omarchy-launch-tui || fail "--popup needs Omarchy (omarchy-launch-tui not found)"
   rest=(); (( OAL_DRY_RUN )) && rest+=(--dry-run); (( INLINE )) && rest+=(--inline)
-  exec omarchy-launch-tui --app-id=TUI.float env OAL_POPUP=1 "${BASH_SOURCE[0]}" "${rest[@]}" "${CMD[@]}"
+  exec omarchy-launch-tui --app-id=TUI.float env OAL_POPUP=1 "${BASH_SOURCE[0]}" "${rest[@]}" "${CMD[@]}" "${OPTS[@]}"
 fi
 
 # In a popup the window closes on exit, so hold it open after a failure.
@@ -296,11 +310,101 @@ cmd_menu() {
   esac
 }
 
+# ==================================================== non-interactive API ====
+# Everything the single-page panel needs, as one JSON document.
+cmd_info() {
+  (( JSON )) || { say "use: omarchy-agent-launcher info --json"; return 1; }
+  local a r id row
+  {
+    echo '{"version":'"$(jq -Rn --arg v "$OAL_VERSION" '$v')"',"agents":['
+    local first=1
+    for a in hermes openclaw; do
+      (( first )) || echo ','; first=0
+      ( load_agent "$a"
+        printf '{"id":"%s","label":%s,"installed":%s,"runtimes":{' "$a" "$(jq -Rn --arg v "$AGENT_LABEL" '$v')" "$(agent_available_local && echo true || echo false)"
+        local rf=1
+        for r in local docker sprite; do
+          (( rf )) || printf ','; rf=0
+          local st ok=true; st=$( load_runtime "$r"; rt_check 2>/dev/null ) || ok=false
+          printf '"%s":{"ok":%s,"status":%s}' "$r" "$ok" "$(jq -Rn --arg v "$st" '$v')"
+        done
+        printf '},"skills":%s}' "$(agent_skills_list | jq -R . | jq -sc .)" )
+    done
+    echo '],"providers":['
+    first=1
+    for row in "${PROVIDERS[@]}"; do
+      id=${row%%|*}; (( first )) || echo ','; first=0
+      jq -nc --arg id "$id" --arg label "$(provider_label "$id")" --arg env "$(provider_env "$id")" \
+        --arg hermes "$(provider_hermes "$id")" --argjson hoauth "$(provider_hermes_oauth "$id" && echo true || echo false)" \
+        --arg openclaw "$(provider_openclaw "$id")" --argjson ooauth "$(provider_openclaw_oauth "$id" && echo true || echo false)" \
+        --arg base_url "$(provider_base_url "$id")" --arg default_model "$(provider_default_model "$id")" \
+        --argjson models "$(provider_models "$id" | jq -R . | jq -sc .)" \
+        --argjson saved_key "$([[ $(provider_env "$id") != - && -n $(secret_get "$(provider_env "$id")") ]] && echo true || echo false)" \
+        '{id:$id,label:$label,env:$env,hermes:$hermes,hermes_oauth:$hoauth,openclaw:$openclaw,openclaw_oauth:$ooauth,base_url:$base_url,default_model:$default_model,models:$models,saved_key:$saved_key}'
+    done
+    echo '],"saved":['
+    first=1
+    while IFS= read -r id; do [[ -n $id ]] || continue; (( first )) || echo ','; first=0; jq -c . "$(profile_path "$id")"; done < <(profile_list)
+    echo '],"paths":{"config":'"$(jq -Rn --arg v "$OAL_CONF" '$v')"',"data":'"$(jq -Rn --arg v "$OAL_DATA" '$v')"'}}'
+  } | jq .
+}
+
+# Save (and optionally launch) an agent from flags: no prompts at all.
+cmd_create() {
+  local name= agent= runtime= provider= auth=none model= base_url=- mode=interactive job_file= job_stdin=0 job_env=0 key_env=0 launch=0
+  local -a skills=()
+  local i=0 n=${#OPTS[@]} o v
+  while (( i < n )); do
+    o=${OPTS[i]}; v=${OPTS[i+1]:-}
+    case "$o" in
+      --name) name=$v; ((i+=2)) ;;       --agent) agent=$v; ((i+=2)) ;;
+      --runtime) runtime=$v; ((i+=2)) ;; --provider) provider=$v; ((i+=2)) ;;
+      --auth) auth=$v; ((i+=2)) ;;       --model) model=$v; ((i+=2)) ;;
+      --base-url) base_url=$v; ((i+=2)) ;; --mode) mode=$v; ((i+=2)) ;;
+      --skill) skills+=("$v"); ((i+=2)) ;; --job-file) job_file=$v; ((i+=2)) ;;
+      --job-stdin) job_stdin=1; ((i+=1)) ;; --job-env) job_env=1; ((i+=1)) ;;
+      --api-key-env) key_env=1; ((i+=1)) ;;
+      --launch) launch=1; ((i+=1)) ;;
+      *) fail "create: unknown option $o" ;;
+    esac
+  done
+  name=$(slugify "$name"); [[ -n $name ]] || fail "create: --name is required"
+  [[ -f $OAL_LIB/agents/$agent.sh ]] || fail "create: --agent must be hermes or openclaw"
+  [[ -f $OAL_LIB/runtimes/$runtime.sh ]] || fail "create: --runtime must be local, docker, or sprite"
+  provider_label "$provider" >/dev/null 2>&1 || fail "create: unknown --provider '$provider'"
+  [[ $auth == oauth || $auth == api-key || $auth == none ]] || fail "create: --auth must be oauth, api-key, or none"
+  [[ $mode == interactive || $mode == unattended ]] || fail "create: --mode must be interactive or unattended"
+  [[ -n $model ]] || model=$(provider_default_model "$provider")
+  [[ -n $base_url && $base_url != - ]] || base_url=$(provider_base_url "$provider")
+  local var; var=$(provider_env "$provider")
+  if (( key_env )); then
+    [[ -n ${OAL_API_KEY:-} ]] || fail "create: --api-key-env given but \$OAL_API_KEY is empty"
+    [[ $var != - ]] || fail "create: $provider takes no API key"
+    secret_set "$var" "$OAL_API_KEY"; auth=api-key
+  fi
+  if [[ $auth == api-key ]]; then
+    [[ $var != - ]] || fail "create: $provider has no API key auth"
+    [[ -n $(secret_get "$var") ]] || fail "create: no saved $var; pass --api-key-env with \$OAL_API_KEY set"
+  fi
+  mkdir -p "$OAL_PROFILES"
+  if (( job_stdin )); then cat >"$(job_path "$name")"; elif (( job_env )); then printf '%s\n' "${OAL_JOB:-}" >"$(job_path "$name")"; elif [[ -n $job_file ]]; then cp -f "$job_file" "$(job_path "$name")"; else fail "create: --job-file, --job-stdin, or --job-env is required"; fi
+  [[ -s $(job_path "$name") ]] || fail "create: the job description is empty"
+  profile_write "$name" "$agent" "$runtime" "$provider" "$auth" "$model" "$base_url" "$mode" "$(printf '%s\n' "${skills[@]}")"
+  (( JSON )) && jq -c . "$(profile_path "$name")" || say "saved $name"
+  if (( launch )); then
+    # Called from the panel there is no terminal: sign-in and the session need
+    # one, so hand off to a floating popup. From a shell, launch right here.
+    if [[ -t 1 ]] || (( OAL_DRY_RUN )); then cmd_launch "$name"; else exec "${BASH_SOURCE[0]}" --popup launch "$name"; fi
+  fi
+}
+
 # ==================================================================== main ====
 case "${CMD[0]:-menu}" in
   menu)    cmd_menu ;;
   new)     cmd_new ;;
   manage)  cmd_manage ;;
+  info)    cmd_info ;;
+  create)  cmd_create ;;
   launch)  cmd_launch "${CMD[1]:?launch needs a name}" ;;
   sign-in) cmd_sign_in "${CMD[1]:?sign-in needs a name}" ;;
   list)    cmd_list ;;

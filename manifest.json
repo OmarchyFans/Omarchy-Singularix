@@ -10,13 +10,16 @@
     "bar-widget"
   ],
   "entryPoints": {
-    "barWidget": "BarWidget.qml"
+    "barWidget": "Panel.qml"
   },
   "barWidget": {
     "displayName": "Agent Launcher",
-    "description": "One click opens the agent launcher form in a floating terminal.",
+    "description": "One click (or SUPER + ALT + A) opens a single-page setup form: agent, runtime, model and sign-in, skills, job, mode, Launch.",
     "category": "AI",
-    "aliases": ["agent-launcher", "agents"],
+    "aliases": [
+      "agent-launcher",
+      "agents"
+    ],
     "allowMultiple": false,
     "defaultSection": "right"
   }
