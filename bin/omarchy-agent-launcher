@@ -30,6 +30,7 @@ OAL_VERSION=$(jq -r .version "$OAL_ROOT/manifest.json" 2>/dev/null || echo dev)
 source "$OAL_LIB/common.sh"
 source "$OAL_LIB/providers.sh"
 # Tests replace the gum wrappers with scripted answers (see tests/run.sh).
+# shellcheck source=/dev/null
 [[ -n ${OAL_UI_STUBS:-} ]] && source "$OAL_UI_STUBS"
 
 POPUP=0 INLINE=0 CMD=() 

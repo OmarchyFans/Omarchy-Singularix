@@ -116,7 +116,9 @@ profile_summary() { # one line for menus
 }
 
 # ------------------------------------------------------------- utilities ----
+# shellcheck source=/dev/null
 load_agent()   { source "$OAL_LIB/agents/$1.sh"; }
+# shellcheck source=/dev/null
 load_runtime() { source "$OAL_LIB/runtimes/$1.sh"; }
 
 # Kickoff message every session starts with; the job itself is in the agent's
