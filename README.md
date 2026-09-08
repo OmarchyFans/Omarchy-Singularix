@@ -45,9 +45,13 @@ runtime:
 - **docker** — `omarchy install docker`. Omarchy keeps your user out of the
   docker group by default, so the launcher runs `sudo docker` and the
   terminal asks for your password.
-- **sprite** — the [Sprites CLI](https://docs.sprites.dev/quickstart/) and a
-  token from <https://sprites.dev/account>. The launcher asks for the token
-  once and stores it in `~/.config/omarchy-agent-launcher/secrets.env` (mode 600).
+- **sprite** — the [Sprites CLI](https://docs.sprites.dev/quickstart/). If the
+  CLI isn't signed in yet, the launcher offers `sprite org auth` (browser, your
+  Fly.io account) or a pasted API token from <https://sprites.dev/account>,
+  stored once in `~/.config/omarchy-agent-launcher/secrets.env` (mode 600).
+  A sprite is a persistent Ubuntu 25.10 VM (user `sprite`, home
+  `/home/sprite`, Node/Python/git preinstalled) that sleeps when idle and
+  keeps its filesystem; you pay for CPU and RAM only while it is awake.
 
 ### Keybinding (recommended)
 

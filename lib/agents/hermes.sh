@@ -137,9 +137,13 @@ if ! command -v hermes >/dev/null 2>&1; then
   fi
   git -C "\$HOME/.hermes/hermes-agent" checkout --quiet "$HERMES_GIT_COMMIT"
   cd "\$HOME/.hermes/hermes-agent"
-  python3 -m venv venv
-  ./venv/bin/pip install --quiet --upgrade pip
-  ./venv/bin/pip install --quiet -e .
+  if command -v uv >/dev/null 2>&1; then
+    uv venv --quiet venv && uv pip install --quiet --python venv/bin/python -e .
+  else
+    python3 -m venv venv 2>/dev/null || { sudo apt-get install -y -qq python3-venv && python3 -m venv venv; }
+    ./venv/bin/pip install --quiet --upgrade pip
+    ./venv/bin/pip install --quiet -e .
+  fi
   printf '#!/usr/bin/env bash\nunset PYTHONPATH PYTHONHOME\nexec "%s/venv/bin/python" "%s/hermes" "\$@"\n' "\$HOME/.hermes/hermes-agent" "\$HOME/.hermes/hermes-agent" >"\$HOME/.local/bin/hermes"
   chmod +x "\$HOME/.local/bin/hermes"
 fi
