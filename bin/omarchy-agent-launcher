@@ -346,6 +346,7 @@ cmd_remove() {
   run rm -rf "$(stage_dir "$name")"
   run rm -f "$(profile_path "$name")" "$(job_path "$name")"
   event_emit "$name" removed "Agent removed"
+  [[ -s $OAL_STATE/kanban-cursors.json ]] && { tmp=$(mktemp); jq --arg n "$name" 'del(.[$n])' "$OAL_STATE/kanban-cursors.json" >"$tmp" && mv -f "$tmp" "$OAL_STATE/kanban-cursors.json"; }
   say "removed $name"
 }
 cmd_stop() {

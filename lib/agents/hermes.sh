@@ -164,3 +164,76 @@ fi
 hermes --version || true
 BOOT
 }
+
+# ---- kanban board mirror ---------------------------------------------------
+# Hermes keeps a SQLite task board at the Hermes root, which for a launched
+# agent is its isolated home: <home>/kanban.db. We only ever read it
+# (sqlite3 -readonly); `hermes kanban list` is avoided because it writes.
+# Cards become tasks in `status --json`; status changes and card events
+# become launcher events (blocked cards that need a human become blockers).
+kanban_cursors() { printf '%s/kanban-cursors.json' "${OAL_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-agent-launcher}"; }
+
+kanban_db() { printf '%s/kanban.db' "$(agent_home "$1")"; }
+kanban_query() { # kanban_query <db> <sql> -> JSON array
+  local out; out=$(timeout 5 sqlite3 -readonly -json "$1" "$2" 2>/dev/null) || out=""
+  [[ -n $out ]] && printf '%s' "$out" || printf '[]'
+}
+kanban_available() { have sqlite3 && [[ -f $(kanban_db "$1") ]]; }
+
+# Tasks for status --json: [{source:"kanban", id, title, status, block_kind, updated}]
+agent_tasks_json() { # agent_tasks_json <name>
+  kanban_available "$1" || { printf '[]'; return; }
+  kanban_query "$(kanban_db "$1")" "select id, title, status, coalesce(block_kind,'') as block_kind, coalesce(completed_at, started_at, created_at) as updated from tasks where status != 'archived' order by created_at" \
+    | jq -c 'map({source:"kanban", id:(.id|tostring), title, status, block_kind, updated})'
+}
+
+# Mirror new card states and events into the launcher log (idempotent via cursor).
+agent_kanban_sync() { # agent_kanban_sync <name>
+  local name=$1; kanban_available "$name" || return 0
+  local db; db=$(kanban_db "$name")
+  local KANBAN_CURSORS; KANBAN_CURSORS=$(kanban_cursors)
+  mkdir -p "$(dirname "$KANBAN_CURSORS")"; [[ -s $KANBAN_CURSORS ]] || printf '{}\n' >"$KANBAN_CURSORS"
+  local cur last_id; cur=$(jq -c --arg n "$name" '.[$n] // {event_id:0, tasks:{}}' "$KANBAN_CURSORS")
+  last_id=$(jq -r '.event_id' <<<"$cur")
+  local tasks events; tasks=$(kanban_query "$db" "select id, title, status, coalesce(block_kind,'') as block_kind, coalesce(last_failure_error,'') as err from tasks")
+  events=$(kanban_query "$db" "select id, task_id, kind, coalesce(payload,'') as payload, created_at from task_events where id > $last_id order by id limit 200")
+  # 1. status changes per card
+  local row id title status bk err prev
+  while IFS= read -r row; do
+    [[ -n $row ]] || continue
+    id=$(jq -r '.id|tostring' <<<"$row"); title=$(jq -r .title <<<"$row"); status=$(jq -r .status <<<"$row"); bk=$(jq -r .block_kind <<<"$row"); err=$(jq -r .err <<<"$row")
+    prev=$(jq -r --arg id "$id" '.tasks[$id] // ""' <<<"$cur")
+    [[ $prev == "$status" ]] && continue
+    case "$status" in
+      running)       event_emit "$name" task_started "Card started: $title" --task "$title" --source kanban --ref "kanban:$name:$id:status:$status" ;;
+      done|archived) event_emit "$name" task_done "Card done: $title" --task "$title" --source kanban --ref "kanban:$name:$id:status:$status"
+                     event_emit "$name" blocker_cleared "" --key "kanban:$id" --source kanban ;;
+      blocked)       if [[ $bk == needs_input || $bk == capability ]]; then
+                       event_emit "$name" blocker "Card needs you: $title${err:+ — $err}" --task "$title" --level blocker --key "kanban:$id" --source kanban --ref "kanban:$name:$id:status:$status"
+                     else
+                       event_emit "$name" task_blocked "Card blocked ($bk): $title" --task "$title" --level warn --source kanban --ref "kanban:$name:$id:status:$status"
+                     fi ;;
+      review)        event_emit "$name" task_review "Card awaits review: $title" --task "$title" --level warn --source kanban --ref "kanban:$name:$id:status:$status" ;;
+      triage|todo|ready|scheduled) [[ -n $prev ]] && event_emit "$name" task_note "Card $status: $title" --task "$title" --source kanban --ref "kanban:$name:$id:status:$status" ;;
+    esac
+  done < <(jq -c '.[]' <<<"$tasks")
+  # 2. card events (comments etc.), as notes
+  local ev eid tid kind payload ttitle
+  while IFS= read -r ev; do
+    [[ -n $ev ]] || continue
+    eid=$(jq -r .id <<<"$ev"); tid=$(jq -r '.task_id|tostring' <<<"$ev"); kind=$(jq -r .kind <<<"$ev"); payload=$(jq -r '.payload | tostring | .[0:160]' <<<"$ev")
+    ttitle=$(jq -r --arg id "$tid" '.[] | select((.id|tostring) == $id) | .title' <<<"$tasks" | head -n1)
+    case "$kind" in
+      created|commented|review_requested|changes_requested|completed|blocked|unblocked|gave_up|crashed|timed_out)
+        event_emit "$name" task_note "kanban $kind: ${ttitle:-$tid}${payload:+ · $payload}" --task "${ttitle:-$tid}" --source kanban --ref "kanban:$name:$tid:event:$eid" ;;
+    esac
+    last_id=$eid
+  done < <(jq -c '.[]' <<<"$events")
+  # 3. advance the cursor (under the events lock, next to the log)
+  local tmp; tmp=$(mktemp "$(dirname "$KANBAN_CURSORS")/.kc.XXXXXX")
+  {
+    flock -w 5 9 || true
+    jq --arg n "$name" --argjson last "${last_id:-0}" --argjson tasks "$(jq -c 'map({key:(.id|tostring), value:.status}) | from_entries' <<<"$tasks")" \
+       '.[$n] = {event_id: $last, tasks: $tasks}' "$KANBAN_CURSORS" >"$tmp" && mv -f "$tmp" "$KANBAN_CURSORS"
+  } 9>"$OAL_EVENTS_LOCK"
+}

@@ -123,6 +123,34 @@ out=$("$L" stop issue-triage 2>&1); grep -q "not running" <<<"$out" || tfail "st
 out=$("$L" --dry-run switch 2>&1) || tfail "switch dry-run"; grep -q "issue-triage" <<<"$out" || tfail "switch rows"
 pass "events, blockers, status, settings, rotation, stop, switch"
 
+echo "== kanban mirror (sqlite fixture)"
+if command -v sqlite3 >/dev/null; then
+  profile_write kb hermes local ollama none qwen3:8b http://localhost:11434/v1 interactive ""
+  printf '# Board job\nWork the board.\n' >"$(job_path kb)"
+  ( source "$ROOT/lib/agents/hermes.sh"; agent_provision kb )
+  KDB="$XDG_DATA_HOME/omarchy-agent-launcher/agents/kb/hermes/kanban.db"
+  sqlite3 "$KDB" "create table tasks(id text primary key, title text, status text, block_kind text, last_failure_error text, created_at text, started_at text, completed_at text);
+    create table task_events(id integer primary key autoincrement, task_id text, run_id integer, kind text, payload text, created_at text);
+    insert into tasks values('t1','Write the changelog','running',null,null,'2026-09-08T10:00:00','2026-09-08T10:01:00',null);
+    insert into tasks values('t2','Get the signing key','blocked','needs_input','no key in env','2026-09-08T10:00:00',null,null);
+    insert into tasks values('t3','Old card','done',null,null,'2026-09-08T09:00:00',null,'2026-09-08T09:30:00');
+    insert into task_events(task_id,kind,payload,created_at) values('t2','commented','{\"body\":\"waiting on the user\"}','2026-09-08T10:05:00');"
+  "$L" kanban-sync kb || tfail "kanban-sync"
+  st=$("$L" status --json)
+  jq -e '.agents[] | select(.name=="kb") | .tasks | map(select(.source=="kanban")) | length == 3' <<<"$st" >/dev/null || tfail "kanban tasks in status"
+  [[ $(jq -r '.agents[] | select(.name=="kb") | .status' <<<"$st") == blocked ]] || tfail "needs_input card must block the agent"
+  jq -e '."kb/kanban:t2"' "$S/blockers.json" >/dev/null || tfail "kanban blocker key"
+  n1=$(grep -c '"source":"kanban"' "$S/events.jsonl"); (( n1 >= 3 )) || tfail "kanban events mirrored ($n1)"
+  "$L" kanban-sync kb; n2=$(grep -c '"source":"kanban"' "$S/events.jsonl"); [[ $n1 == "$n2" ]] || tfail "kanban-sync not idempotent ($n1 -> $n2)"
+  sqlite3 "$KDB" "update tasks set status='done', completed_at='2026-09-08T11:00:00' where id='t2';"
+  "$L" kanban-sync kb; jq -e '."kb/kanban:t2"' "$S/blockers.json" >/dev/null && tfail "kanban blocker not cleared on done"
+  grep -q '"kind":"task_done".*Get the signing key' "$S/events.jsonl" || tfail "task_done for t2"
+  "$L" remove kb --yes >/dev/null
+  pass "kanban mirror: tasks, blocker, idempotent cursor, clear on done"
+else
+  echo "  skip (sqlite3 not installed): kanban mirror"
+fi
+
 echo "== list / show / remove"
 out=$("$L" list); grep -q "^prov " <<<"$out" || tfail "list"
 out=$("$L" show prov); grep -q '"agent": "hermes"' <<<"$out" || tfail "show"
