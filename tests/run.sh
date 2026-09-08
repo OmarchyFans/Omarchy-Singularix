@@ -47,7 +47,7 @@ else
 fi
 
 echo "== real provisioning (hermes home) without hermes binary involvement"
-source "$ROOT/lib/common.sh"; OAL_LIB="$ROOT/lib"; source "$ROOT/lib/providers.sh"
+source "$ROOT/lib/common.sh"; OAL_LIB="$ROOT/lib"; source "$ROOT/lib/providers.sh"; source "$ROOT/lib/models.sh"; source "$ROOT/lib/events.sh"; source "$ROOT/lib/local.sh"
 mkdir -p "$OAL_PROFILES"
 profile_write prov hermes docker openrouter api-key anthropic/claude-sonnet-5 - interactive ""
 secret_set OPENROUTER_API_KEY or-test
@@ -150,6 +150,22 @@ if command -v sqlite3 >/dev/null; then
 else
   echo "  skip (sqlite3 not installed): kanban mirror"
 fi
+
+echo "== local GPU provider"
+ls=$("$L" local-server status --json) || tfail "local-server status must exit 0"
+jq -e 'has("online") and has("agent_ready") and has("models")' <<<"$ls" >/dev/null || tfail "local status shape"
+out=$("$L" --dry-run local-server tune --ctx 32768 2>&1) || true; grep -q "Drop-in:" <<<"$out" || grep -q "no omarchy-local-agent" <<<"$out" || tfail "tune dry-run"
+jq -e '.providers[] | select(.id=="local") | .base_url | endswith("/v1")' "$T/info.json" >/dev/null || tfail "local provider in info"
+profile_write loc hermes local local none Qwen-test.gguf "$(jq -r '.providers[] | select(.id=="local") | .base_url' "$T/info.json")" interactive ""
+printf '# Offline job\nStay local.\n' >"$(job_path loc)"
+( source "$ROOT/lib/agents/hermes.sh"; agent_provision loc )
+HL="$XDG_DATA_HOME/omarchy-agent-launcher/agents/loc/hermes"
+grep -q "provider: lmstudio" "$HL/config.yaml" || tfail "local -> lmstudio provider"
+grep -q "context_length:" "$HL/config.yaml" || tfail "local context_length"
+grep -q "^LM_API_KEY=local$" "$HL/.env" || tfail "LM_API_KEY placeholder"
+grep -q "auxiliary:" "$HL/config.yaml" || tfail "aux compression hint"
+"$L" remove loc --yes >/dev/null
+pass "local GPU provider: status, tune dry-run, hermes provisioning"
 
 echo "== list / show / remove"
 out=$("$L" list); grep -q "^prov " <<<"$out" || tfail "list"

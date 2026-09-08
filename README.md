@@ -27,7 +27,7 @@ The **New agent** page asks for:
 |------|---------|
 | **Agent** | [Hermes Agent](https://github.com/NousResearch/hermes-agent) (Nous Research) · [OpenClaw](https://openclaw.ai) |
 | **Runtime** | local shell · Docker container · Fly.io Sprite (needs your Sprites API token) |
-| **Model** | Anthropic, OpenAI, OpenAI Codex, Nous Portal, xAI, OpenRouter, Gemini, DeepSeek, local Ollama, or any custom model id. The list is live: the newest models of each provider with **prices per million tokens**, from the open [models.dev](https://models.dev) catalog |
+| **Model** | **Local GPU (offline)**, Anthropic, OpenAI, OpenAI Codex, Nous Portal, xAI, OpenRouter, Gemini, DeepSeek, local Ollama, or any custom model id. The list is live: the newest models of each provider with **prices per million tokens**, from the open [models.dev](https://models.dev) catalog |
 | **Sign-in** | browser OAuth with your own account (where the agent supports it) or an API key, saved once with mode 600 |
 | **Skills** | checkboxes over your installed skill library, plus hub install for Hermes |
 | **Job** | the instructions / job description, written in `$EDITOR`, typed inline, or taken from a file |
@@ -212,6 +212,46 @@ the launcher mirrors the board **read-only**: cards appear as tasks, status
 changes become events, and a card blocked as `needs_input` or `capability`
 becomes a blocker until it is completed. The mirror runs whenever the
 dashboard refreshes and when a session ends; it never writes to the board.
+
+### Offline agents on your own GPU
+
+Pick **Local GPU (llama.cpp, offline)** as the provider and the agent talks
+only to the llama.cpp server on `127.0.0.1` that the Omarchy local agent runs
+(the [Omarchy Help](https://github.com/modpunk/omarchy-help) plugin's
+`omarchy-local-agent.service`). Nothing leaves the machine: unplug the network
+and the agent keeps working. This is the privacy path: a local model cannot
+leak your files, keys, or prompts to anyone, and as small models and GPUs
+improve it becomes the default way to keep an Omarchy desktop private.
+
+What the launcher does for you:
+
+- discovers the server's URL from `~/.config/omarchy-local-agent/config.json`,
+  its loaded model, its context per request, and the GPU (`omarchy-agent-launcher local-server status`);
+- starts the service if it is down when you launch a local agent;
+- configures Hermes through its LM Studio code path with the server's **real**
+  context window (Hermes otherwise insists on 64K) and a placeholder key;
+- shows readiness in the New agent page under the provider.
+
+**One thing you must do once.** The help plugin starts llama-server with an 8K
+context split over four slots, i.e. 2K tokens per request; a Hermes request is
+about 12K tokens. Raise it with:
+
+```bash
+omarchy-agent-launcher local-server tune --ctx 32768          # 1 slot, 8-bit KV cache
+omarchy-agent-launcher local-server tune --ctx 24576 --kv q4_0 # smaller GPUs
+omarchy-agent-launcher local-server untune                    # back to the plugin's own settings
+```
+
+`tune` writes a systemd drop-in for `omarchy-local-agent.service`
+(`~/.config/systemd/user/omarchy-local-agent.service.d/agent-launcher.conf`)
+and restarts it; the help plugin keeps working with the larger window. Fitting
+guide for a 4 GB GPU with a 4B Q4 model: 32K with `q8_0` KV is about 3.5 GB;
+if the server fails to come up, use `--kv q4_0` or a smaller `--ctx`. A 27B
+model does not fit next to a large context on 4 GB. `--model FILE` picks another
+`.gguf` from the local agent's models folder.
+
+OpenClaw is pointed at the same server through `OPENAI_BASE_URL`; that path is
+untested.
 
 ### Models and prices
 

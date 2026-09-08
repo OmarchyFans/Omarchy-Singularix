@@ -54,10 +54,11 @@ agent_provision() { # agent_provision <name>
   [[ $auth == api-key && $var != - ]] && key=$(secret_get "$var")
 
   # Only documented keys: agents.defaults.model.primary and env.vars.
-  jq -n --arg m "$op/$model" --arg var "$var" --arg key "$key" --arg url "$base_url" '
+  jq -n --arg m "$op/$model" --arg var "$var" --arg key "$key" --arg url "$base_url" --argjson local "$([[ $provider == local ]] && echo true || echo false)" '
     {agents: {defaults: {model: {primary: $m}}}}
     | if ($key != "" and $var != "-") then .env.vars[$var] = $key else . end
     | if ($url != "-" and $url != "") then .env.vars["OLLAMA_HOST"] = $url else . end
+    | if $local then .env.vars["OPENAI_BASE_URL"] = $url | .env.vars["OPENAI_API_KEY"] = "local" else . end
   ' >"$home/openclaw.json"
   chmod 600 "$home/openclaw.json"
   ( umask 077; write_env_file "$home/.oal.env" "$([[ $var != - ]] && printf '%s' "$var")" "$key" )

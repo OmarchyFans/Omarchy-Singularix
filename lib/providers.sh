@@ -25,7 +25,12 @@ PROVIDERS=(
   "gemini|Google Gemini|GEMINI_API_KEY|gemini|n|google|n|-|gemini-3-pro|gemini-3-pro,gemini-3-flash"
   "deepseek|DeepSeek|DEEPSEEK_API_KEY|deepseek|n|deepseek|n|-|deepseek-chat|deepseek-chat,deepseek-reasoner"
   "ollama|Ollama (local, no key)|-|custom|n|ollama|n|http://localhost:11434/v1|qwen3:8b|qwen3:8b,llama3.3:70b,gpt-oss:20b"
+  "local|Local GPU (llama.cpp, offline)|-|lmstudio|n|openai|n|http://127.0.0.1:8080/v1|-|-"
 )
+# "local" = the llama.cpp server of the Omarchy local agent (lib/local.sh). Its
+# URL and models are discovered live; Hermes reaches it through its LM Studio
+# code path (same OpenAI-compatible API, and the only path that accepts a
+# window below 64K when the real size is given).
 
 provider_field() { # provider_field <id> <n>   (1-based column)
   local row
@@ -42,7 +47,7 @@ provider_hermes()    { provider_field "$1" 4; }
 provider_hermes_oauth()   { [[ $(provider_field "$1" 5) == y ]]; }
 provider_openclaw()  { provider_field "$1" 6; }
 provider_openclaw_oauth() { [[ $(provider_field "$1" 7) == y ]]; }
-provider_base_url()  { provider_field "$1" 8; }
+provider_base_url()  { if [[ $1 == local ]] && declare -F local_api_url >/dev/null; then local_api_url; else provider_field "$1" 8; fi; }
 provider_default_model() { provider_field "$1" 9; }
 provider_models()    { provider_field "$1" 10 | tr ',' '\n'; }
 

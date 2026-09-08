@@ -46,6 +46,7 @@ models_catalog_updated() { [[ -s $MODELS_CACHE ]] && date -r "$MODELS_CACHE" -Is
 models_for_provider() { # models_for_provider <provider>
   local p=$1 key; key=$(models_catalog_key "$p")
   local priced=true; [[ $(provider_env "$p") == - ]] && priced=false
+  if [[ $p == local ]] && declare -F local_models_json >/dev/null; then local_models_json; return 0; fi
   if [[ $p == ollama ]] && have ollama; then
     ollama list 2>/dev/null | awk 'NR>1 && $1 != "" {print $1}' | jq -R . | jq -sc 'map({id: ., name: ., input: null, output: null, context: null, release: null})'
     return 0
@@ -75,6 +76,6 @@ model_line() { # model_line <json-object>
 models_default_for_provider() { # models_default_for_provider <provider>
   local p=$1 list; list=$(models_for_provider "$p")
   local preferred; preferred=$(provider_default_model "$p")
-  if jq -e --arg m "$preferred" 'map(.id) | index($m) != null' <<<"$list" >/dev/null; then printf '%s' "$preferred"
+  if [[ $preferred != - ]] && jq -e --arg m "$preferred" 'map(.id) | index($m) != null' <<<"$list" >/dev/null; then printf '%s' "$preferred"
   else jq -r '.[0].id // ""' <<<"$list"; fi
 }

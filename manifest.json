@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "fans.omarchy.agent-launcher",
   "name": "Agent Launcher",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": "modpunk (omarchy.fans)",
   "license": "MIT",
   "description": "Agent Dashboard for Omarchy: create and launch AI agents (Hermes Agent, OpenClaw) locally, in Docker, or on a Fly.io Sprite; see every agent's status, jump to its chat, follow a sortable event log, and get notified when an agent needs you. Sessions persist in tmux.",

@@ -25,6 +25,8 @@
 #                                          append to the event log (agents and hooks may call this;
 #                                          OAL_AGENT holds the agent's own name inside its session)
 #   omarchy-agent-launcher settings get|set <key> [value]   e.g. notify_blockers false
+#   omarchy-agent-launcher local-server status|start|tune|untune [--ctx N] [--kv q8_0|q4_0|f16] [--slots N] [--model FILE]
+#                                          the offline llama.cpp server of the Omarchy local agent
 #
 # Non-interactive (used by the Quickshell panel, handy for scripts):
 #   omarchy-agent-launcher info --json     agents, runtimes, providers, models, skills, saved agents
@@ -52,6 +54,7 @@ source "$OAL_LIB/common.sh"
 source "$OAL_LIB/providers.sh"
 source "$OAL_LIB/models.sh"
 source "$OAL_LIB/events.sh"
+source "$OAL_LIB/local.sh"
 # Tests replace the gum wrappers with scripted answers (see tests/run.sh).
 # shellcheck source=/dev/null
 [[ -n ${OAL_UI_STUBS:-} ]] && source "$OAL_UI_STUBS"
@@ -65,7 +68,7 @@ while (($#)); do
     --json)    JSON=1 ;;
     -h|--help) sed -n '3,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --version) echo "omarchy-agent-launcher $OAL_VERSION"; exit 0 ;;
-    --name|--agent|--runtime|--provider|--auth|--model|--base-url|--mode|--skill|--job-file|--task|--level|--key)
+    --name|--agent|--runtime|--provider|--auth|--model|--base-url|--mode|--skill|--job-file|--task|--level|--key|--ctx|--kv|--slots)
                OPTS+=("$1" "${2:-}"); shift ;;   # create's valued options
     --*)       OPTS+=("$1") ;;                    # create's flags
     *)         CMD+=("$1") ;;
@@ -249,6 +252,13 @@ cmd_new() {
 # Provision + prepare + first-time sign-in, in the current terminal.
 prepare_session() { # prepare_session <name>
   local name=$1
+  if [[ $(profile_get "$name" provider) == local ]]; then
+    local_ensure_running || { event_emit "$name" blocker "Local GPU server is not running (systemctl --user start omarchy-local-agent)" --level blocker --key prepare; return 1; }
+    if [[ $(profile_get "$name" agent) == hermes ]] && ! local_status_json | jq -e '.agent_ready' >/dev/null; then
+      event_emit "$name" blocker "Local server context is too small for Hermes: run  omarchy-agent-launcher local-server tune --ctx 32768" --level blocker --key prepare
+      return 1
+    fi
+  fi
   agent_provision "$name"
   if ! rt_prepare "$name"; then
     event_emit "$name" blocker "Runtime could not be prepared ($(profile_get "$name" runtime))" --level blocker --key prepare
@@ -437,7 +447,8 @@ cmd_info() {
     echo '],"saved":['
     first=1
     while IFS= read -r id; do [[ -n $id ]] || continue; (( first )) || echo ','; first=0; jq -c . "$(profile_path "$id")"; done < <(profile_list)
-    echo '],"catalog":{"source":"'"$(models_catalog_available && echo models.dev || echo static)"'","updated":'"$(jq -Rn --arg v "$(models_catalog_updated || true)" '$v')"',"url":"https://models.dev"}'
+    echo '],"local":'"$(local_status_json)"
+    echo ',"catalog":{"source":"'"$(models_catalog_available && echo models.dev || echo static)"'","updated":'"$(jq -Rn --arg v "$(models_catalog_updated || true)" '$v')"',"url":"https://models.dev"}'
     echo ',"paths":{"config":'"$(jq -Rn --arg v "$OAL_CONF" '$v')"',"data":'"$(jq -Rn --arg v "$OAL_DATA" '$v')"'}}'
   } | jq .
 }
@@ -578,6 +589,16 @@ cmd_switch() {
   cmd_launch "$n"
 }
 
+cmd_local_server() {
+  case "${CMD[1]:-status}" in
+    status) if (( JSON )); then local_status_json | jq .; else say "$(local_status_line)"; local_status_json | jq -r '"  url \(.url) · unit \(if .unit_active then "active" else "inactive" end) · tuned \(.tuned)" + (if .gpu then "\n  GPU \(.gpu.name): \(.gpu.used_mib) / \(.gpu.total_mib) MiB used" else "" end) + "\n  models on disk: \(.models | join(", "))"'; fi ;;
+    start)  local_ensure_running && say "$(local_status_line)" ;;
+    tune)   local_tune "$(opt_value --ctx || echo 32768)" "$(opt_value --kv || echo q8_0)" "$(opt_value --slots || echo 1)" "$(opt_value --model || true)" ;;
+    untune) local_untune ;;
+    *) fail "usage: omarchy-agent-launcher local-server status|start|tune|untune" ;;
+  esac
+}
+
 # ==================================================================== main ====
 case "${CMD[0]:-menu}" in
   menu)    cmd_menu ;;
@@ -601,5 +622,6 @@ case "${CMD[0]:-menu}" in
   settings) cmd_settings ;;
   switch)  cmd_switch ;;
   kanban-sync) cmd_kanban_sync "${CMD[1]:-}" ;;
+  local-server) cmd_local_server ;;
   *) fail "unknown command: ${CMD[0]} (try --help)" ;;
 esac

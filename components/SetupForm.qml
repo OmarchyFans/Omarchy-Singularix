@@ -309,6 +309,16 @@ Item {
               Column {
                 width: parent.width; spacing: Style.spacing.labelGap
                 FieldLabel { text: "MODEL PROVIDER" }
+                Hint {
+                  width: parent.width
+                  visible: root.provider === "local" && root.info && root.info.local
+                  color: root.info && root.info.local && root.info.local.agent_ready ? root.dim : root.urgent
+                  text: !(root.info && root.info.local) ? "" :
+                        (!root.info.local.online ? (root.info.local.unit_exists ? "Local server not running; it is started on launch." : "No local llama.cpp server found: install the Omarchy Help plugin.")
+                        : (root.info.local.agent_ready
+                           ? "Offline: " + root.info.local.model + " on " + (root.info.local.gpu ? root.info.local.gpu.name : "the GPU") + " · " + root.info.local.ctx_per_request + " tokens per request. Nothing leaves this machine."
+                           : "Local server serves only " + root.info.local.ctx_per_request + " tokens per request; agents need " + root.info.local.min_ctx + ". Run:  omarchy-agent-launcher local-server tune --ctx 32768"))
+                }
                 PanelDropdown {
                   id: providerDrop
                   width: parent.width

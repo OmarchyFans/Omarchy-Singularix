@@ -53,9 +53,24 @@ agent_provision() { # agent_provision <name>
     echo "  default: $(jq -Rn --arg v "$model" '$v')"
     echo "  provider: $hp"
     [[ $base_url != - && -n $base_url ]] && echo "  base_url: $(jq -Rn --arg v "$base_url" '$v')"
+    if [[ $provider == local ]]; then
+      # The real per-request window of the local llama.cpp server. Hermes'
+      # LM Studio path accepts an explicit window below its 64K floor.
+      local per=0; declare -F local_status_json >/dev/null && per=$(local_status_json 2>/dev/null | jq -r '.ctx_per_request // 0' 2>/dev/null)
+      [[ $per =~ ^[0-9]+$ && $per -gt 0 ]] || per=32768
+      echo "  context_length: $per"
+    fi
     echo "agent:"
     echo "  system_prompt: |"
     sed 's/^/    /' <<<"$job"
+    if [[ $provider == local ]]; then
+      echo "auxiliary:"
+      echo "  compression:"
+      echo "    # The summariser is the same local model. Hermes checks this hint against"
+      echo "    # its 64K floor; the summaries it asks for are sized to model.context_length,"
+      echo "    # so they fit the real window."
+      echo "    context_length: 65536"
+    fi
     echo "terminal:"
     echo "  backend: local"      # never nest Docker inside the Docker runtime
     echo "  cwd: ."
@@ -68,6 +83,8 @@ agent_provision() { # agent_provision <name>
   local var; var=$(provider_env "$provider")
   if [[ $auth == api-key && $var != - ]]; then
     write_env_file "$home/.env" "$var" "$(secret_get "$var")"
+  elif [[ $provider == local ]]; then
+    write_env_file "$home/.env" LM_API_KEY local     # llama.cpp ignores it; Hermes' LM Studio path wants one
   else
     write_env_file "$home/.env" "" ""
   fi
