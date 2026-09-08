@@ -88,6 +88,7 @@ From a terminal:
 omarchy-agent-launcher                # menu
 omarchy-agent-launcher new            # the form
 omarchy-agent-launcher launch NAME    # relaunch
+omarchy-agent-launcher manage         # show / edit job / sign in / remove / destroy
 omarchy-agent-launcher list | show NAME | job NAME | sign-in NAME
 omarchy-agent-launcher remove NAME    # forget + delete its local home
 omarchy-agent-launcher destroy NAME   # also remove its container / sprite
@@ -130,7 +131,8 @@ Built on Omarchy 4.x with Hermes Agent 0.21 installed locally.
   bootstraps clone Hermes at a **pinned commit** and install OpenClaw from npm.
 - API keys and the Sprites token live in
   `~/.config/omarchy-agent-launcher/secrets.env` (mode 600). Each agent home
-  receives only the single key it needs. Keys are never passed on the command line.
+  receives only the single key it needs. API keys never appear on a command line;
+  the Sprites CLI takes its token as an argument once, at `sprite auth setup`.
 - `sudo` appears exactly once: `sudo docker …` when Omarchy's
   `omarchy-sudo-docker` says the daemon needs it.
 - The bar widget is a thin launcher (see `BarWidget.qml`); no network, no

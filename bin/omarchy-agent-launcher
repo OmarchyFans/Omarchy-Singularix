@@ -12,6 +12,7 @@
 #   omarchy-agent-launcher                 interactive menu (new / relaunch / manage)
 #   omarchy-agent-launcher new             the new-agent form
 #   omarchy-agent-launcher launch <name>   relaunch a saved agent
+#   omarchy-agent-launcher manage          show / edit job / sign in / remove / destroy
 #   omarchy-agent-launcher list | show <name> | job <name> | sign-in <name>
 #   omarchy-agent-launcher remove <name>   forget a saved agent (and its local home)
 #   omarchy-agent-launcher destroy <name>  also destroy its container / sprite
@@ -290,7 +291,7 @@ cmd_menu() {
   case "$pick" in
     new*)    cmd_new ;;
     manage*) cmd_manage ;;
-    "▶ "*)   set -- ${pick#▶ }; cmd_launch "$1" ;;
+    "▶ "*)   read -r n _ <<<"${pick#▶ }"; cmd_launch "$n" ;;
   esac
 }
 
@@ -298,6 +299,7 @@ cmd_menu() {
 case "${CMD[0]:-menu}" in
   menu)    cmd_menu ;;
   new)     cmd_new ;;
+  manage)  cmd_manage ;;
   launch)  cmd_launch "${CMD[1]:?launch needs a name}" ;;
   sign-in) cmd_sign_in "${CMD[1]:?sign-in needs a name}" ;;
   list)    cmd_list ;;
