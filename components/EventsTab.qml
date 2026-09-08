@@ -131,7 +131,11 @@ Item {
     hasCursor: dash.cursorActive && dash.tab === "events" && dash.selectedIndex === rowIndex
     foreground: dash.foreground
     implicitHeight: Style.space(26)
-    MouseArea { anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.ArrowCursor; onContainsMouseChanged: if (containsMouse) { dash.cursorActive = true; dash.selectedIndex = row.rowIndex }; onDoubleClicked: dash.chat(row.ev.agent) }
+    MouseArea {
+      anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.ArrowCursor
+      onContainsMouseChanged: if (containsMouse) { dash.cursorActive = true; dash.selectedIndex = row.rowIndex }
+      onDoubleClicked: dash.chat(row.ev.agent)
+    }
     Row {
       anchors.fill: parent; spacing: 0
       Repeater {
