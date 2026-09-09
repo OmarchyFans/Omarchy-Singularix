@@ -51,7 +51,8 @@
 #     (never from argv); --launch then
 #     opens the session in a floating terminal (sign-in happens there if needed).
 #
-# Sessions run inside tmux (session oal-<name>) in a terminal titled
+# Sessions run inside tmux (session oal-<name>, on the agent's own tmux server at
+# ~/.local/state/omarchy-agent-launcher/tmux/oal-<name>.sock) in a terminal titled
 # "Agent · <name>". Closing the window detaches; launch/chat reattaches.
 #
 # Flags: --popup   re-open this command in a floating terminal (for the wizard/menus)
@@ -347,6 +348,9 @@ cmd_session() {
   ui_need
   local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
   load_profile_adapters "$name"
+  # If the tmux session is killed from outside (kill-session, a closed pane, a
+  # logout), the agent goes with it silently; say so where the user looks.
+  trap 'trap - HUP TERM; event_emit "$name" session_exited "Session was killed from outside (tmux session ended); Chat starts it again" --level blocker --key exit --code 129; exit 129' HUP TERM
   local resume=0
   while :; do
     title "$name  ·  $(agent_label "$(profile_get "$name" agent)") on $(runtime_label "$(profile_get "$name" runtime)")"

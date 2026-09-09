@@ -293,6 +293,15 @@ Omarchy's own `omarchy agent` uses, so your window rules apply. That gives you:
   again, or close. After an unattended run, "chat" opens a conversation
   that already contains the run.
 
+Each agent's session runs on **its own tmux server**, on the socket
+`~/.local/state/omarchy-agent-launcher/tmux/oal-<name>.sock`, not on your
+default tmux server. So `tmux ls` does not list agents, nothing else that uses
+tmux can kill one by name, and (with Omarchy's `detach-on-destroy off`) an
+agent's window can never be switched over to another agent's session. To attach
+by hand: `tmux -S ~/.local/state/omarchy-agent-launcher/tmux/oal-<name>.sock attach`.
+If a session is killed from outside anyway, the dashboard shows a blocker
+saying so, and Chat starts it again.
+
 Without tmux the session still runs, just without the reattach behaviour
 (`omarchy pkg add tmux`).
 
