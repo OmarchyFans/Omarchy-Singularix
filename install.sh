@@ -56,7 +56,7 @@ elif ask "Float and center the Agent Dashboard window (rule in $LF)?"; then
   cat >>"$LF" <<LUA
 
 -- Omarchy Agent Launcher ($MARK) dashboard window: float it (it tiles without this).
-o.window({ class = "^org.quickshell$", title = "^Agent Dashboard$" }, { float = true, center = true, size = { 1180, 760 } })
+o.window({ class = "^org.quickshell$", title = "^Agent Dashboard$" }, { float = true, center = true, size = { 1180, 760 }, opacity = "1 1" })
 LUA
   echo "  appended; hyprctl reload picks it up"
 fi
