@@ -246,6 +246,50 @@ agent_tasks_json() { # agent_tasks_json <name>
     | jq -c 'map({source:"kanban", id:(.id|tostring), title, status, block_kind, updated})'
 }
 
+# Board db path for a project's bound board. Default board lives at
+# <home>/kanban.db; named boards live under <home>/kanban/boards/<slug>/
+# kanban.db (verified against `hermes kanban boards list --json` db_path).
+project_board_db() { # project_board_db <home> <board_slug>
+  local home=$1 slug=${2:-default}
+  if [[ -z $slug || $slug == default ]]; then printf '%s/kanban.db' "$home"
+  else printf '%s/kanban/boards/%s/kanban.db' "$home" "$slug"; fi
+}
+
+# Projects for status --json's "projects" array: reads <home>/projects.db
+# (hermes_cli/projects_db.py's schema) and, per project, its bound board's
+# kanban.db for a waterfall phase + progress summary. One row per project;
+# "phase" is derived from the title of the current ready/running frontier
+# task (the "Phase N: <name>" convention), falling back to "Done"/"N/A".
+agent_projects_json() { # agent_projects_json <name>
+  local name=$1 home; home=$(agent_home "$name")
+  local pdb="$home/projects.db"
+  have sqlite3 && [[ -f $pdb ]] || { printf '[]'; return; }
+  local rows; rows=$(timeout 5 sqlite3 -readonly -json "$pdb" \
+    "select slug, name, coalesce(board_slug,'default') as board_slug, coalesce(primary_path,'') as primary_path from projects where archived=0" 2>/dev/null)
+  [[ $rows == \[*\] ]] || { printf '[]'; return; }
+  local out="[]" row slug pname bslug ppath bdb summary row_json
+  while IFS= read -r row; do
+    [[ -n $row ]] || continue
+    slug=$(jq -r .slug <<<"$row"); pname=$(jq -r .name <<<"$row")
+    bslug=$(jq -r .board_slug <<<"$row"); ppath=$(jq -r .primary_path <<<"$row")
+    bdb=$(project_board_db "$home" "$bslug")
+    summary='[{"phase_title":null,"total":0,"done":0,"blocked":0}]'
+    if [[ -f $bdb ]]; then
+      summary=$(timeout 5 sqlite3 -readonly -json "$bdb" \
+        "select (select title from tasks where status in ('ready','running') order by priority desc, created_at asc limit 1) as phase_title, (select count(*) from tasks) as total, (select count(*) from tasks where status='done') as done, (select count(*) from tasks where status='blocked') as blocked" 2>/dev/null)
+      [[ $summary == \[*\] ]] || summary='[{"phase_title":null,"total":0,"done":0,"blocked":0}]'
+    fi
+    row_json=$(jq -n --arg agent "$name" --arg slug "$slug" --arg name "$pname" --arg board "$bslug" --arg path "$ppath" --argjson s "$(jq -c '.[0]' <<<"$summary")" '
+      {agent:$agent, slug:$slug, name:$name, board:$board, path:$path,
+       phase: ($s.phase_title // (if ($s.total>0 and $s.done==$s.total) then "Done" else "N/A" end)),
+       phase_done: $s.done, phase_total: $s.total,
+       percent_done: (if $s.total>0 then (($s.done*100)/$s.total) else 0 end),
+       open_blockers: $s.blocked}')
+    out=$(jq -c --argjson r "$row_json" '. + [$r]' <<<"$out")
+  done < <(jq -c '.[]' <<<"$rows")
+  printf '%s' "$out"
+}
+
 # Mirror new card states and events into the launcher log (idempotent via cursor).
 agent_kanban_sync() { # agent_kanban_sync <name>
   local name=$1; kanban_available "$name" || return 0

@@ -12,8 +12,8 @@ server on a [Modal](https://modal.com) GPU you choose.
 
 ![The Agent Dashboard](preview.png)
 
-The dashboard is a persistent window (it stays until you close it) with five
-pages, switchable with `1`–`5`:
+The dashboard is a persistent window (it stays until you close it) with six
+pages, switchable with `1`–`6`:
 
 | Page | What it shows |
 |------|---------------|
@@ -22,6 +22,7 @@ pages, switchable with `1`–`5`:
 | **New agent** | the one-page setup form (below) |
 | **Events** | the event log: filter by agent, task, level, or text; click a column header to sort |
 | **Notifications** | open blockers (things that need you) with Chat and Resolve, recent warnings, and the desktop-notification toggle |
+| **Projects** | every registered project (`hermes project create`) with its current waterfall phase, percent complete, and open blocker count, read from its bound Hermes kanban board — double-click jumps to Events filtered to that project's agent |
 
 The bar button opens the dashboard; right-click opens a quick agent switcher;
 a red badge counts open blockers.

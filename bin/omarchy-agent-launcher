@@ -562,16 +562,32 @@ cmd_kanban_sync() { # cmd_kanban_sync [name]
   done
 }
 
+# Projects across every saved agent: merged into status --json's "projects"
+# array. Delegates per-agent extraction to agent_projects_json (adapter-
+# specific; Hermes-only today, no-op elsewhere).
+cmd_projects_json() {
+  local n out="[]" part
+  while IFS= read -r n; do
+    [[ -n $n ]] || continue; profile_exists "$n" || continue
+    part=$( ( load_agent "$(profile_get "$n" agent)"; declare -F agent_projects_json >/dev/null && agent_projects_json "$n" ) 2>/dev/null )
+    [[ $part == \[*\] ]] || continue
+    out=$(jq -c --argjson p "$part" '. + $p' <<<"$out")
+  done < <(profile_list)
+  printf '%s' "$out"
+}
+
 # Everything the dashboard needs, as one compact JSON document: agents (status,
-# window, tasks, blockers), Jarvis, usage (tokens + USD), backends. No network.
+# window, tasks, blockers), Jarvis, usage (tokens + USD), backends, projects
+# (waterfall phase per registered project). No network.
 cmd_status_json() {
   cmd_kanban_sync >/dev/null 2>&1 || true
   local clients="[]"; have hyprctl && clients=$(hyprctl clients -j 2>/dev/null || echo "[]")
   local recent blockers; recent=$(events_recent 4000); blockers=$(blockers_json)
+  local projects; projects=$(cmd_projects_json)
   local n running window tasks_extra p
   {
-    printf '{"version":%s,"blockers":%s,"jarvis":%s,"usage":%s,"backends":%s,"modal":%s,"agents":[' \
-      "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")" "$(jarvis_status_json)" "$(usage_json)" "$(backends_list_json)" "$(modal_status_json quick)"
+    printf '{"version":%s,"blockers":%s,"jarvis":%s,"usage":%s,"backends":%s,"modal":%s,"projects":%s,"agents":[' \
+      "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")" "$(jarvis_status_json)" "$(usage_json)" "$(backends_list_json)" "$(modal_status_json quick)" "$projects"
     local first=1
     while IFS= read -r n; do
       [[ -n $n ]] || continue; (( first )) || printf ','; first=0
