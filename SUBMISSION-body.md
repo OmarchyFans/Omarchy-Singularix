@@ -1,6 +1,6 @@
 ### Repository URL
 
-https://github.com/modpunk/omarchy-agent-launcher
+https://github.com/OmarchyFans/omarchy-fans-agent-launcher
 
 ### Category
 

@@ -55,7 +55,7 @@ a paid convenience, with the price shown in the setup form before you launch
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/modpunk/omarchy-agent-launcher
+omarchy plugin add https://github.com/OmarchyFans/omarchy-fans-agent-launcher
 omarchy plugin enable fans.omarchy.agent-launcher
 ```
 
@@ -365,7 +365,7 @@ dashboard refreshes and when a session ends; it never writes to the board.
 
 Pick **Local GPU (llama.cpp, offline)** as the provider and the agent talks
 only to the llama.cpp server on `127.0.0.1` that the Omarchy local agent runs
-(the [Omarchy Help](https://github.com/modpunk/omarchy-help) plugin's
+(the [Omarchy Help](https://github.com/OmarchyFans/omarchy-fans-help) plugin's
 `omarchy-local-agent.service`). Nothing leaves the machine: unplug the network
 and the agent keeps working. This is the privacy path: a local model cannot
 leak your files, keys, or prompts to anyone, and as small models and GPUs
@@ -505,7 +505,7 @@ removes remote containers and sprites first.
 ## Contributing
 
 Issues and pull requests are welcome at
-[github.com/modpunk/omarchy-agent-launcher](https://github.com/modpunk/omarchy-agent-launcher).
+[github.com/OmarchyFans/omarchy-fans-agent-launcher](https://github.com/OmarchyFans/omarchy-fans-agent-launcher).
 Run `tests/run.sh` (stubbed UI, no network with `OAL_OFFLINE=1`) before
 opening a PR; `omarchy plugin validate .` checks the manifest.
 
