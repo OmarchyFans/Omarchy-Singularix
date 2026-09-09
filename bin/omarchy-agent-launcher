@@ -137,7 +137,8 @@ edit_job_file() { # edit_job_file <path>
   local editor=${VISUAL:-${EDITOR:-}}
   if [[ -z $editor ]]; then for e in nvim vim nano vi; do have "$e" && { editor=$e; break; }; done; fi
   [[ -n $editor ]] || fail "no editor found; set \$EDITOR"
-  "$editor" "$1"
+  local -a ed; read -ra ed <<<"$editor"      # $EDITOR may carry flags, e.g. "omarchy-launch-editor --inline"
+  "${ed[@]}" "$1"
 }
 
 # ===================================================================== new ====
@@ -386,7 +387,21 @@ cmd_show() {
   profile_exists "$1" || fail "no saved agent named '$1'"
   jq . "$(profile_path "$1")"; hr; say "--- job ($(job_path "$1")) ---"; cat "$(job_path "$1")"
 }
-cmd_job() { profile_exists "$1" || fail "no saved agent named '$1'"; edit_job_file "$(job_path "$1")"; }
+# job <name>                 open the job in $EDITOR
+# job <name> --print         print it (scripts, no terminal needed)
+# job <name> --job-file F    replace it from a file
+# job <name> --job-stdin     replace it from stdin
+cmd_job() {
+  local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
+  local jobf; jobf=$(job_path "$name")
+  if opt_flag --print; then [[ -f $jobf ]] && cat "$jobf"; return 0; fi
+  local src
+  if src=$(opt_value --job-file); then [[ -f $src ]] || fail "no such file: $src"; run cp -f "$src" "$jobf"
+  elif opt_flag --job-stdin; then (( OAL_DRY_RUN )) && { say "[dry-run] would replace the job from stdin"; return 0; }; cat >"$jobf"
+  else edit_job_file "$jobf"; return; fi
+  event_emit "$name" note "Job updated" 2>/dev/null || true
+  say "job updated for $name"
+}
 
 cmd_remove() {
   local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
@@ -589,6 +604,9 @@ cmd_status_json() {
   local recent blockers; recent=$(events_recent 4000); blockers=$(blockers_json)
   local projects; projects=$(cmd_projects_json)
   local n running window tasks_extra p
+  # What the local server actually serves; a saved agent may pin an older file name.
+  local served=""
+  if declare -F local_online >/dev/null && local_online; then served=$(local_models_json | jq -r '.[0].id // ""' 2>/dev/null || true); fi
   {
     printf '{"version":%s,"blockers":%s,"jarvis":%s,"usage":%s,"backends":%s,"modal":%s,"projects":%s,"agents":[' \
       "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")" "$(jarvis_status_json)" "$(usage_json)" "$(backends_list_json)" "$(modal_status_json quick)" "$projects"
@@ -598,7 +616,7 @@ cmd_status_json() {
       running=false; session_alive "$n" && running=true
       window=$(jq -r --arg t "$(window_title "$n")" '.[] | select(.initialTitle==$t or .title==$t) | .address' <<<"$clients" 2>/dev/null | head -n1)
       tasks_extra=$( ( load_agent "$(profile_get "$n" agent)"; agent_tasks_json "$n" ) 2>/dev/null ); [[ $tasks_extra == \[* ]] || tasks_extra="[]"
-      jq -c --arg n "$n" --argjson running "$running" --arg window "${window:-}" --arg job "$(job_title "$n")" \
+      jq -c --arg n "$n" --arg served "$served" --argjson running "$running" --arg window "${window:-}" --arg job "$(job_title "$n")" \
          --argjson recent "$recent" --argjson blockers "$blockers" --argjson extra "$tasks_extra" '
         ($recent | map(select(.agent == $n))) as $ev
         | ($blockers | to_entries | map(.value) | map(select(.agent == $n))) as $open
@@ -607,6 +625,8 @@ cmd_status_json() {
         | . + {
             job_title: $job, running: $running, window: $window,
             role: (.role // "worker"), parent: (.parent // ""), backend: (.backend // .provider), task_title: (.task_title // ""),
+            model_pinned: (.model // ""),
+            model: (if (.provider == "local" and $served != "") then $served else .model end),
             signed_in: ((.signed_in // false) == true),
             last: ($ev | last // null | if . == null then null else {t, ts, kind, level, message} end),
             open_blockers: $open,

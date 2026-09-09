@@ -93,7 +93,7 @@ local_tune() { # local_tune <ctx> <kv-type> <slots> [model-file]
 # tokens per request). Reversible: omarchy-agent-launcher local-server untune
 [Service]
 ExecStart=
-ExecStart=/usr/bin/llama-server --model $model_arg --host 127.0.0.1 --port $port --ctx-size $ctx --parallel $slots --flash-attn on --cache-type-k $kv --cache-type-v $kv --threads 8 --n-gpu-layers 99 --cache-reuse 256 --no-webui
+ExecStart=/usr/bin/llama-server --model $model_arg --host 127.0.0.1 --port $port --ctx-size $ctx --parallel $slots --flash-attn on --cache-type-k $kv --cache-type-v $kv --threads 8 --n-gpu-layers 99 --cache-reuse 256 --reasoning off --no-webui
 CONF
 )
   say "Drop-in: $LOCAL_DROPIN"

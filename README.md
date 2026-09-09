@@ -262,7 +262,10 @@ omarchy-agent-launcher local-server untune                      # back to the pl
 ```
 
 `tune` writes a systemd drop-in and restarts the service; the help plugin keeps
-working with the larger window. On a 4 GB GPU with a 4B model, 32K with `q8_0`
+working with the larger window. The drop-in also runs the server with
+`--reasoning off`: with thinking on, a tight `max_tokens` is spent entirely on
+hidden reasoning and the reply comes back empty. Re-run `tune` after upgrading
+to pick it up. On a 4 GB GPU with a 4B model, 32K with `q8_0`
 KV cache is about 3.5 GB. Measured with Hermes: about 18 s for the first
 ~14K-token turn, a few seconds for later ones thanks to prefix caching, ~16
 tokens/s generation. The launcher shows whatever model the server serves.
