@@ -25,6 +25,20 @@
 #                                          append to the event log (agents and hooks may call this;
 #                                          OAL_AGENT holds the agent's own name inside its session)
 #   omarchy-agent-launcher settings get|set <key> [value]   e.g. notify_blockers false
+#
+# Jarvis (chief of staff) and the fleet:
+#   omarchy-agent-launcher jarvis [chat]             open Jarvis (set up on the local GPU the first time)
+#   omarchy-agent-launcher jarvis setup [BACKEND] [MODEL]   choose what Jarvis runs on
+#   omarchy-agent-launcher jarvis brief              plain status brief: agents, blockers, tokens, USD
+#   omarchy-agent-launcher jarvis ask "<question>"   one answer from Jarvis, no window
+#   omarchy-agent-launcher delegate --backend B --name N --task-title T (--job-stdin|--job-env|--job-file F) [--wait] [--model M]
+#                                          hand a job to a worker agent on that backend
+#   omarchy-agent-launcher result <name> [--list]    a worker's latest unattended run output
+#   omarchy-agent-launcher usage [--json]            tokens and USD: totals, per agent, per task
+#   omarchy-agent-launcher backends list|show|add|remove|deploy|start|stop|test [id]   models to hand work to
+#     add: --id I --kind endpoint|modal-dedicated|modal-sandbox --model M [--url U --key-env] [--gpu G --gpu-count N]
+#          [--scaledown MIN] [--timeout-hours H] [--ctx N] [--input-per-m $ --output-per-m $]
+#   omarchy-agent-launcher modal status|gpus|setup   the modal CLI, GPU prices, sign-in
 #   omarchy-agent-launcher local-server status|start|tune|untune [--ctx N] [--kv q8_0|q4_0|f16] [--slots N] [--model FILE]
 #                                          the offline llama.cpp server of the Omarchy local agent
 #
@@ -55,6 +69,10 @@ source "$OAL_LIB/providers.sh"
 source "$OAL_LIB/models.sh"
 source "$OAL_LIB/events.sh"
 source "$OAL_LIB/local.sh"
+source "$OAL_LIB/backends.sh"
+source "$OAL_LIB/modal.sh"
+source "$OAL_LIB/usage.sh"
+source "$OAL_LIB/jarvis.sh"
 # Tests replace the gum wrappers with scripted answers (see tests/run.sh).
 # shellcheck source=/dev/null
 [[ -n ${OAL_UI_STUBS:-} ]] && source "$OAL_UI_STUBS"
@@ -66,10 +84,11 @@ while (($#)); do
     --inline)  INLINE=1 ;;
     --dry-run) OAL_DRY_RUN=1 ;;
     --json)    JSON=1 ;;
-    -h|--help) sed -n '3,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,47p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --version) echo "omarchy-agent-launcher $OAL_VERSION"; exit 0 ;;
-    --name|--agent|--runtime|--provider|--auth|--model|--base-url|--mode|--skill|--job-file|--task|--level|--key|--ctx|--kv|--slots)
-               OPTS+=("$1" "${2:-}"); shift ;;   # create's valued options
+    --name|--agent|--runtime|--provider|--auth|--model|--base-url|--mode|--skill|--job-file|--task|--level|--key|--ctx|--kv|--slots|\
+    --backend|--parent|--role|--task-title|--id|--kind|--label|--url|--gpu|--gpu-count|--scaledown|--timeout-hours|--input-per-m|--output-per-m)
+               OPTS+=("$1" "${2:-}"); shift ;;   # valued options (create, delegate, backends add, local-server)
     --*)       OPTS+=("$1") ;;                    # create's flags
     *)         CMD+=("$1") ;;
   esac
@@ -288,34 +307,50 @@ cmd_launch() {
   open_agent_window "$name"
 }
 
+# One run of the agent's session in this terminal: prepare, start, log events,
+# and for an unattended run keep a copy of the output under
+# <agent home>/runs/<timestamp>.log so `result NAME` (and Jarvis) can read it.
+# session_run_once <name> <resume:0|1>  -> the agent's exit code
+session_run_once() {
+  local name=$1 resume=${2:-0} code mode; mode=$(profile_get "$name" mode)
+  if (( ! resume )); then prepare_session "$name" || true; fi
+  local -a cmd; mapfile -t cmd < <(rt_cmd "$name" "$resume")
+  export OAL_AGENT="$name" PATH="$OAL_ROOT/bin:$PATH"
+  event_emit "$name" session_started "$( (( resume )) && echo "Chat resumed" || echo "Session started" ) ($mode)" --task "$(job_title "$name")"
+  hr
+  local runlog=""
+  if [[ $mode == unattended && $resume == 0 ]]; then
+    runlog="$(stage_dir "$name")/runs/$(date +%Y%m%d-%H%M%S).log"; mkdir -p "$(dirname "$runlog")"
+    "${cmd[@]}" 2>&1 | tee "$runlog"; code=${PIPESTATUS[0]}
+  else
+    "${cmd[@]}"; code=$?
+  fi
+  hr
+  if (( code == 0 )); then
+    say "Session ended."
+    if [[ -n $runlog ]]; then
+      event_emit "$name" job_done "Unattended run finished · omarchy-agent-launcher result $name" --task "$(job_title "$name")"
+    else
+      event_emit "$name" session_exited "Session ended" --code 0
+    fi
+  else
+    say "Session ended with exit code $code."
+    event_emit "$name" session_exited "Session exited with code $code" --level blocker --key exit --code "$code"
+  fi
+  cmd_kanban_sync "$name" >/dev/null 2>&1 || true
+  return "$code"
+}
+
 # Runs inside the agent's tmux session: the whole lifecycle, then a menu so
 # the window never just vanishes on exit.
 cmd_session() {
   ui_need
   local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
   load_profile_adapters "$name"
-  local resume=0 code
+  local resume=0
   while :; do
     title "$name  ·  $(agent_label "$(profile_get "$name" agent)") on $(runtime_label "$(profile_get "$name" runtime)")"
-    if (( ! resume )); then prepare_session "$name" || true; fi
-    local -a cmd; mapfile -t cmd < <(rt_cmd "$name" "$resume")
-    export OAL_AGENT="$name" PATH="$OAL_ROOT/bin:$PATH"
-    event_emit "$name" session_started "$( (( resume )) && echo "Chat resumed" || echo "Session started" ) ($(profile_get "$name" mode))" --task "$(job_title "$name")"
-    hr
-    "${cmd[@]}"; code=$?
-    hr
-    if (( code == 0 )); then
-      say "Session ended."
-      if [[ $(profile_get "$name" mode) == unattended && $resume == 0 ]]; then
-        event_emit "$name" job_done "Unattended run finished" --task "$(job_title "$name")"
-      else
-        event_emit "$name" session_exited "Session ended" --code 0
-      fi
-    else
-      say "Session ended with exit code $code."
-      event_emit "$name" session_exited "Session exited with code $code" --level blocker --key exit --code "$code"
-    fi
-    cmd_kanban_sync "$name" >/dev/null 2>&1 || true
+    session_run_once "$name" "$resume" || true
     local pick
     pick=$(choose "What next?" \
       "chat     Open a chat that continues this agent's conversation" \
@@ -448,6 +483,7 @@ cmd_info() {
     first=1
     while IFS= read -r id; do [[ -n $id ]] || continue; (( first )) || echo ','; first=0; jq -c . "$(profile_path "$id")"; done < <(profile_list)
     echo '],"local":'"$(local_status_json)"
+    echo ',"backends":'"$(backends_list_json)"',"gpus":'"$(modal_gpus_json)"',"modal":'"$(modal_status_json quick)"',"jarvis":'"$(jarvis_status_json)"
     echo ',"catalog":{"source":"'"$(models_catalog_available && echo models.dev || echo static)"'","updated":'"$(jq -Rn --arg v "$(models_catalog_updated || true)" '$v')"',"url":"https://models.dev"}'
     echo ',"paths":{"config":'"$(jq -Rn --arg v "$OAL_CONF" '$v')"',"data":'"$(jq -Rn --arg v "$OAL_DATA" '$v')"'}}'
   } | jq .
@@ -456,6 +492,7 @@ cmd_info() {
 # Save (and optionally launch) an agent from flags: no prompts at all.
 cmd_create() {
   local name='' agent='' runtime='' provider='' auth=none model='' base_url=- mode=interactive job_file='' job_stdin=0 job_env=0 key_env=0 launch=0
+  local backend='' parent='' role='' task_title=''
   local -a skills=()
   local i=0 n=${#OPTS[@]} o v
   while (( i < n )); do
@@ -466,6 +503,8 @@ cmd_create() {
       --auth) auth=$v; ((i+=2)) ;;       --model) model=$v; ((i+=2)) ;;
       --base-url) base_url=$v; ((i+=2)) ;; --mode) mode=$v; ((i+=2)) ;;
       --skill) skills+=("$v"); ((i+=2)) ;; --job-file) job_file=$v; ((i+=2)) ;;
+      --backend) backend=$v; ((i+=2)) ;; --parent) parent=$v; ((i+=2)) ;;
+      --role) role=$v; ((i+=2)) ;;       --task-title) task_title=$v; ((i+=2)) ;;
       --job-stdin) job_stdin=1; ((i+=1)) ;; --job-env) job_env=1; ((i+=1)) ;;
       --api-key-env) key_env=1; ((i+=1)) ;;
       --launch) launch=1; ((i+=1)) ;;
@@ -473,6 +512,13 @@ cmd_create() {
     esac
   done
   name=$(slugify "$name"); [[ -n $name ]] || fail "create: --name is required"
+  if [[ -n $backend ]]; then
+    # A backend decides provider, sign-in, model, and URL (lib/backends.sh).
+    local r; r=$(backend_resolve "$backend" "$model") || exit 1
+    provider=$(jq -r .provider <<<"$r"); auth=$(jq -r .auth <<<"$r"); model=$(jq -r .model <<<"$r"); base_url=$(jq -r .base_url <<<"$r")
+    [[ -n $agent ]] || agent=hermes; [[ -n $runtime ]] || runtime=local
+  fi
+  [[ $provider == endpoint && $agent != hermes ]] && fail "create: endpoint backends are Hermes-only"
   [[ -f $OAL_LIB/agents/$agent.sh ]] || fail "create: --agent must be hermes or openclaw"
   [[ -f $OAL_LIB/runtimes/$runtime.sh ]] || fail "create: --runtime must be local, docker, or sprite"
   provider_label "$provider" >/dev/null 2>&1 || fail "create: unknown --provider '$provider'"
@@ -486,7 +532,7 @@ cmd_create() {
     [[ $var != - ]] || fail "create: $provider takes no API key"
     secret_set "$var" "$OAL_API_KEY"; auth=api-key
   fi
-  if [[ $auth == api-key ]]; then
+  if [[ $auth == api-key && $provider != endpoint ]]; then
     [[ $var != - ]] || fail "create: $provider has no API key auth"
     [[ -n $(secret_get "$var") ]] || fail "create: no saved $var; pass --api-key-env with \$OAL_API_KEY set"
   fi
@@ -494,7 +540,11 @@ cmd_create() {
   if (( job_stdin )); then cat >"$(job_path "$name")"; elif (( job_env )); then printf '%s\n' "${OAL_JOB:-}" >"$(job_path "$name")"; elif [[ -n $job_file ]]; then cp -f "$job_file" "$(job_path "$name")"; else fail "create: --job-file, --job-stdin, or --job-env is required"; fi
   [[ -s $(job_path "$name") ]] || fail "create: the job description is empty"
   profile_write "$name" "$agent" "$runtime" "$provider" "$auth" "$model" "$base_url" "$mode" "$(printf '%s\n' "${skills[@]}")"
-  event_emit "$name" created "Agent created: $agent on $runtime, $provider/$model ($mode)" --task "$(job_title "$name")"
+  [[ -n $backend ]] && profile_set "$name" backend "$(jq -Rn --arg v "$backend" '$v')"
+  [[ -n $parent ]] && profile_set "$name" parent "$(jq -Rn --arg v "$parent" '$v')"
+  [[ -n $role ]] && profile_set "$name" role "$(jq -Rn --arg v "$role" '$v')"
+  [[ -n $task_title ]] && profile_set "$name" task_title "$(jq -Rn --arg v "$task_title" '$v')"
+  event_emit "$name" created "Agent created: $agent on $runtime, ${backend:-$provider}/$model ($mode)${parent:+ · for $parent}" --task "${task_title:-$(job_title "$name")}"
   (( JSON )) && jq -c . "$(profile_path "$name")" || say "saved $name"
   if (( launch )); then
     unset OAL_API_KEY OAL_JOB     # the agent window must not inherit them
@@ -512,15 +562,16 @@ cmd_kanban_sync() { # cmd_kanban_sync [name]
   done
 }
 
-# Everything the dashboard's Agents tab needs.
-cmd_status() {
-  (( JSON )) || { cmd_list; return; }
+# Everything the dashboard needs, as one compact JSON document: agents (status,
+# window, tasks, blockers), Jarvis, usage (tokens + USD), backends. No network.
+cmd_status_json() {
   cmd_kanban_sync >/dev/null 2>&1 || true
   local clients="[]"; have hyprctl && clients=$(hyprctl clients -j 2>/dev/null || echo "[]")
   local recent blockers; recent=$(events_recent 4000); blockers=$(blockers_json)
   local n running window tasks_extra p
   {
-    printf '{"version":%s,"blockers":%s,"agents":[' "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")"
+    printf '{"version":%s,"blockers":%s,"jarvis":%s,"usage":%s,"backends":%s,"modal":%s,"agents":[' \
+      "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")" "$(jarvis_status_json)" "$(usage_json)" "$(backends_list_json)" "$(modal_status_json quick)"
     local first=1
     while IFS= read -r n; do
       [[ -n $n ]] || continue; (( first )) || printf ','; first=0
@@ -535,6 +586,7 @@ cmd_status() {
              status: (.[-1].kind | if . == "task_done" then "done" elif . == "task_blocked" then "blocked" elif . == "task_review" then "review" elif . == "task_started" then "running" else "noted" end)})) as $cli
         | . + {
             job_title: $job, running: $running, window: $window,
+            role: (.role // "worker"), parent: (.parent // ""), backend: (.backend // .provider), task_title: (.task_title // ""),
             signed_in: ((.signed_in // false) == true),
             last: ($ev | last // null | if . == null then null else {t, ts, kind, level, message} end),
             open_blockers: $open,
@@ -543,7 +595,93 @@ cmd_status() {
           }' "$(profile_path "$n")"
     done < <(profile_list)
     printf ']}'
-  } | jq .
+  } | jq -c '(.usage.agents | map({key: .name, value: {prompt, output, cost_usd, cost_unknown, sessions}}) | from_entries) as $u
+             | .agents |= map(. + {usage: ($u[.name] // null)})'
+}
+cmd_status() { if (( JSON )); then cmd_status_json | jq .; else cmd_list; fi; }
+
+# ------------------------------------------------------------- Jarvis & co ----
+cmd_usage() { if (( JSON )); then usage_json | jq .; else usage_print; fi; }
+
+cmd_jarvis() {
+  case "${CMD[1]:-chat}" in
+    setup)     jarvis_setup "${CMD[2]:-}" "${CMD[3]:-}" ;;
+    chat|open) jarvis_exists || jarvis_setup; cmd_launch "$JARVIS_NAME" ;;
+    brief)     jarvis_brief ;;
+    ask)       jarvis_ask "${CMD[2]:?jarvis ask needs a question}" ;;
+    status)    jarvis_status_json | jq . ;;
+    *) fail "usage: omarchy-agent-launcher jarvis [chat|setup [BACKEND [MODEL]]|brief|ask \"…\"|status]" ;;
+  esac
+}
+
+# Hand a job to a worker agent on a backend. Jarvis calls this from its session
+# (OAL_AGENT is set, so the worker records it as parent); you can too.
+cmd_delegate() {
+  local backend name title mode=unattended model
+  backend=$(opt_value --backend) || fail "delegate: --backend is required (see: omarchy-agent-launcher backends list)"
+  name=$(opt_value --name || echo "task-$(date +%m%d%H%M%S)"); name=$(slugify "$name")
+  title=$(opt_value --task-title || echo "$name"); model=$(opt_value --model || true)
+  opt_flag --interactive && mode=interactive
+  local parent=${OAL_AGENT:-}; [[ -z $parent ]] && jarvis_exists && parent=$JARVIS_NAME
+  local -a create=(--name "$name" --agent hermes --runtime local --backend "$backend" --mode "$mode" --role worker --task-title "$title")
+  [[ -n $parent ]] && create+=(--parent "$parent")
+  [[ -n $model ]] && create+=(--model "$model")
+  local i; for ((i=0; i<${#OPTS[@]}; i++)); do
+    case "${OPTS[i]}" in
+      --skill) create+=(--skill "${OPTS[i+1]}"); ((i++)) ;;
+      --job-file) create+=(--job-file "${OPTS[i+1]}"); ((i++)) ;;
+      --job-stdin|--job-env) create+=("${OPTS[i]}") ;;
+    esac
+  done
+  local wait=0; opt_flag --wait && wait=1
+  (( wait )) || create+=(--launch)
+  local saved_json=$JSON; JSON=0
+  OPTS=("${create[@]}"); cmd_create      # prints "saved <name>", then launches (or dry-run lines)
+  JSON=$saved_json
+  if (( wait )); then
+    load_profile_adapters "$name"
+    if (( OAL_DRY_RUN )); then local -a cmd; mapfile -t cmd < <(rt_cmd "$name" 0); say "[dry-run] would run and wait for:"; show_cmd "${cmd[@]}"
+    else session_run_once "$name" 0 >/dev/null 2>&1 || true; cmd_result "$name"; fi
+  else
+    jq -c --arg backend "$backend" '{name, backend: $backend, model, mode, parent: (.parent // ""), task_title, result: ("omarchy-agent-launcher result " + .name)}' "$(profile_path "$name")"
+  fi
+}
+
+# Latest (or every) unattended run output of an agent, ANSI stripped.
+cmd_result() {
+  local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
+  local dir; dir="$(stage_dir "$name")/runs"
+  if opt_flag --list; then ls -1 "$dir" 2>/dev/null || say "no runs yet"; return 0; fi
+  local latest; latest=$(ls -1t "$dir"/*.log 2>/dev/null | head -n1)
+  [[ -n $latest ]] || { say "no unattended run recorded for $name yet"; return 1; }
+  say "# $name · $(basename "$latest" .log)"
+  LC_ALL=C sed -E 's/\x1B\[[0-9;?]*[ -\/]*[@-~]//g; s/\r$//' "$latest"   # C locale: byte ranges, not collation order
+}
+
+# In a --popup terminal the window closes on success; hold it so the result stays readable.
+popup_hold() { [[ ${OAL_POPUP:-0} == 1 ]] && { hr; read -rp "Press Enter to close…" _; }; return 0; }
+
+cmd_backends() {
+  local id=${CMD[2]:-}
+  case "${CMD[1]:-list}" in
+    list)   if (( JSON )); then backends_list_json | jq .; else backends_print; fi ;;
+    show)   backend_get "${id:?backends show needs an id}" | jq . ;;
+    add)    backend_add_from_opts | jq . ;;
+    remove) backend_exists "${id:?backends remove needs an id}" || fail "no such backend: $id"; backend_delete "$id"; say "removed backend $id" ;;
+    deploy|start) modal_backend_up "${id:?backends ${CMD[1]} needs an id}"; popup_hold ;;
+    stop)   modal_backend_down "${id:?backends stop needs an id}"; popup_hold ;;
+    test)   modal_backend_test "${id:?backends test needs an id}"; popup_hold ;;
+    *) fail "usage: omarchy-agent-launcher backends list|show ID|add --id ID --kind K …|remove ID|deploy ID|start ID|stop ID|test ID" ;;
+  esac
+}
+
+cmd_modal() {
+  case "${CMD[1]:-status}" in
+    status) modal_status_json | jq . ;;
+    gpus)   if (( JSON )); then modal_gpus_json | jq .; else modal_gpus_json | jq -r '"Modal GPUs (USD per GPU-hour, modal.com/pricing as of \(.prices_date)):", (.gpus[] | "  \(.id)\t\(.vram_gb) GB\t$\(.hourly_usd)/h\tsuggested: \(.suggested_model)")' | column -t -s $'\t'; fi ;;
+    setup)  modal_installed || fail "install the modal CLI first: pipx install modal  (or: uv tool install modal)"; run modal setup; popup_hold ;;
+    *) fail "usage: omarchy-agent-launcher modal status|gpus|setup" ;;
+  esac
 }
 
 cmd_event() { # event <agent> <kind> <message> [--task T] [--level L] [--key K]
@@ -623,5 +761,11 @@ case "${CMD[0]:-menu}" in
   switch)  cmd_switch ;;
   kanban-sync) cmd_kanban_sync "${CMD[1]:-}" ;;
   local-server) cmd_local_server ;;
+  usage)    cmd_usage ;;
+  jarvis)   cmd_jarvis ;;
+  delegate) cmd_delegate ;;
+  result)   cmd_result "${CMD[1]:?result needs a name}" ;;
+  backends) cmd_backends ;;
+  modal)    cmd_modal ;;
   *) fail "unknown command: ${CMD[0]} (try --help)" ;;
 esac

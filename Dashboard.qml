@@ -7,13 +7,14 @@ import qs.Ui
 import "components"
 
 // Agent Dashboard: a persistent window (a normal toplevel, not a popup) with
-// four pages: Agents (status, switch to chat), New agent (the setup form),
+// five pages: Jarvis (the chief of staff: brief, ask, backends, tokens and
+// USD per task), Agents (status, switch to chat), New agent (the setup form),
 // Events (sortable, filterable log), Notifications (open blockers).
 //
 // Host contract (kind "panel", keepLoaded): the shell injects `shell` and
 // `manifest`, calls open(payloadJson) / close(), reads `opened`; we call
 // shell.hide(id) when the user closes the window (same plumbing as the
-// first-party dev gallery). Payload: {"tab": "agents|new|events|notifications",
+// first-party dev gallery). Payload: {"tab": "jarvis|agents|new|events|notifications",
 // "agent": "<name>"}.
 //
 // Data: `omarchy-agent-launcher status --json` (on open, every 30 s while
@@ -40,7 +41,7 @@ Item {
   readonly property color warnColor: "#e0af68"
 
   // ---- state shared with the tabs ---------------------------------------
-  property string tab: "agents"
+  property string tab: "jarvis"
   property var status: null            // parsed `status --json`
   property var blockers: ({})          // parsed blockers.json
   property var events: []              // ingested events.jsonl lines (capped)
@@ -53,7 +54,23 @@ Item {
   readonly property int runningCount: status ? status.agents.filter(function(a) { return a.running }).length : 0
   readonly property int agentCount: status ? status.agents.length : 0
 
-  readonly property var currentTab: tab === "new" ? setupForm : (tab === "events" ? eventsTab : (tab === "notifications" ? notifTab : agentsTab))
+  readonly property var currentTab: tab === "jarvis" ? jarvisTab : (tab === "new" ? setupForm : (tab === "events" ? eventsTab : (tab === "notifications" ? notifTab : agentsTab)))
+  readonly property var usage: status && status.usage ? status.usage : null
+  readonly property real totalCost: usage ? usage.totals.cost_usd : 0
+
+  // Shared number formatting: tokens as 1.8M / 26.6K, money as $1.28 (sub-dollar amounts get three decimals).
+  function fmtK(n) {
+    n = Number(n || 0)
+    if (n >= 1000000) return (Math.round(n / 100000) / 10) + "M"
+    if (n >= 1000) return (Math.round(n / 100) / 10) + "K"
+    return String(Math.round(n))
+  }
+  function fmtUsd(v) {
+    if (v === null || v === undefined) return "$?"
+    v = Number(v)
+    if (v === 0) return "$0"
+    return "$" + (v < 1 ? v.toFixed(3) : v.toFixed(2))
+  }
 
   // ---- host contract ------------------------------------------------------
   function open(payloadJson) {
@@ -62,7 +79,7 @@ Item {
     if (payloadJson) {
       try { var p = JSON.parse(String(payloadJson)); if (p && typeof p.tab === "string") wanted = p.tab; if (p && typeof p.agent === "string") agent = p.agent } catch (e) {}
     }
-    if (["agents", "new", "events", "notifications"].indexOf(wanted) >= 0) tab = wanted
+    if (["jarvis", "agents", "new", "events", "notifications"].indexOf(wanted) >= 0) tab = wanted
     if (agent !== "") requestedAgent = agent
     window.visible = true
     refreshStatus()
@@ -83,6 +100,7 @@ Item {
     statusProc.running = true
   }
   function act(argv) { Quickshell.execDetached(argv); refreshTimer.restart() }
+  function refreshSoon() { refreshTimer.restart() }
   function chat(name) { if (name) act([launcher, "chat", name]) }
   function emitEvent(agent, kind, message, key) {
     var argv = [launcher, "event", agent, kind, message]
@@ -190,15 +208,16 @@ Item {
         onActivateRequested: if (dash.cursorActive && dash.currentTab && typeof dash.currentTab.activate === "function") dash.currentTab.activate(dash.selectedIndex)
         onReturnRequested: if (dash.cursorActive && dash.currentTab && typeof dash.currentTab.activate === "function") dash.currentTab.activate(dash.selectedIndex)
         onTabRequested: function(direction) {
-          var order = ["agents", "new", "events", "notifications"]
+          var order = ["jarvis", "agents", "new", "events", "notifications"]
           var i = (order.indexOf(dash.tab) + (direction < 0 ? -1 : 1) + order.length) % order.length
           dash.selectTab(order[i])
         }
         onTextKey: function(t) {
-          if (t === "1") dash.selectTab("agents")
-          else if (t === "2") dash.selectTab("new")
-          else if (t === "3") dash.selectTab("events")
-          else if (t === "4") dash.selectTab("notifications")
+          if (t === "1") dash.selectTab("jarvis")
+          else if (t === "2") dash.selectTab("agents")
+          else if (t === "3") dash.selectTab("new")
+          else if (t === "4") dash.selectTab("events")
+          else if (t === "5") dash.selectTab("notifications")
           else if (t === "r" || t === "R") dash.refreshStatus()
           else if (t === "n" || t === "N") dash.selectTab("new")
         }
@@ -247,6 +266,7 @@ Item {
                   Text { id: badgeText; anchors.centerIn: parent; text: parent.parent.badge; color: dash.background; font.family: dash.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
                 }
               }
+              NavButton { tabId: "jarvis"; iconText: "󰚩"; text: "Jarvis" }
               NavButton { tabId: "agents"; iconText: "󰙨"; text: "Agents"; badge: dash.runningCount; badgeColor: dash.okColor }
               NavButton { tabId: "new"; iconText: ""; text: "New agent" }
               NavButton { tabId: "events"; iconText: "󰈙"; text: "Events" }
@@ -256,6 +276,7 @@ Item {
               Text {
                 width: parent.width; wrapMode: Text.Wrap
                 text: (dash.agentCount + " agent" + (dash.agentCount === 1 ? "" : "s") + "  ·  " + dash.runningCount + " running") + (dash.blockerCount ? "\n" + dash.blockerCount + " need" + (dash.blockerCount === 1 ? "s" : "") + " you" : "")
+                      + (dash.usage ? "\n" + dash.fmtK(dash.usage.totals.prompt + dash.usage.totals.output) + " tokens  ·  " + dash.fmtUsd(dash.totalCost) : "")
                 color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
               }
               Text {
@@ -266,7 +287,7 @@ Item {
               Item { width: 1; height: Style.space(16) }
               Text {
                 width: parent.width; wrapMode: Text.Wrap
-                text: "1-4 pages · j/k move · Enter chat · r refresh · Esc close"
+                text: "1-5 pages · j/k move · Enter chat · r refresh · Esc close"
                 color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
               }
             }
@@ -278,6 +299,7 @@ Item {
             width: parent.width - sidebar.width
             height: parent.height
 
+            JarvisTab { id: jarvisTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "jarvis"; dash: dash }
             AgentsTab { id: agentsTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "agents"; dash: dash }
             SetupForm {
               id: setupForm; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "new"; dash: dash

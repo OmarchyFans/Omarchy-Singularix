@@ -1,19 +1,24 @@
 # Omarchy Agent Launcher
 
-**Run AI agents from your desktop.** Press a key and the **Agent Dashboard**
-opens: create and launch an agent on one page, see every agent's status, jump
-to any agent's chat, follow a sortable event log, and get notified when an
-agent needs you. Agents run in a shell on your machine, inside their official
-Docker image, or on a [Fly.io Sprite](https://fly.io/sprites) in the cloud.
+**Run AI agents from your desktop, with a chief of staff.** Press a key and the
+**Agent Dashboard** opens on **Jarvis**: an agent that runs on your own GPU by
+default, knows what every other agent is doing and what it cost, and hands work
+to bigger models when you ask. Create and launch agents on one page, see every
+agent's status, jump to any chat, follow a sortable event log, and get notified
+when an agent needs you. Agents run in a shell on your machine, inside their
+official Docker image, or on a [Fly.io Sprite](https://fly.io/sprites); the
+models they use can be local, an API or subscription you sign in to, or a vLLM
+server on a [Modal](https://modal.com) GPU you choose.
 
 ![The Agent Dashboard](preview.png)
 
-The dashboard is a persistent window (it stays until you close it) with four
-pages, switchable with `1`–`4`:
+The dashboard is a persistent window (it stays until you close it) with five
+pages, switchable with `1`–`5`:
 
 | Page | What it shows |
 |------|---------------|
-| **Agents** | every saved agent with a status pill (running / blocked / done / idle), its job, last event, task count, and **Chat**, Stop, Edit job, Remove. Enter or Chat focuses the agent's window or reattaches its session. |
+| **Jarvis** | the chief of staff: its state and Chat, a plain status **Brief**, an **Ask Jarvis** box answered by its model, the numbers (prompt and output tokens, USD, total and today), the **backends** work can go to (with the Modal GPU picker), and **every task** with its tokens and cost. |
+| **Agents** | every saved agent with a status pill (running / blocked / done / idle), its job, last event, task count, tokens and USD so far, and **Chat**, Stop, Edit job, Remove. Enter or Chat focuses the agent's window or reattaches its session. |
 | **New agent** | the one-page setup form (below) |
 | **Events** | the event log: filter by agent, task, level, or text; click a column header to sort |
 | **Notifications** | open blockers (things that need you) with Chat and Resolve, recent warnings, and the desktop-notification toggle |
@@ -27,7 +32,7 @@ The **New agent** page asks for:
 |------|---------|
 | **Agent** | [Hermes Agent](https://github.com/NousResearch/hermes-agent) (Nous Research) · [OpenClaw](https://openclaw.ai) |
 | **Runtime** | local shell · Docker container · Fly.io Sprite (needs your Sprites API token) |
-| **Model** | **Local GPU (offline)**, Anthropic, OpenAI, OpenAI Codex, Nous Portal, xAI, OpenRouter, Gemini, DeepSeek, local Ollama, or any custom model id. The list is live: the newest models of each provider with **prices per million tokens**, from the open [models.dev](https://models.dev) catalog |
+| **Model** | **Local GPU (offline)**, Anthropic, OpenAI, OpenAI Codex, Nous Portal, xAI, OpenRouter, Gemini, DeepSeek, local Ollama, a **backend endpoint** (a Modal server you deployed from the Jarvis page, or a shared URL), or any custom model id. The list is live: the newest models of each provider with **prices per million tokens**, from the open [models.dev](https://models.dev) catalog |
 | **Sign-in** | browser OAuth with your own account (where the agent supports it) or an API key, saved once with mode 600 |
 | **Skills** | checkboxes over your installed skill library, plus hub install for Hermes |
 | **Job** | the instructions / job description, written in `$EDITOR`, typed inline, or taken from a file |
@@ -53,8 +58,9 @@ omarchy plugin enable fans.omarchy.agent-launcher
 **disabled** so you can read it first. It runs no code, no installer, no sudo.
 Enabling adds a robot button to the bar; clicking it opens the **Agent
 Dashboard** window (right click: quick agent switcher). Updating from a
-version before 0.5 adds and renames QML files, so run `omarchy restart shell`
-once after `omarchy plugin update`.
+version before 0.5, or from 0.6 to 0.7 (which adds the Jarvis page's QML
+files), adds and renames QML files, so run `omarchy restart shell` once after
+`omarchy plugin update`.
 
 After an `omarchy plugin update` that adds or renames QML files, run
 `omarchy restart shell`: the shell's QML engine caches a plugin folder's type
@@ -98,6 +104,9 @@ Prefer a terminal? The same setup exists as step-by-step prompts:
 
 Hyprland reloads on save; verify with `hyprctl configerrors`.
 
+The payload picks the page: `'{"tab":"jarvis"}'` (default), `agents`, `new`,
+`events`, `notifications`.
+
 ### Omarchy menu entry (optional)
 
 Append the snippet in [`extensions/omarchy-menu.snippet.jsonc`](extensions/omarchy-menu.snippet.jsonc)
@@ -113,6 +122,128 @@ keybinding, add the window rule, add the menu entries. It is not run by
 
 ```bash
 ~/.config/omarchy/plugins/fans.omarchy.agent-launcher/install.sh
+```
+
+## Jarvis, the chief of staff
+
+Jarvis is one more agent, saved as `jarvis` with the role *chief of staff*. What
+makes it different is what it is told and what it can reach:
+
+- **It runs on your machine.** By default on the **local GPU** (the llama.cpp
+  server of the Omarchy Help plugin, see below): offline, private, $0. Pick any
+  other ready backend from the **Runs on** dropdown, or
+  `omarchy-agent-launcher jarvis setup anthropic`.
+- **It sees the whole fleet.** Inside its session the launcher is on `PATH`, and a
+  bundled skill (`skills/jarvis/SKILL.md`, copied into its home) teaches it
+  `status --json`, `usage --json`, `backends list`, `delegate`, `result`, `stop`,
+  `remove`. Jarvis is a *user* of the same CLI the dashboard uses; there is no
+  second control plane.
+- **It hands work to bigger models.** `delegate` creates a worker agent on the
+  backend Jarvis chooses (a paid API, your ChatGPT or Claude subscription via
+  browser sign-in, a Modal GPU endpoint, a sandbox), runs the job unattended in
+  its own window, and keeps the output under the worker's home so
+  `omarchy-agent-launcher result NAME` (and Jarvis) can read it. Workers carry
+  `parent: jarvis`, show "for jarvis" on the Agents page, and roll up in usage.
+- **It asks before spending.** Its identity file and skill say so: state the
+  backend and price, then wait for a yes, before deploying a Modal GPU or
+  delegating to a paid model. You can also tell it to be bolder in its job
+  description (`omarchy-agent-launcher job jarvis`).
+
+On the **Jarvis** page: **Chat** opens its window (and sets it up the first
+time); **Brief** prints a plain status brief computed from the launcher's own
+data, no model call; **Ask Jarvis** sends one question to Jarvis' model and shows
+the answer inline. From a terminal:
+
+```bash
+omarchy-agent-launcher jarvis                    # chat (sets up on the default backend first)
+omarchy-agent-launcher jarvis setup [BACKEND] [MODEL]
+omarchy-agent-launcher jarvis brief              # agents, blockers, tokens, USD: plain text
+omarchy-agent-launcher jarvis ask "what did today cost, and who is blocked?"
+printf '%s\n' "Write release notes for v0.7" | omarchy-agent-launcher delegate --backend anthropic --name notes --task-title "Release notes" --job-stdin
+omarchy-agent-launcher result notes              # the worker's output, when it is done
+```
+
+Jarvis on a small local model is a real constraint: a 4B model with a 32K
+window can read JSON and run commands, but reasons less well than a frontier
+model. That is exactly why it delegates. If the local server is too small
+(`local-server tune` below), Jarvis warns at setup and the dropdown offers the
+other ready backends.
+
+### Backends: where work can go
+
+A **backend** is anything a Hermes agent can talk to. `omarchy-agent-launcher
+backends list` shows four kinds:
+
+| Kind | What it is | Cost basis |
+|------|-----------|------------|
+| **provider** | a row of the provider table: Anthropic, OpenAI, Nous, xAI, … with an API key or **browser sign-in with your own account** (OAuth: ready once any of your agents has signed in; new agents inherit that sign-in); also the local GPU and Ollama | per token (models.dev prices, or Hermes' own estimate) |
+| **endpoint** | any OpenAI-compatible `/v1` URL plus key: a Modal endpoint a teammate shares, a team vLLM server, a gateway | per token if you enter a price, else unknown |
+| **modal-dedicated** | a **vLLM server we deploy to your Modal workspace** (`modal/vllm_endpoint.py`) on the GPU and count you choose. Scales to zero after the idle window; the first request wakes it | **GPU time**, Modal's per-second price × your GPU count |
+| **modal-sandbox** | the same server inside a **Modal Sandbox** (`modal/vllm_sandbox.py`): one isolated container nothing else shares, alive for the lifetime you set (max 24 h) or until you stop it | GPU time from start to stop |
+
+Modal needs its CLI once: `pipx install modal` (or `uv tool install modal`),
+then `modal setup` (browser; the Jarvis page has a **Sign in to Modal** button
+that runs it in a terminal). The launcher never sees or stores your Modal
+token; it only runs `modal deploy`, `modal run`, `modal app stop`, and
+`modal sandbox terminate`.
+
+**Add backend** on the Jarvis page (or `backends add`) asks for the kind, an
+id, the model (a Hugging Face id; a fit for the VRAM you picked is suggested),
+the **GPU** with its price per hour and the **count** (1, 2, 4, 8; the
+estimated $/h updates), the idle window, the sandbox lifetime, the context
+length, and optional per-token prices. Nothing is billed until you press
+**Deploy** (dedicated) or **Start** (sandbox) on the row: that opens a terminal
+where `modal deploy` builds the image and downloads the weights (minutes the
+first time; weights are cached in a Modal Volume). The endpoint URL is recorded,
+a random API key protects the server, **Test** calls `/v1/models`, **Stop**
+stops the app or terminates the sandbox. Set `HF_TOKEN` in
+`~/.config/omarchy-agent-launcher/secrets.env` for gated models.
+
+GPU prices (USD per GPU-hour, from [modal.com/pricing](https://modal.com/pricing)
+as read on 2026-09-08; Modal bills per second; `omarchy-agent-launcher modal gpus`):
+
+| GPU | VRAM | $/h | GPU | VRAM | $/h |
+|-----|------|-----|-----|------|-----|
+| T4 | 16 GB | 0.59 | A100-80GB | 80 GB | 2.50 |
+| L4 | 24 GB | 0.80 | RTX-PRO-6000 | 96 GB | 3.03 |
+| A10 | 24 GB | 1.10 | H100 | 80 GB | 3.95 |
+| L40S | 48 GB | 1.95 | H200 | 141 GB | 4.54 |
+| A100-40GB | 40 GB | 2.10 | B200 · B300 | 180 · 288 GB | 6.25 · 7.10 |
+
+Agents on a backend endpoint are ordinary Hermes agents: their home gets
+`model.provider: custom`, the backend's URL as `base_url`, the backend's
+context length, and the backend's key as `OPENAI_API_KEY` in the agent's own
+mode-600 `.env`. The New agent page offers **Backend endpoint** as a provider
+with a dropdown of your saved backends.
+
+### Tokens and cost, total and per task
+
+Every Hermes agent home keeps a SQLite session store in which Hermes records,
+per session, the provider's real usage: input, output, cache-read, cache-write
+and reasoning tokens, plus Hermes' own cost estimate. The launcher reads it
+**read-only** and shows:
+
+- **Totals** (Jarvis page tiles, sidebar, `usage`): prompt tokens, output tokens,
+  USD, and the same for today. **Prompt = input + cache read + cache write**, the
+  way providers bill it; the tile shows the split.
+- **Per agent** (Agents page rows, `usage`): tokens, USD, session count.
+- **Per task** (Jarvis page table, `usage`): **a task is one agent session**
+  (Hermes titles them); a delegated worker is one task whose sessions roll up.
+  Sort by any column, filter by agent.
+
+Each row carries a **cost basis** so a dollar figure is never a mystery:
+`actual` (the provider reported it) · `hermes estimate` · `hermes estimate (plan)`
+(a subscription sign-in: what it *would* cost, covered by your plan) ·
+`models.dev` (catalog prices × tokens) · `backend price` (the per-token price you
+entered) · `GPU time (est.)` (Modal dedicated: session duration × GPU price;
+idle scale-down time is not counted) · `sandbox GPU time (on the backend)`
+(sandboxes are billed start to stop, shown on the backend row and in the total) ·
+`local GPU · $0` · `unknown`. OpenClaw keeps no comparable store; its agents show
+no usage. Sessions Hermes archived are skipped.
+
+```bash
+omarchy-agent-launcher usage            # totals, per agent, per task
+omarchy-agent-launcher usage --json     # {totals, agents, tasks, backends}
 ```
 
 ## Use
@@ -140,6 +271,7 @@ omarchy-agent-launcher switch         # graphical picker: jump to an agent's cha
 omarchy-agent-launcher status --json  # every agent with status, window, blockers, tasks
 omarchy-agent-launcher --dry-run launch NAME   # print every command, run nothing
 omarchy-agent-launcher --inline launch NAME    # session in this terminal, not a new window
+omarchy-agent-launcher jarvis | usage | delegate … | result NAME | backends … | modal …   # see "Jarvis" above
 ```
 
 ### Sessions persist
@@ -270,6 +402,13 @@ models are shown (default 14).
 
 Built on Omarchy 4.x with Hermes Agent 0.21 installed locally.
 
+- ✅ Usage aggregation: checked against a real agent's Hermes session store (two sessions, 1.78M prompt tokens of which 1.5M cache reads, $1.28 Hermes estimate) and a fixture store in `tests/run.sh` (prompt = input + cache, archived sessions skipped, cost basis labels, per-agent figures in `status --json`).
+- ✅ Backends registry: add / list / remove, generated keys, endpoint agents provisioned with `provider: custom` + `OPENAI_API_KEY`; `create --backend`; refusing to launch on an undeployed Modal backend.
+- ✅ Jarvis: setup, SOUL and bundled skill in its home, `-s jarvis` preload, `delegate` (parent, role, task title, launch), `delegate --wait` and `result` (ANSI stripped), `jarvis brief`, workers in `status --json`.
+- ⚠️ **Modal** is written against Modal's documented CLI and Python API (`modal deploy`, `modal run`, `Sandbox.create` with `encrypted_ports`, `Function.from_name(...).get_web_url()`) and verified in `--dry-run` plus `py_compile` only: **no Modal account was available** on the development machine. vLLM is installed unpinned in the image; set `OAL_VLLM_VERSION` to pin. Treat the Modal paths as beta and report what breaks.
+- ⚠️ The Jarvis page and the backend form were written to the same Quickshell contract as the other pages but not opened in a live shell during this version. The endpoint path (Hermes `custom` provider against a backend URL) is verified at the config level only, not against a live server.
+- ✅ Browser sign-ins are inherited: a new Hermes home for a provider some other home is already signed in to copies that home's `auth.json` (fixture test), so delegated workers and Jarvis never wait on a sign-in prompt nobody is watching. `backends list` calls an OAuth provider ready only when such a sign-in exists.
+
 - ✅ The dashboard: loads in the shell, persists when focus moves elsewhere, all four pages render with live data; Stop, Chat, Resolve, and the blocker badge were exercised.
 - ✅ Kanban mirror: fixture board → tasks in `status --json`, blocker on a `needs_input` card, idempotent re-sync, blocker cleared when the card completes.
 - ✅ Persistent sessions: a launched agent's window was killed outright; its tmux session survived and `chat` reopened a window attached to the same running conversation. Opening it twice focuses the existing window instead of duplicating it.
@@ -295,8 +434,15 @@ Built on Omarchy 4.x with Hermes Agent 0.21 installed locally.
   tails the event log with `tail -F`. The API key and the job text travel in
   the child's environment, never on a command line; the key is written once to
   the mode-600 secrets file.
-- Kanban boards are opened with `sqlite3 -readonly`. Desktop notifications go
-  through `omarchy-notification-send`.
+- Kanban boards and Hermes session stores are opened with `sqlite3 -readonly`.
+  Desktop notifications go through `omarchy-notification-send`.
+- Backend keys live in the same mode-600 `secrets.env` as `BACKEND_<ID>_KEY`;
+  a Modal server's key is generated locally and reaches Modal as a Modal Secret
+  built at deploy time, not baked into the image. Your Modal token stays in
+  `~/.modal.toml`, written and read only by the `modal` CLI.
+- Jarvis has no powers of its own: it runs the same `omarchy-agent-launcher`
+  commands you can, inside a Hermes session that asks before dangerous shell
+  commands unless you launch it unattended.
 
 ## Remove
 

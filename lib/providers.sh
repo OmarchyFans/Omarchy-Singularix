@@ -26,7 +26,11 @@ PROVIDERS=(
   "deepseek|DeepSeek|DEEPSEEK_API_KEY|deepseek|n|deepseek|n|-|deepseek-chat|deepseek-chat,deepseek-reasoner"
   "ollama|Ollama (local, no key)|-|custom|n|ollama|n|http://localhost:11434/v1|qwen3:8b|qwen3:8b,llama3.3:70b,gpt-oss:20b"
   "local|Local GPU (llama.cpp, offline)|-|lmstudio|n|openai|n|http://127.0.0.1:8080/v1|-|-"
+  "endpoint|Backend endpoint (OpenAI-compatible: Modal, shared server)|-|custom|n|-|n|-|-|-"
 )
+# "endpoint" = a backend from lib/backends.sh (a Modal endpoint or sandbox we run, or any
+# OpenAI-compatible URL you were given). URL, model, and key come from the backend entry;
+# Hermes reaches it through its `custom` provider. Hermes only.
 # "local" = the llama.cpp server of the Omarchy local agent (lib/local.sh). Its
 # URL and models are discovered live; Hermes reaches it through its LM Studio
 # code path (same OpenAI-compatible API, and the only path that accepts a

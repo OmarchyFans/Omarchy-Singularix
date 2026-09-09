@@ -17,9 +17,11 @@ jobs:
           jq -e '.schemaVersion == 1 and (.id|startswith("omarchy.")|not) and (.entryPoints.barWidget|length>0)' manifest.json
           test -f "$(jq -r .entryPoints.barWidget manifest.json)"
           ! find . -path ./.git -prune -o -type l -print | grep .
+      - name: modal scripts compile
+        run: python3 -m py_compile modal/*.py
       - name: form test (stubbed UI)
         run: |
-          sudo apt-get install -y -qq curl >/dev/null
+          sudo apt-get install -y -qq curl sqlite3 >/dev/null
           GUM_VER=0.16.2
           curl -fsSLo /tmp/gum.deb "https://github.com/charmbracelet/gum/releases/download/v${GUM_VER}/gum_${GUM_VER}_amd64.deb" && sudo dpkg -i /tmp/gum.deb
           tests/run.sh
