@@ -5,8 +5,11 @@
 # is bypassed; only the binary's presence is checked by the launcher).
 set -euo pipefail
 # The suite may run inside a launcher-spawned agent session; its OAL_* environment
-# (OAL_AGENT, OAL_POPUP, …) must not leak into the commands under test.
-unset "${!OAL_@}"
+# (OAL_AGENT, OAL_POPUP, …) must not leak into the commands under test — e.g.
+# cmd_delegate's `${OAL_AGENT:-}` fallback would otherwise pick up the
+# caller's identity instead of the test's, giving worker profiles the wrong
+# parent.
+unset "${!OAL_@}" 2>/dev/null || true
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export XDG_CONFIG_HOME="$T/config" XDG_DATA_HOME="$T/data" XDG_STATE_HOME="$T/state" HOME_REAL="$HOME"
