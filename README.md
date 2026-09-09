@@ -5,8 +5,8 @@
 <h1 align="center">Your desktop, staffed.</h1>
 
 <p align="center">
-  <b>Press one key. Meet Jarvis, your chief of staff. Hand out work to AI agents that run on your machine, in a container, on a Linux VM in the cloud, or offline on your own GPU.</b><br>
-  Watch them work, jump into any chat, see what everything costs, and get pinged the moment one needs you.
+  <b>One key. A chief of staff named Jarvis. A team of AI agents that runs for free on your own GPU and calls in the big models only when you say so.</b><br>
+  No config files. No accounts to start. Nothing leaves your machine unless you send it.
 </p>
 
 <p align="center">
@@ -19,29 +19,76 @@
 
 ---
 
-## Why you'll love it
+## Dead simple. Seriously.
 
-🤖 **A chief of staff, not a chatbot.** Jarvis runs on your own GPU by default, knows every agent you've launched, what each one is doing and what it has cost, and delegates work to bigger models when you ask. Ask it for a brief. Ask it anything.
+Install the plugin. Press **SUPER + ALT + A**. Jarvis says hello. That's the setup.
 
-⚡ **One key, one page, one agent.** SUPER + ALT + A opens the dashboard. The New agent page asks six questions: which agent, where it runs, which model, how it signs in, which skills, what the job is. Launch. Done.
+Want an agent of your own? One page, six questions: which agent, where it runs,
+which model, how it signs in, which skills, what the job is. Click **Launch**.
+No YAML, no dotfiles, no "first configure your environment". If you can fill
+in a form, you can run a team.
 
-🏠 **Runs where you say.** Your shell. A Docker container. A Linux VM on a cloud account you hold. Soon: **omarchy.fans cloud**, a machine we run for you, priced on the form before you click.
+## Free. As in $0.
 
-🔌 **Every model on one dropdown.** Anthropic, OpenAI, OpenAI Codex, Nous Portal, xAI, OpenRouter, Gemini, DeepSeek, Ollama, any OpenAI-compatible endpoint, or a GPU server you deploy. Live lists with the newest models and **prices per million tokens**, so you know before you spend.
+Pick **Local GPU** and your agents run on a model that lives on your graphics
+card. No API key. No subscription. No meter. Run one agent or ten, all night,
+every night: the bill is zero, and it stays zero.
 
-🔒 **Offline, on your GPU, for real.** Pick **Local GPU** and the agent talks only to a llama.cpp server on `127.0.0.1`. Pull the network cable; it keeps working. Nothing you type, no file it reads, no key it holds ever leaves the machine.
+Jarvis runs there by default, so your chief of staff costs nothing to keep on
+duty.
 
-🧟 **Sessions that refuse to die.** Every agent lives in its own terminal session. Close the window, switch workspaces, come back tomorrow: the conversation is still there. Sign-in prompts wait for you.
+## Delegate the heavy lifting to whoever you trust.
 
-🔔 **Blockers find you.** When an agent needs a decision, a sign-in, or a hand, it lands in Notifications and as a desktop toast that opens the right page. A red badge on the bar counts what's waiting.
+Some jobs deserve a frontier model. Tell Jarvis, and it hands the task to the
+provider you choose: **Anthropic, OpenAI, Grok, Gemini, DeepSeek, OpenRouter**,
+your own OpenAI-compatible endpoint, or a GPU server you deploy. It shows you
+the model and the price per million tokens first, waits for your yes, and
+brings the result back to your desktop with the cost written next to it.
 
-📒 **Every event, sortable.** Created, launched, signed in, task started, task done, blocked, stopped. Filter by agent, task, or level; click a column to sort.
+And Jarvis itself is not chained to your GPU. Run your chief of staff on Claude,
+on GPT, on Grok, on anything you can sign in to, and switch whenever you like.
+Your agents, your models, your choice, per task.
 
-💸 **Costs at a glance.** Prompt and output tokens, USD, today and total, per agent and per task, straight from the agents' own session stores.
+## Private by design. Future-proof by choice.
 
-🗂️ **Projects with a pulse.** Register a project and see its waterfall phase, percent complete, and open blockers, read from the agent's own task board.
+**Privacy.** A local agent cannot leak what it never sends. Your files, your
+keys, your prompts stay on the machine. Every agent gets its own isolated home,
+secrets live in a mode-600 file, and the dashboard only ever runs the plugin's
+own commands. When you do delegate, you see exactly what goes where, and to whom.
 
-🎨 **Looks like Omarchy.** It's a Quickshell window drawn with the shell's own tokens, so it wears your theme, light or dark, and switches with it.
+**Future-proofing.** Open-weight models get better every month, and they are
+yours to keep: no provider can deprecate them, reprice them, or train on your
+data. Build your workflow on agents that run wherever you point them, from your
+laptop to a GPU in the cloud, and you will never be held hostage by a pricing
+page again.
+
+## Coming to omarchy.fans cloud: your own frontier GPUs.
+
+Behind the scenes we are building the thing power users keep asking for:
+**dedicated GPU endpoints** for the very best open-weight frontier models,
+private to you, ready in minutes, billed by the hour with the price on the form
+before you launch. Bring your data and **tune the weights** to your work; the
+model you shape stays yours. Point Jarvis at it like any other backend. Same
+privacy story as your laptop, with far more horsepower. No accounts to create
+until the day you want it; the free runtimes never change.
+
+## Everything else you get
+
+⚡ **A dashboard that stays.** Every agent with a status pill, its job, last event, tasks, tokens and USD; one click to chat, stop, edit, remove.
+
+🧟 **Sessions that refuse to die.** Close the window, switch workspaces, come back tomorrow: the conversation is still there. Sign-in prompts wait for you.
+
+🔔 **Blockers find you.** When an agent needs a decision, it lands in Notifications and as a desktop toast that opens the right page. A red badge on the bar counts what's waiting.
+
+📒 **Every event, sortable.** Filter by agent, task, or level; click a column to sort.
+
+💸 **Costs at a glance.** Prompt and output tokens and USD, today and total, per agent and per task, from the agents' own session stores.
+
+🗂️ **Projects with a pulse.** Register a project and see its phase, percent complete, and open blockers.
+
+🏠 **Runs where you say.** Your shell. A Docker container. A Linux VM on a cloud account you hold. Soon, omarchy.fans cloud.
+
+🎨 **Looks like Omarchy.** A Quickshell window drawn with the shell's own tokens, so it wears your theme and switches with it.
 
 <p align="center">
   <img src="docs/img/dashboard-jarvis.png" alt="Jarvis: brief, ask, tokens and cost" width="470">
@@ -51,7 +98,7 @@
 **An [omarchy.fans](https://omarchy.fans) project.** Open source, MIT, on GitHub as
 [OmarchyFans](https://github.com/OmarchyFans); modpunk is the main contributor.
 The plugin is free and stays free. The paid part, when it arrives, is a
-convenience: machines we run for you, sold under omarchy.fans' terms.
+convenience: machines and GPUs we run for you, sold under omarchy.fans' terms.
 
 ## Get it in a minute
 
@@ -72,10 +119,10 @@ Then install what your first agent needs:
 
 | You want | You need |
 |----------|----------|
+| an agent for free, offline | the [Omarchy Help](https://github.com/OmarchyFans/omarchy-fans-help) plugin's local model service, and one `local-server tune` (below) |
 | an agent in your shell | [Hermes Agent](https://github.com/NousResearch/hermes-agent) (`hermes` on PATH) or [OpenClaw](https://openclaw.ai) |
 | an agent in a container | `omarchy install docker` (the launcher uses `sudo docker`, Omarchy's default) |
 | an agent on a cloud VM | that provider's CLI, signed in once; the launcher walks you through it |
-| an agent offline on your GPU | the [Omarchy Help](https://github.com/OmarchyFans/omarchy-fans-help) plugin's local model service, and one `local-server tune` (below) |
 | persistent sessions | `tmux` (ships with Omarchy) |
 
 Everything below is the detail. You don't need it to start.
@@ -237,6 +284,7 @@ Ollama lists what `ollama list` reports; offline, static suggestions are used.
 | **Docker** | nobody | `omarchy install docker` |
 | **cloud VM** | you pay your provider directly | your own account and its CLI |
 | **omarchy.fans cloud** (coming) | you pay omarchy.fans | an omarchy.fans account |
+| **omarchy.fans GPU endpoints** (coming) | you pay omarchy.fans by the hour | an omarchy.fans account; open-weight frontier models, private to you, tunable on your data |
 
 The hosted runtime is the convenience option: sign in once with your
 omarchy.fans account, pick it on the form next to the others, and the machine
