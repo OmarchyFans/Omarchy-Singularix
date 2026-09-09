@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="686" height="56" viewBox="0 0 686 56" role="img" aria-label="Delegate the heavy lifting to whoever you trust.">
+<defs>
+<clipPath id="card"><rect width="686" height="56" rx="12"/></clipPath>
+</defs>
+<g clip-path="url(#card)">
+<rect width="686" height="56" fill="#171723"/>
+<rect width="8" height="56" fill="#89b4fa"/>
+</g>
+<rect x="0.75" y="0.75" width="684.5" height="54.5" rx="12" fill="none" stroke="#89b4fa" stroke-opacity="0.45" stroke-width="1.5"/>
+<text x="28" y="35.5" font-family="JetBrainsMono Nerd Font, JetBrains Mono, Fira Code, monospace" font-size="22" font-weight="700" fill="#cdd6f4" textLength="634" lengthAdjust="spacingAndGlyphs">Delegate the heavy lifting to whoever you trust.</text>
+<rect x="28" y="44" width="634" height="3" rx="1.5" fill="#89b4fa" fill-opacity="0.85"/>
+</svg>

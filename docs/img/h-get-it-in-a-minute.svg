@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="290" height="56" viewBox="0 0 290 56" role="img" aria-label="Get it in a minute">
+<defs>
+<clipPath id="card"><rect width="290" height="56" rx="12"/></clipPath>
+</defs>
+<g clip-path="url(#card)">
+<rect width="290" height="56" fill="#171723"/>
+<rect width="8" height="56" fill="#89b4fa"/>
+</g>
+<rect x="0.75" y="0.75" width="288.5" height="54.5" rx="12" fill="none" stroke="#89b4fa" stroke-opacity="0.45" stroke-width="1.5"/>
+<text x="28" y="35.5" font-family="JetBrainsMono Nerd Font, JetBrains Mono, Fira Code, monospace" font-size="22" font-weight="700" fill="#cdd6f4" textLength="238" lengthAdjust="spacingAndGlyphs">Get it in a minute</text>
+<rect x="28" y="44" width="238" height="3" rx="1.5" fill="#89b4fa" fill-opacity="0.85"/>
+</svg>
