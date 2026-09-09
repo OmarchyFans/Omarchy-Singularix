@@ -45,7 +45,12 @@ under `~/.local/share/omarchy-agent-launcher/agents/<name>/`. Your real
 are read so you can pick skills. Saved agents can be
 relaunched, edited, or destroyed from the same menu.
 
-A project of [omarchy.fans](https://omarchy.fans).
+**An [omarchy.fans](https://omarchy.fans) project.** Open source under the MIT
+license; modpunk is the main contributor. The plugin is free and always will
+be: agents run on your own machine, in a container, or on a cloud account you
+hold. omarchy.fans will also offer **hosted cloud runtimes** for these agents as
+a paid convenience, with the price shown in the setup form before you launch
+(see [Hosting](#hosting-your-own-or-omarchyfans-cloud) below).
 
 ## Install
 
@@ -54,7 +59,8 @@ omarchy plugin add https://github.com/modpunk/omarchy-agent-launcher
 omarchy plugin enable fans.omarchy.agent-launcher
 ```
 
-`omarchy plugin add` clones the repo into
+The plugin is not yet listed in the Omarchy plugin marketplace; installing by
+URL, as above, is the supported path. `omarchy plugin add` clones the repo into
 `~/.config/omarchy/plugins/fans.omarchy.agent-launcher/` and lands it
 **disabled** so you can read it first. It runs no code, no installer, no sudo.
 Enabling adds a robot button to the bar; clicking it opens the **Agent
@@ -392,6 +398,10 @@ if the server fails to come up, use `--kv q4_0` or a smaller `--ctx`. A 27B
 model does not fit next to a large context on 4 GB. `--model FILE` picks another
 `.gguf` from the local agent's models folder.
 
+The help plugin's service currently serves Qwen3.5-4B, chosen by navigation
+accuracy on held-out manual questions; the launcher shows whatever the server
+serves, and `--model FILE` overrides it for the tuned drop-in.
+
 OpenClaw is pointed at the same server through `OPENAI_BASE_URL`; that path is
 untested.
 
@@ -407,6 +417,28 @@ Nous Portal) show no prices because the plan covers usage; Ollama lists what
 [`lib/providers.sh`](lib/providers.sh) are used. "Custom model id…" is always
 offered for anything not listed. Set `OAL_MODELS_LIMIT` to change how many
 models are shown (default 14).
+
+## Hosting: your own, or omarchy.fans cloud
+
+Everything in this repository runs on infrastructure you control:
+
+| Runtime | Who pays whom | What you need |
+|---------|---------------|---------------|
+| **local shell** | nobody | the agent CLI installed |
+| **Docker** | nobody | `omarchy install docker` |
+| **Fly.io Sprite** | you pay Fly.io directly | your own Sprites API token |
+| **omarchy.fans cloud** (coming) | you pay omarchy.fans | an omarchy.fans account |
+
+The hosted runtime is the convenience option: sign in once with your
+omarchy.fans account, pick it in the setup form next to the others, and the
+machine is provisioned, metered, and billed by omarchy.fans. The price per hour
+is shown on the form before you launch, the chat window and the dashboard work
+exactly as they do for the other runtimes, and `destroy` removes the machine
+and stops the meter. Which suppliers omarchy.fans builds on is its own
+business; what you get is a machine run under omarchy.fans' terms and
+privacy policy, which will be linked from the form. The adapter for it will
+live in this repository like the others (`lib/runtimes/`), so you can read
+exactly what leaves your machine. Nothing about the free runtimes changes.
 
 ## What has been tested
 
@@ -425,6 +457,7 @@ Built on Omarchy 4.x with Hermes Agent 0.21 installed locally.
 - ✅ The setup panel: loads in the shell, reads live data from `info --json`, and renders every control (screenshot above is a real capture). Its Launch path was exercised piecewise: the environment handoff (`Process.environment` overlays, PATH intact) and the no-terminal `create … --launch` branch, which opened the floating launch terminal and surfaced a runtime error there. Keyboard entry into fields follows hyprmoncfg's proven KeyboardPanel pattern but was not typed into by hand.
 
 - ✅ Hermes · local: provisioning, config parsing, per-agent secrets, skill copy + preload, and the request path (verified with a deliberately invalid key that produced the provider's "incorrect API key" error).
+- ✅ Hermes on the **local GPU** provider, end to end and offline: the agent ran on the llama.cpp server (32K context, one slot, 8-bit KV cache on a 4 GB RTX 3050 Ti), executed tools, and kept its cache between turns: about 18 s for the first ~14K-token turn, a few seconds for later ones, ~16 tokens/s generation, 3.5 GB VRAM steady.
 - ✅ Every agent × runtime combination in `--dry-run` (command generation).
 - ⚠️ Docker, Sprite, and OpenClaw paths are written against the official docs and CLIs but were **not exercised end to end** (no docker group, no Sprites account, OpenClaw not installed here). Treat them as beta; issues and PRs welcome.
 
@@ -469,7 +502,15 @@ Saved agents and secrets stay in `~/.config/omarchy-agent-launcher/` and
 `~/.local/share/omarchy-agent-launcher/` until you delete them; `destroy`
 removes remote containers and sprites first.
 
+## Contributing
+
+Issues and pull requests are welcome at
+[github.com/modpunk/omarchy-agent-launcher](https://github.com/modpunk/omarchy-agent-launcher).
+Run `tests/run.sh` (stubbed UI, no network with `OAL_OFFLINE=1`) before
+opening a PR; `omarchy plugin validate .` checks the manifest.
+
 ## License
 
-MIT. External dependencies: gum (MIT), jq (MIT); at runtime the agents and
-CLIs you choose (Hermes Agent — MIT; OpenClaw — MIT; Docker; Sprites CLI).
+MIT, © 2026 omarchy.fans; main contributor modpunk. External dependencies: gum
+(MIT), jq (MIT); at runtime the agents and CLIs you choose (Hermes Agent — MIT;
+OpenClaw — MIT; Docker; Sprites CLI).
