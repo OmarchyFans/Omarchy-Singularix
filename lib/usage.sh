@@ -63,7 +63,7 @@ usage_agent_json() {
       elif $s.estimated_cost_usd != null then {cost: $s.estimated_cost_usd, basis: (if $auth == "oauth" then "hermes estimate (plan)" else "hermes estimate" end)}
       elif $provider == "local" or $provider == "ollama" then {cost: 0, basis: "local GPU · $0"}
       elif ($backend != null and ($backend.input_per_m // null) != null) then
-        {cost: (($s.input_tokens + $s.cache_read_tokens + $s.cache_write_tokens) * $backend.input_per_m + $s.output_tokens * ($backend.output_per_m // $backend.input_per_m)) / 1000000, basis: "backend price"}
+        {cost: ((($s.input_tokens + $s.cache_read_tokens + $s.cache_write_tokens) * $backend.input_per_m + $s.output_tokens * ($backend.output_per_m // $backend.input_per_m)) / 1000000), basis: "backend price"}
       elif (price_for($s.model)) != null then (price_for($s.model)) as $p |
         {cost: (($s.input_tokens * $p.input + $s.output_tokens * $p.output
                  + $s.cache_read_tokens * ($p.cache_read // $p.input) + $s.cache_write_tokens * ($p.cache_write // $p.input)) / 1000000), basis: "models.dev"}
