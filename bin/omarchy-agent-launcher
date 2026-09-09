@@ -73,6 +73,7 @@ source "$OAL_LIB/local.sh"
 source "$OAL_LIB/backends.sh"
 source "$OAL_LIB/modal.sh"
 source "$OAL_LIB/usage.sh"
+source "$OAL_LIB/fallback.sh"
 source "$OAL_LIB/jarvis.sh"
 # Tests replace the gum wrappers with scripted answers (see tests/run.sh).
 # shellcheck source=/dev/null
@@ -715,6 +716,40 @@ cmd_backends() {
   esac
 }
 
+# Register/clear a provider's API key without it ever touching argv or a shell
+# history entry: the value comes from $OAL_API_KEY only, same convention as
+# `create --api-key-env`. set-key never prints the value back.
+cmd_providers() {
+  local id=${CMD[2]:-}
+  case "${CMD[1]:-list}" in
+    list) providers_all_ids | while read -r p; do
+            [[ -n $p ]] || continue
+            local env; env=$(provider_env "$p")
+            local state=ready
+            if [[ $env != - ]]; then [[ -n $(secret_get "$env") ]] || state="needs $env"; fi
+            printf '%-16s %-32s %s\n' "$p" "$(provider_label "$p")" "$state"
+          done ;;
+    set-key)
+      [[ -n $id ]] || fail "providers set-key needs a provider id"
+      provider_label "$id" >/dev/null 2>&1 || fail "providers set-key: unknown provider '$id'"
+      local var; var=$(provider_env "$id")
+      [[ $var != - ]] || fail "providers set-key: $id takes no API key"
+      [[ -n ${OAL_API_KEY:-} ]] || fail "providers set-key: \$OAL_API_KEY is empty (export it right before this call, never on the same line as other commands, then unset it)"
+      secret_set "$var" "$OAL_API_KEY"
+      say "saved $var (${#OAL_API_KEY} chars) — never printed" ;;
+    clear-key)
+      [[ -n $id ]] || fail "providers clear-key needs a provider id"
+      local var; var=$(provider_env "$id")
+      [[ $var != - ]] || fail "providers clear-key: $id takes no API key"
+      if [[ -f $OAL_SECRETS ]] && grep -q "^$var=" "$OAL_SECRETS"; then
+        local tmp; tmp=$(mktemp "$OAL_CONF/.secrets.XXXXXX")
+        grep -v "^$var=" "$OAL_SECRETS" >"$tmp"; chmod 600 "$tmp"; mv -f "$tmp" "$OAL_SECRETS"
+      fi
+      say "cleared $var" ;;
+    *) fail "usage: omarchy-agent-launcher providers list|set-key ID|clear-key ID   (set-key reads \$OAL_API_KEY, never argv)" ;;
+  esac
+}
+
 cmd_modal() {
   case "${CMD[1]:-status}" in
     status) modal_status_json | jq . ;;
@@ -806,6 +841,8 @@ case "${CMD[0]:-menu}" in
   delegate) cmd_delegate ;;
   result)   cmd_result "${CMD[1]:?result needs a name}" ;;
   backends) cmd_backends ;;
+  providers) cmd_providers ;;
+  fallback) cmd_fallback "${CMD[@]:1}" ;;
   modal)    cmd_modal ;;
   *) fail "unknown command: ${CMD[0]} (try --help)" ;;
 esac

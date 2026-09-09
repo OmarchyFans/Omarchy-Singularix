@@ -65,9 +65,15 @@ agent_provision() { # agent_provision <name>
       local bctx=""; [[ -n $backend_id ]] && declare -F backend_get >/dev/null && bctx=$(backend_get "$backend_id" 2>/dev/null | jq -r '.model_ctx // empty' 2>/dev/null)
       echo "  context_length: ${bctx:-32768}"
     fi
+    local fchain; fchain=$(profile_get "$name" fallback_chain)
+    if [[ -n $fchain && $fchain != null ]] && declare -F fallback_providers_yaml >/dev/null; then
+      fallback_providers_yaml "$fchain" "$provider" "$model"
+    fi
     echo "agent:"
     echo "  system_prompt: |"
     sed 's/^/    /' <<<"$job"
+    local reasoning; reasoning=$(profile_get "$name" reasoning)
+    [[ -n $reasoning && $reasoning != null ]] && echo "  reasoning_effort: $(jq -Rn --arg v "$reasoning" '$v')"
     if [[ $provider == local ]]; then
       echo "auxiliary:"
       echo "  compression:"
@@ -135,6 +141,7 @@ SOUL
     [[ -n $skill ]] || continue
     if [[ -d $(agent_skill_source "$skill") ]]; then
       mkdir -p "$home/skills/$(dirname "$skill")"
+      rm -rf "$home/skills/$skill"   # cp -R nests inside an existing dir instead of replacing it
       cp -R "$(agent_skill_source "$skill")" "$home/skills/$skill"
     else
       warn "skill not found locally, skipped: $skill"
