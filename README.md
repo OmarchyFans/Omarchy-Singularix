@@ -19,7 +19,7 @@
 
 ---
 
-## Dead simple. Seriously.
+<h2 id="dead-simple-seriously"><img src="docs/img/h-dead-simple-seriously.svg" alt="Dead simple. Seriously." height="44"></h2>
 
 Install the plugin. Press **SUPER + ALT + A**. Jarvis says hello. That's the setup.
 
@@ -28,7 +28,7 @@ which model, how it signs in, which skills, what the job is. Click **Launch**.
 No YAML, no dotfiles, no "first configure your environment". If you can fill
 in a form, you can run a team.
 
-## Free. As in $0.
+<h2 id="free-as-in-0"><img src="docs/img/h-free-as-in-0.svg" alt="Free. As in $0." height="44"></h2>
 
 Pick **Local GPU** and your agents run on a model that lives on your graphics
 card. No API key. No subscription. No meter. Run one agent or ten, all night,
@@ -37,7 +37,7 @@ every night: the bill is zero, and it stays zero.
 Jarvis runs there by default, so your chief of staff costs nothing to keep on
 duty.
 
-## Delegate the heavy lifting to whoever you trust.
+<h2 id="delegate-the-heavy-lifting-to-whoever-you-trust"><img src="docs/img/h-delegate-the-heavy-lifting-to-whoever-you-trust.svg" alt="Delegate the heavy lifting to whoever you trust." height="44"></h2>
 
 Some jobs deserve a frontier model. Tell Jarvis, and it hands the task to the
 provider you choose: **Anthropic, OpenAI, Grok, Gemini, DeepSeek, OpenRouter**,
@@ -49,7 +49,7 @@ And Jarvis itself is not chained to your GPU. Run your chief of staff on Claude,
 on GPT, on Grok, on anything you can sign in to, and switch whenever you like.
 Your agents, your models, your choice, per task.
 
-## Private by design. Future-proof by choice.
+<h2 id="private-by-design-future-proof-by-choice"><img src="docs/img/h-private-by-design-future-proof-by-choice.svg" alt="Private by design. Future-proof by choice." height="44"></h2>
 
 **Privacy.** A local agent cannot leak what it never sends. Your files, your
 keys, your prompts stay on the machine. Every agent gets its own isolated home,
@@ -62,7 +62,7 @@ data. Build your workflow on agents that run wherever you point them, from your
 laptop to a GPU in the cloud, and you will never be held hostage by a pricing
 page again.
 
-## Coming to omarchy.fans cloud: your own frontier GPUs.
+<h2 id="coming-to-omarchy-fans-cloud-your-own-frontier-gpus"><img src="docs/img/h-coming-to-omarchy-fans-cloud-your-own-frontier-gpus.svg" alt="Coming to omarchy.fans cloud: your own frontier GPUs." height="44"></h2>
 
 Behind the scenes we are building the thing power users keep asking for:
 **dedicated GPU endpoints** for the very best open-weight frontier models,
@@ -72,23 +72,23 @@ model you shape stays yours. Point Jarvis at it like any other backend. Same
 privacy story as your laptop, with far more horsepower. No accounts to create
 until the day you want it; the free runtimes never change.
 
-## Everything else you get
+<h2 id="everything-else-you-get"><img src="docs/img/h-everything-else-you-get.svg" alt="Everything else you get" height="44"></h2>
 
-⚡ **A dashboard that stays.** Every agent with a status pill, its job, last event, tasks, tokens and USD; one click to chat, stop, edit, remove.
+🖥️ **A dashboard that stays.** Every agent with a status pill, its job, last event, tasks, tokens and USD; one click to chat, stop, edit, remove.
 
-🧟 **Sessions that refuse to die.** Close the window, switch workspaces, come back tomorrow: the conversation is still there. Sign-in prompts wait for you.
+📟 **Sessions that refuse to die.** Close the window, switch workspaces, come back tomorrow: the conversation is still there. Sign-in prompts wait for you.
 
-🔔 **Blockers find you.** When an agent needs a decision, it lands in Notifications and as a desktop toast that opens the right page. A red badge on the bar counts what's waiting.
+🚨 **Blockers find you.** When an agent needs a decision, it lands in Notifications and as a desktop toast that opens the right page. A red badge on the bar counts what's waiting.
 
-📒 **Every event, sortable.** Filter by agent, task, or level; click a column to sort.
+🧾 **Every event, sortable.** Filter by agent, task, or level; click a column to sort.
 
-💸 **Costs at a glance.** Prompt and output tokens and USD, today and total, per agent and per task, from the agents' own session stores.
+🧠 **Costs at a glance.** Prompt and output tokens and USD, today and total, per agent and per task, from the agents' own session stores.
 
-🗂️ **Projects with a pulse.** Register a project and see its phase, percent complete, and open blockers.
+🧭 **Projects with a pulse.** Register a project and see its phase, percent complete, and open blockers.
 
-🏠 **Runs where you say.** Your shell. A Docker container. A Linux VM on a cloud account you hold. Soon, omarchy.fans cloud.
+🐧 **Runs where you say.** Your shell. A Docker container. A Linux VM on a cloud account you hold. Soon, omarchy.fans cloud.
 
-🎨 **Looks like Omarchy.** A Quickshell window drawn with the shell's own tokens, so it wears your theme and switches with it.
+🎛️ **Looks like Omarchy.** A Quickshell window drawn with the shell's own tokens, so it wears your theme and switches with it.
 
 <p align="center">
   <img src="docs/img/dashboard-jarvis.png" alt="Jarvis: brief, ask, tokens and cost" width="470">
@@ -100,7 +100,7 @@ until the day you want it; the free runtimes never change.
 The plugin is free and stays free. The paid part, when it arrives, is a
 convenience: machines and GPUs we run for you, sold under omarchy.fans' terms.
 
-## Get it in a minute
+<h2 id="get-it-in-a-minute"><img src="docs/img/h-get-it-in-a-minute.svg" alt="Get it in a minute" height="44"></h2>
 
 ```bash
 omarchy plugin add https://github.com/OmarchyFans/omarchy-fans-agent-launcher
