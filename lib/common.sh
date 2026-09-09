@@ -36,12 +36,24 @@ show_cmd() { printf '  $ %q' "$1"; printf ' %q' "${@:2}"; printf '\n'; }
 # running, and opening the agent again focuses the window or reattaches.
 window_title() { printf 'Agent · %s' "$1"; }
 tmux_session() { printf 'oal-%s' "$1"; }
+# Each agent gets its own tmux server on a socket under the launcher's state
+# directory. Session names are global on the default server, so anything else
+# using tmux (a test run with a temporary config, another launcher config,
+# the user's own tmux) could see or kill an agent's session by name; and with
+# Omarchy's `detach-on-destroy off`, a window whose session ends would switch
+# to another agent's session. A private server per agent rules both out.
+tmux_socket() { printf '%s/tmux/%s.sock' "${OAL_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-agent-launcher}" "$(tmux_session "$1")"; }
+tmux_for() { # tmux_for <name> <tmux args...>
+  local name=$1; shift
+  mkdir -p "$(dirname "$(tmux_socket "$name")")"
+  tmux -S "$(tmux_socket "$name")" "$@"
+}
 window_address() {
   have hyprctl || return 0
   hyprctl clients -j 2>/dev/null | jq -r --arg t "$(window_title "$1")" \
     '.[] | select(.initialTitle==$t or .title==$t) | .address' | head -n1
 }
-session_alive() { have tmux && tmux has-session -t "$(tmux_session "$1")" 2>/dev/null; }
+session_alive() { have tmux && tmux_for "$1" has-session -t "$(tmux_session "$1")" 2>/dev/null; }
 
 # Focus the agent's window if it is open; otherwise open a terminal attached
 # to its tmux session (created on demand around `<launcher> session <name>`).
@@ -54,7 +66,8 @@ open_agent_window() { # open_agent_window <name>
   fi
   local -a inner
   if have tmux; then
-    inner=(tmux new-session -A -s "$(tmux_session "$name")" -- "$OAL_SELF" session "$name")
+    mkdir -p "$(dirname "$(tmux_socket "$name")")"
+    inner=(tmux -S "$(tmux_socket "$name")" new-session -A -s "$(tmux_session "$name")" -- "$OAL_SELF" session "$name")
   else
     warn "tmux not found; the session will not survive closing its window (omarchy pkg add tmux)"
     inner=("$OAL_SELF" session "$name")
@@ -133,8 +146,8 @@ profile_write() {
 # First non-empty line of the job description, without a leading "#".
 job_title() { sed -n '/[^[:space:]]/{s/^#\+[[:space:]]*//;p;q}' "$(job_path "$1")" 2>/dev/null | cut -c1-120; }
 
-# Kill the agent's tmux session (the window closes with it).
-session_kill() { have tmux && tmux kill-session -t "$(tmux_session "$1")" 2>/dev/null; }
+# Kill the agent's tmux session (the window closes with it; its private server exits with its last session).
+session_kill() { have tmux && tmux_for "$1" kill-session -t "$(tmux_session "$1")" 2>/dev/null; }
 
 # Agents that keep a task board override this (hermes: kanban). JSON array.
 agent_tasks_json() { printf '[]'; }

@@ -4,6 +4,9 @@
 # launches for every agent × runtime. Needs bash, jq, gum (for `gum write`
 # is bypassed; only the binary's presence is checked by the launcher).
 set -euo pipefail
+# The suite may run inside a launcher-spawned agent session; its OAL_* environment
+# (OAL_AGENT, OAL_POPUP, …) must not leak into the commands under test.
+unset "${!OAL_@}"
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export XDG_CONFIG_HOME="$T/config" XDG_DATA_HOME="$T/data" XDG_STATE_HOME="$T/state" HOME_REAL="$HOME"
@@ -79,6 +82,9 @@ for a in hermes openclaw; do for r in local docker sprite; do
   grep -q "would launch" <<<"$inl" || { echo "$inl"; tfail "no launch line for $n"; }
   out=$("$L" --dry-run launch "$n" 2>&1) || { echo "$out"; tfail "dry-run window $n"; }
   grep -q "would open window" <<<"$out" || { echo "$out"; tfail "no window line for $n"; }
+  # The session must live on this config's own tmux socket, never the default server
+  # (a test run or another config could otherwise see or kill a real agent by name).
+  if command -v tmux >/dev/null; then grep -q -- "-S $XDG_STATE_HOME/omarchy-agent-launcher/tmux/oal-$n.sock" <<<"$out" || { echo "$out"; tfail "tmux socket for $n"; }; fi
   case $r in docker) grep -q "docker run -it --rm" <<<"$inl" || tfail "$n docker cmd";; sprite) grep -q "sprite exec --tty" <<<"$inl" || tfail "$n sprite cmd";; esac
 done; done
 pass "6 combinations"
@@ -120,6 +126,14 @@ out=$("$L" --dry-run event issue-triage blocker "quiet" --level blocker 2>&1); g
 OAL_EVENTS_MAX_BYTES=100 "$L" event issue-triage note "rotate me please, this line is long enough to exceed the tiny cap" >/dev/null
 [[ -f $S/events.1.jsonl ]] || tfail "rotation"
 out=$("$L" stop issue-triage 2>&1); grep -q "not running" <<<"$out" || tfail "stop when idle"
+if command -v tmux >/dev/null; then
+  # A real session on the private socket is seen; removing the profile kills only that server.
+  SOCK="$XDG_STATE_HOME/omarchy-agent-launcher/tmux/oal-issue-triage.sock"; mkdir -p "$(dirname "$SOCK")"
+  tmux -S "$SOCK" new-session -d -s oal-issue-triage -- sleep 300
+  [[ $("$L" status --json | jq -r '.agents[] | select(.name=="issue-triage") | .running') == true ]] || tfail "running via private socket"
+  "$L" stop issue-triage >/dev/null; tmux -S "$SOCK" has-session -t oal-issue-triage 2>/dev/null && tfail "stop must kill the private session"
+  grep -q '"kind":"stopped"' "$S/events.jsonl" || tfail "stopped event"
+fi
 out=$("$L" --dry-run switch 2>&1) || tfail "switch dry-run"; grep -q "issue-triage" <<<"$out" || tfail "switch rows"
 pass "events, blockers, status, settings, rotation, stop, switch"
 
