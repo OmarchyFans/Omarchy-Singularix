@@ -77,6 +77,11 @@ O="$XDG_DATA_HOME/omarchy-agent-launcher/agents/provoc/openclaw"
 grep -q "Do the other thing" "$O/workspace/AGENTS.md" || tfail "AGENTS.md"
 pass "openclaw home provisioned"
 
+echo "== focus-window uses Hyprland's Lua dispatch"
+out=$("$L" --dry-run focus-window "Agent Dashboard" 2>&1) || { echo "$out"; tfail "focus-window dry-run"; }
+grep -q 'hl.dsp.focus' <<<"$out" || { echo "$out"; tfail "focus-window must use hl.dsp.focus"; }
+pass "focus-window dispatch"
+
 echo "== dry-run launches for every agent × runtime"
 secret_set SPRITES_TOKEN org/id/secret
 for a in hermes openclaw; do for r in local docker sprite; do
@@ -88,6 +93,8 @@ for a in hermes openclaw; do for r in local docker sprite; do
   # The session must live on this config's own tmux socket, never the default server
   # (a test run or another config could otherwise see or kill a real agent by name).
   if command -v tmux >/dev/null; then grep -q -- "-S $XDG_STATE_HOME/omarchy-agent-launcher/tmux/oal-$n.sock" <<<"$out" || { echo "$out"; tfail "tmux socket for $n"; }; fi
+  # The private server pins the terminal title, so Chat finds the window instead of opening a duplicate.
+  if command -v tmux >/dev/null; then grep -q "set-titles-string" <<<"$out" || { echo "$out"; tfail "title pin for $n"; }; fi
   case $r in docker) grep -q "docker run -it --rm" <<<"$inl" || tfail "$n docker cmd";; sprite) grep -q "sprite exec --tty" <<<"$inl" || tfail "$n sprite cmd";; esac
 done; done
 pass "6 combinations"

@@ -130,7 +130,9 @@ Item {
   Timer { id: refreshTimer; interval: 1200; onTriggered: dash.refreshStatus() }
   Timer {
     id: focusTimer; interval: 150
-    onTriggered: { Quickshell.execDetached(["hyprctl", "dispatch", "focuswindow", "title:^Agent Dashboard$"]); dash.focusCatcher() }
+    // Focus through the launcher: Hyprland's dispatch is Lua on current Omarchy,
+    // and `focus-window` switches to the dashboard's workspace if it is elsewhere.
+    onTriggered: { Quickshell.execDetached([dash.launcher, "focus-window", "Agent Dashboard"]); dash.focusCatcher() }
   }
 
   // Live event tail. Started once (keepLoaded keeps this item alive), restarted if tail exits.
