@@ -5,12 +5,12 @@ Depends on: Requirements (complete, see attached requirements doc).
 
 ## Root cause of the triggering incident (confirmed, not assumed)
 
-jarvis's live profile (`~/.config/omarchy-agent-launcher/agents/jarvis.json`)
+rix's live profile (`~/.config/omarchy-agent-launcher/agents/rix.json`)
 currently shows `provider: local`, `auth: none`, model
 `Qwen3.8-4B-Distill-Q4_K_M.gguf`, `created: 2026-09-09T08:47`. This is a
-**manual downgrade performed today**, not an automatic fallback. jarvis's
+**manual downgrade performed today**, not an automatic fallback. rix's
 `config.yaml` has **no `fallback_providers` block at all** — Hermes's
-native per-turn fallback mechanism was never configured for jarvis, so
+native per-turn fallback mechanism was never configured for rix, so
 there was nothing to catch the fable5.1 quota exhaustion automatically.
 The "ran out of tokens, dropped to local model" incident is a straight
 consequence of a missing config, not a Hermes bug and not a scenario
@@ -63,7 +63,7 @@ Hermes's fallback mechanism was ever asked to handle.
 ## Confirmed model identifiers in this environment
 
 Provider `anthropic` catalog (from live models.dev cache) includes, among
-others: `claude-fable-5-1`, `claude-opus-5`, `claude-sonnet-5`. jarvis's
+others: `claude-fable-5-1`, `claude-opus-5`, `claude-sonnet-5`. rix's
 local fallback is `Qwen3.8-4B-Distill-Q4_K_M.gguf` served via the local
 llama.cpp/LM Studio-compatible server (provider `local` in this
 launcher's terms, which Hermes sees as a `custom`/`lmstudio`-shaped
@@ -74,7 +74,7 @@ OpenAI-compatible endpoint at `http://127.0.0.1:8080/v1`).
 User confirmed the fallback sequence changes week to week as better
 models replace existing ones, across many vendor accounts (Anthropic,
 OpenAI, xAI, OpenRouter, DeepSeek, z.ai, Modal.com), and must be editable
-by the user AND jarvis, covering every model in the fleet — not a value
+by the user AND rix, covering every model in the fleet — not a value
 hardcoded per-agent.
 
 **Design**: one shared JSON file,
@@ -105,7 +105,7 @@ profile's `fallback_chain` is set and resolves to a non-empty list in
 the generated `config.yaml`, **skipping the chain's own first entry if it
 matches the agent's own primary provider+model** (avoids a redundant
 self-fallback entry when an agent's primary already *is* the chain's
-head, as jarvis's will be). Reuses the exact `provider_hermes`-style
+head, as rix's will be). Reuses the exact `provider_hermes`-style
 mapping already used for the primary model line — no new provider-name
 translation logic needed.
 
@@ -123,10 +123,10 @@ profile -> provision -> config.yaml regeneration pattern (see
 omarchy-agent-launcher-dev skill) — no agent should carry a stale
 fallback chain after an edit.
 
-jarvis, being the CoS with standing permission to manage the fleet, can
+rix, being the CoS with standing permission to manage the fleet, can
 run these same CLI commands itself (it already runs
 `omarchy-agent-launcher` for every other fleet operation per its own job
-description) — no separate "jarvis-only" API needed.
+description) — no separate "rix-only" API needed.
 
 ## Coverage gaps Hermes doesn't handle automatically (still need policy, not code)
 
@@ -188,8 +188,8 @@ description) — no separate "jarvis-only" API needed.
    from the profile's `fallback_chain` field.
 3. New `lib/fallback.sh` (or extend `lib/providers.sh`) with the CLI
    subcommand family + re-provision-on-edit behavior.
-4. Set jarvis's and this agent's (`agent-09072350`) profiles to
-   `fallback_chain: "default"`, restore jarvis's primary provider back to
+4. Set rix's and this agent's (`agent-09072350`) profiles to
+   `fallback_chain: "default"`, restore rix's primary provider back to
    `anthropic`/`claude-fable-5-1` (undoing today's manual downgrade) now
    that the fallback chain will catch future exhaustion automatically,
    re-provision, and verify the resulting config.yaml.

@@ -5,7 +5,7 @@
 <h1 align="center">Your desktop, staffed.</h1>
 
 <p align="center">
-  <b>One key. A chief of staff named Jarvis. A team of AI agents that runs for free on your own GPU and calls in the big models only when you say so.</b><br>
+  <b>One key. A chief of staff named Rix. A team of AI agents that runs for free on your own GPU and calls in the big models only when you say so.</b><br>
   No config files. No accounts to start. Nothing leaves your machine unless you send it.
 </p>
 
@@ -21,7 +21,7 @@
 
 <h2 id="dead-simple-seriously"><img src="docs/img/h-dead-simple-seriously.svg" alt="Dead simple. Seriously." height="44"></h2>
 
-Install the plugin. Press **SUPER + ALT + A**. Jarvis says hello. That's the setup.
+Install the plugin. Press **SUPER + ALT + A**. Rix says hello. That's the setup.
 
 Want an agent of your own? One page, six questions: which agent, where it runs,
 which model, how it signs in, which skills, what the job is. Click **Launch**.
@@ -34,18 +34,18 @@ Pick **Local GPU** and your agents run on a model that lives on your graphics
 card. No API key. No subscription. No meter. Run one agent or ten, all night,
 every night: the bill is zero, and it stays zero.
 
-Jarvis runs there by default, so your chief of staff costs nothing to keep on
+Rix runs there by default, so your chief of staff costs nothing to keep on
 duty.
 
 <h2 id="delegate-the-heavy-lifting-to-whoever-you-trust"><img src="docs/img/h-delegate-the-heavy-lifting-to-whoever-you-trust.svg" alt="Delegate the heavy lifting to whoever you trust." height="44"></h2>
 
-Some jobs deserve a frontier model. Tell Jarvis, and it hands the task to the
+Some jobs deserve a frontier model. Tell Rix, and it hands the task to the
 provider you choose: **Anthropic, OpenAI, Grok, Gemini, DeepSeek, OpenRouter**,
 your own OpenAI-compatible endpoint, or a GPU server you deploy. It shows you
 the model and the price per million tokens first, waits for your yes, and
 brings the result back to your desktop with the cost written next to it.
 
-And Jarvis itself is not chained to your GPU. Run your chief of staff on Claude,
+And Rix itself is not chained to your GPU. Run your chief of staff on Claude,
 on GPT, on Grok, on anything you can sign in to, and switch whenever you like.
 Your agents, your models, your choice, per task.
 
@@ -68,7 +68,7 @@ Behind the scenes we are building the thing power users keep asking for:
 **dedicated GPU endpoints** for the very best open-weight frontier models,
 private to you, ready in minutes, billed by the hour with the price on the form
 before you launch. Bring your data and **tune the weights** to your work; the
-model you shape stays yours. Point Jarvis at it like any other backend. Same
+model you shape stays yours. Point Rix at it like any other backend. Same
 privacy story as your laptop, with far more horsepower. No accounts to create
 until the day you want it; the free runtimes never change.
 
@@ -91,7 +91,7 @@ until the day you want it; the free runtimes never change.
 🎛️ **Looks like Omarchy.** A Quickshell window drawn with the shell's own tokens, so it wears your theme and switches with it.
 
 <p align="center">
-  <img src="docs/img/dashboard-jarvis.png" alt="Jarvis: brief, ask, tokens and cost" width="470">
+  <img src="docs/img/dashboard-rix.png" alt="Rix: brief, ask, tokens and cost" width="470">
   <img src="docs/img/dashboard-notifications.png" alt="Notifications: a blocker waiting for you" width="470">
 </p>
 
@@ -138,7 +138,7 @@ Enter to open the selected agent's chat, `r` to refresh, Esc to close.
 
 | Page | What it shows |
 |------|---------------|
-| **Jarvis** | the chief of staff: its state and Chat, a plain status **Brief**, an **Ask Jarvis** box answered by its model, the numbers (prompt and output tokens, USD, total and today), the **backends** work can go to, and **every task** with its tokens and cost |
+| **Rix** | the chief of staff: its state and Chat, a plain status **Brief**, an **Ask Rix** box answered by its model, the numbers (prompt and output tokens, USD, total and today), the **backends** work can go to, and **every task** with its tokens and cost |
 | **Agents** | every saved agent with a status pill (running / blocked / done / idle), its job, last event, task count, tokens and USD so far, and **Chat**, Stop, Edit job, Remove |
 | **New agent** | the one-page setup form |
 | **Events** | the event log: filter by agent, task, level, or text; click a column header to sort |
@@ -151,7 +151,7 @@ Enter to open the selected agent's chat, `r` to refresh, Esc to close.
 |------|---------|
 | **Agent** | Hermes Agent (Nous Research) · OpenClaw |
 | **Runtime** | local shell · Docker container · a Linux VM on your own cloud account · omarchy.fans cloud (coming) |
-| **Model** | **Local GPU (offline)**, Anthropic, OpenAI, OpenAI Codex, Nous Portal, xAI, OpenRouter, Gemini, DeepSeek, Ollama, a **backend endpoint** (a GPU server you deployed from the Jarvis page, or a shared URL), or any custom model id. Lists are live from the open [models.dev](https://models.dev) catalog, with prices per million tokens |
+| **Model** | **Local GPU (offline)**, Anthropic, OpenAI, OpenAI Codex, Nous Portal, xAI, OpenRouter, Gemini, DeepSeek, Ollama, a **backend endpoint** (a GPU server you deployed from the Rix page, or a shared URL), or any custom model id. Lists are live from the open [models.dev](https://models.dev) catalog, with prices per million tokens |
 | **Sign-in** | browser OAuth with your own account (where the agent supports it) or an API key, saved once with mode 600 |
 | **Skills** | checkboxes over your installed skill library, plus hub install for Hermes |
 | **Job** | the instructions, written in `$EDITOR`, typed inline, or taken from a file |
@@ -161,29 +161,34 @@ Every agent gets **its own isolated home** (config, keys, skills, memory) under
 `~/.local/share/omarchy-agent-launcher/agents/<name>/`. Your real `~/.hermes`
 and `~/.openclaw` are never written; only their skill libraries are read.
 
-### Jarvis, the chief of staff
+### Rix, the chief of staff
 
-Jarvis is a Hermes agent the launcher sets up for you (`jarvis setup`), with a
+Rix is your AI orchestrator, the way J.A.R.V.I.S.\* is to Tony Stark.
+Before 0.9 it was called Jarvis: the old profile is renamed to `rix` the first
+time the launcher runs (stop a running Jarvis session to let it finish), and
+`omarchy-agent-launcher jarvis …` keeps working as an alias for one release.
+
+Rix is a Hermes agent the launcher sets up for you (`rix setup`), with a
 SOUL that knows the launcher's commands and a bundled skill. It runs on the
 local GPU when one is available, so it costs nothing to keep around. From its
 page or its chat:
 
 - **Brief**: a plain-language status of every agent, blocker, and today's spend.
-- **Ask**: a one-shot question answered by Jarvis's model with the current status as context.
-- **Delegate**: `omarchy-agent-launcher delegate --backend NAME --task-title "…" [--wait]` hands a job to a worker agent on a backend; the worker records Jarvis as its parent, and `result NAME` returns what it produced. Jarvis proposes the backend and price and waits for your yes before anything that costs money.
+- **Ask**: a one-shot question answered by Rix'ss model with the current status as context.
+- **Delegate**: `omarchy-agent-launcher delegate --backend NAME --task-title "…" [--wait]` hands a job to a worker agent on a backend; the worker records Rix as its parent, and `result NAME` returns what it produced. Rix proposes the backend and price and waits for your yes before anything that costs money.
 
 **Backends** are where delegated work can go, kept in a registry
 (`backends add|list|remove`): the local GPU, any provider you have a key or
 sign-in for, any OpenAI-compatible endpoint plus key, or a **vLLM server the
 launcher deploys to a GPU cloud account you hold**, as a dedicated endpoint or
-an isolated sandbox, with the GPU chosen on the Jarvis page and its hourly
+an isolated sandbox, with the GPU chosen on the Rix page and its hourly
 price shown first. The adapters live in `lib/backends/`; read them before you
 rely on them. Keyless providers are refused for delegation.
 
 **Usage and cost** come from the agents' own session stores, read-only:
 prompt tokens (input plus cache reads), output tokens, and USD, with the cost
 basis labelled (the agent's own estimate, a catalog price, or unknown), per
-agent and per task, on the Jarvis and Agents pages and in `usage --json`.
+agent and per task, on the Rix and Agents pages and in `usage --json`.
 
 ### From a terminal
 
@@ -199,7 +204,7 @@ omarchy-agent-launcher destroy NAME   # also remove its container or cloud VM
 omarchy-agent-launcher switch         # graphical picker: jump to an agent's chat
 omarchy-agent-launcher status --json  # every agent with status, window, blockers, tasks, usage
 omarchy-agent-launcher event NAME KIND "message" [--task T] [--level blocker]   # for hooks and skills
-omarchy-agent-launcher jarvis | usage | delegate … | result NAME | backends …
+omarchy-agent-launcher rix | usage | delegate … | result NAME | backends …
 omarchy-agent-launcher local-server status | tune | untune
 omarchy-agent-launcher --dry-run launch NAME   # print every command, run nothing
 ```
@@ -307,7 +312,7 @@ Built on Omarchy 4.x with Hermes Agent installed locally.
 - ✅ Hermes on the **local GPU**, end to end and offline: tools executing, cache reused between turns, 3.5 GB VRAM steady.
 - ✅ The dashboard live in the shell: every page renders with real data; Stop, Chat, Resolve, the blocker badge, and the toasts were exercised.
 - ✅ Persistent sessions: an agent's window was killed outright; its session survived and Chat reopened a window on the same conversation.
-- ✅ Jarvis: setup, brief, ask, delegate (with and without `--wait`), result, workers in `status --json`.
+- ✅ Rix: setup, brief, ask, delegate (with and without `--wait`), result, workers in `status --json`.
 - ✅ Usage aggregation against a real session store and a fixture; the kanban mirror against a fixture board.
 - ✅ Every agent × runtime combination in `--dry-run`.
 - ⚠️ Docker, the cloud VM runtime, the GPU-server backends, and OpenClaw were written against their official docs and CLIs but **not exercised end to end** on the development machine. Treat them as beta; issues and PRs welcome.
@@ -327,7 +332,7 @@ Built on Omarchy 4.x with Hermes Agent installed locally.
 - A GPU server's key is generated locally and reaches the server as a
   deploy-time secret, never baked into an image. Your cloud tokens stay with
   their CLIs; the launcher only runs the CLIs.
-- Jarvis has no powers of its own: it runs the same commands you can, inside a
+- Rix has no powers of its own: it runs the same commands you can, inside a
   session that asks before dangerous shell commands unless launched unattended.
 
 ### Remove
@@ -352,3 +357,6 @@ a PR; `omarchy plugin validate .` checks the manifest.
 
 MIT, © 2026 omarchy.fans; main contributor modpunk. External dependencies: gum
 (MIT), jq (MIT); at runtime the agents and CLIs you choose.
+
+\* J.A.R.V.I.S. and Tony Stark are trademarks of Marvel. Omarchy.Fans is not
+affiliated with or endorsed by Marvel.

@@ -5,9 +5,9 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
-// Jarvis page: the chief of staff. Top: Jarvis' state, Chat, a plain brief,
-// and a one-question box answered by Jarvis' own model. Then the numbers
-// (prompt / output tokens and USD, total and today), the backends Jarvis can
+// Rix page: the chief of staff. Top: Rix's state, Chat, a plain brief,
+// and a one-question box answered by Rix's own model. Then the numbers
+// (prompt / output tokens and USD, total and today), the backends Rix can
 // hand work to (with the Modal GPU picker), and every task with its tokens
 // and cost. All data comes from `status --json` (dash.status); actions run
 // the launcher with argv. Long Modal operations open in a terminal (--popup).
@@ -15,7 +15,7 @@ Item {
   id: tab
   required property var dash
 
-  readonly property var jarvis: dash.status && dash.status.jarvis ? dash.status.jarvis : null
+  readonly property var rix: dash.status && dash.status.rix ? dash.status.rix : null
   readonly property var usage: dash.usage
   readonly property var totals: usage ? usage.totals : null
   readonly property var backends: dash.status && dash.status.backends ? dash.status.backends : []
@@ -64,23 +64,23 @@ Item {
 
   // ---- backends -----------------------------------------------------------
   // Ready backends, plus the local GPU even when it is not ready yet: it is the default and must stay visible.
-  readonly property var readyBackends: backends.filter(function(b) { return b.ready || b.id === "local" || (jarvis && b.id === jarvis.backend) }).map(function(b) { return { value: b.id, label: b.label + "  ·  " + b.model + (b.ready ? "" : "  ·  " + b.state) } })
+  readonly property var readyBackends: backends.filter(function(b) { return b.ready || b.id === "local" || (rix && b.id === rix.backend) }).map(function(b) { return { value: b.id, label: b.label + "  ·  " + b.model + (b.ready ? "" : "  ·  " + b.state) } })
   readonly property var customBackends: backends.filter(function(b) { return b.kind !== "provider" })
   readonly property var providerBackends: backends.filter(function(b) { return b.kind === "provider" })
   property string pendingRemove: ""
   function popup(argv) { Quickshell.execDetached([launcher, "--popup"].concat(argv)); dash.refreshSoon() }
 
-  // ---- brief & ask (Jarvis' own answers) ---------------------------------
+  // ---- brief & ask (Rix's own answers) ---------------------------------
   property string brief: ""
   property string answer: ""
   property bool asking: false
   property bool briefing: false
-  function runBrief() { if (briefProc.running) return; briefing = true; briefProc.command = [launcher, "jarvis", "brief"]; briefProc.running = true }
+  function runBrief() { if (briefProc.running) return; briefing = true; briefProc.command = [launcher, "rix", "brief"]; briefProc.running = true }
   function ask() {
     var q = askField.text.trim()
     if (q === "" || askProc.running) return
     asking = true; answer = ""
-    askProc.command = [launcher, "jarvis", "ask", q]
+    askProc.command = [launcher, "rix", "ask", q]
     askProc.running = true
   }
   Process {
@@ -96,7 +96,7 @@ Item {
     onExited: function(code) {
       tab.asking = false
       var out = String(askOut.text || "").trim()
-      tab.answer = code === 0 && out !== "" ? out : ("Jarvis could not answer (exit " + code + "): " + String(askErr.text || "").trim().split("\n").slice(-3).join(" "))
+      tab.answer = code === 0 && out !== "" ? out : ("Rix could not answer (exit " + code + "): " + String(askErr.text || "").trim().split("\n").slice(-3).join(" "))
       dash.refreshSoon()
     }
   }
@@ -161,12 +161,12 @@ Item {
 
     PanelHero {
       width: parent.width
-      title: "Jarvis"
-      meta: !tab.jarvis ? "Loading…"
-            : !tab.jarvis.configured ? "Your chief of staff is not set up yet. Chat sets it up on " + (tab.jarvis.default_backend === "local" ? "your local GPU (offline, $0)" : tab.jarvis.default_backend) + "."
-            : "Chief of staff on " + tab.jarvis.backend + " / " + tab.jarvis.model + "  ·  " + (tab.jarvis.running ? "running" : "idle") + (tab.jarvis.workers.length ? "  ·  " + tab.jarvis.workers.length + " worker" + (tab.jarvis.workers.length === 1 ? "" : "s") : "")
+      title: "Rix"
+      meta: !tab.rix ? "Loading…"
+            : !tab.rix.configured ? "Your chief of staff is not set up yet. Chat sets it up on " + (tab.rix.default_backend === "local" ? "your local GPU (offline, $0)" : tab.rix.default_backend) + "."
+            : "Chief of staff on " + tab.rix.backend + " / " + tab.rix.model + "  ·  " + (tab.rix.running ? "running" : "idle") + (tab.rix.workers.length ? "  ·  " + tab.rix.workers.length + " worker" + (tab.rix.workers.length === 1 ? "" : "s") : "")
       foreground: dash.foreground; fontFamily: dash.fontFamily
-      iconComponent: Component { Text { text: "󰚩"; color: tab.jarvis && tab.jarvis.running ? dash.okColor : dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.display } }
+      iconComponent: Component { Text { text: "󰚩"; color: tab.rix && tab.rix.running ? dash.okColor : dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.display } }
     }
     PanelSeparator { width: parent.width; foreground: dash.foreground }
 
@@ -184,12 +184,12 @@ Item {
         width: parent.width
         spacing: Style.space(10)
 
-        // ---- Jarvis controls ------------------------------------------
+        // ---- Rix controls ------------------------------------------
         Row {
           width: parent.width; spacing: Style.spacing.controlGap
-          Button { text: tab.jarvis && tab.jarvis.configured ? "Chat with Jarvis" : "Set up and chat"; iconText: "󰭹"; selected: true; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: dash.act([tab.launcher, "jarvis", "chat"]) }
+          Button { text: tab.rix && tab.rix.configured ? "Chat with Rix" : "Set up and chat"; iconText: "󰭹"; selected: true; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: dash.act([tab.launcher, "rix", "chat"]) }
           Button { text: tab.briefing ? "Briefing…" : "Brief"; iconText: "󰈙"; enabled: !tab.briefing; tooltipText: "Plain status brief from the launcher's data (no model call)"; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: tab.runBrief() }
-          PanelActionButton { iconText: "󰓛"; tooltipText: "Stop Jarvis' session"; visible: tab.jarvis && tab.jarvis.running; hoverColor: dash.urgent; onClicked: dash.act([tab.launcher, "stop", tab.jarvis.name]) }
+          PanelActionButton { iconText: "󰓛"; tooltipText: "Stop Rix's session"; visible: tab.rix && tab.rix.running; hoverColor: dash.urgent; onClicked: dash.act([tab.launcher, "stop", tab.rix.name]) }
           Item { width: Style.space(12); height: 1 }
           Cap { text: "RUNS ON"; anchors.verticalCenter: parent.verticalCenter }
           PanelDropdown {
@@ -197,14 +197,14 @@ Item {
             width: Style.space(320)
             showLabel: false
             options: tab.readyBackends.length ? tab.readyBackends : [{ value: "", label: "no ready backend" }]
-            value: tab.jarvis ? tab.jarvis.backend : ""
+            value: tab.rix ? tab.rix.backend : ""
             popupParent: tab
-            ownerOpen: dash.opened && dash.tab === "jarvis"
+            ownerOpen: dash.opened && dash.tab === "rix"
             foreground: dash.foreground; fontFamily: dash.fontFamily
-            onChanged: function(v) { if (v !== "" && (!tab.jarvis || v !== tab.jarvis.backend)) dash.act([tab.launcher, "jarvis", "setup", v]) }
+            onChanged: function(v) { if (v !== "" && (!tab.rix || v !== tab.rix.backend)) dash.act([tab.launcher, "rix", "setup", v]) }
           }
         }
-        Dim { width: parent.width; text: "Jarvis is a Hermes agent on this machine that manages every other agent through the launcher: it reads status and usage, hands work to bigger models with delegate, reads results, and can stop or remove agents. It asks before spending money." }
+        Dim { width: parent.width; text: "Rix is a Hermes agent on this machine that manages every other agent through the launcher: it reads status and usage, hands work to bigger models with delegate, reads results, and can stop or remove agents. It asks before spending money." }
 
         BorderSurface {
           width: parent.width
@@ -218,7 +218,7 @@ Item {
 
         Column {
           width: parent.width; spacing: Style.spacing.labelGap
-          Cap { text: "ASK JARVIS" + (tab.jarvis && tab.jarvis.configured ? "  ·  answered by " + tab.jarvis.backend + " / " + tab.jarvis.model : "") }
+          Cap { text: "ASK RIX" + (tab.rix && tab.rix.configured ? "  ·  answered by " + tab.rix.backend + " / " + tab.rix.model : "") }
           Row {
             width: parent.width; spacing: Style.spacing.controlGap
             Field {
@@ -292,7 +292,7 @@ Item {
             options: tab.agentOptions
             value: tab.taskAgent
             popupParent: tab
-            ownerOpen: dash.opened && dash.tab === "jarvis"
+            ownerOpen: dash.opened && dash.tab === "rix"
             foreground: dash.foreground; fontFamily: dash.fontFamily
             onChanged: function(v) { tab.taskAgent = v }
           }
@@ -317,7 +317,7 @@ Item {
             required property var modelData
             required property int index
             width: inner.width
-            hasCursor: dash.cursorActive && dash.tab === "jarvis" && dash.selectedIndex === index
+            hasCursor: dash.cursorActive && dash.tab === "rix" && dash.selectedIndex === index
             foreground: dash.foreground
             implicitHeight: trow.implicitHeight + Style.space(10)
             MouseArea {
@@ -381,7 +381,7 @@ Item {
         Button { visible: brow.backend && brow.backend.kind !== "endpoint" && brow.backend.state !== "ready" && brow.backend.state !== "starting"; text: brow.backend && brow.backend.kind === "modal-sandbox" ? "Start" : "Deploy"; iconText: "󰐊"; selected: true; tooltipText: "Runs in a terminal: image build and model download take minutes; GPU time is billed from here on"; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: tab.popup(["backends", "deploy", brow.backend.id]) }
         PanelActionButton { iconText: "󰓛"; tooltipText: "Stop (Modal: stop the app / terminate the sandbox)"; visible: brow.backend && brow.backend.kind !== "endpoint" && brow.backend.state === "ready"; hoverColor: dash.urgent; onClicked: tab.popup(["backends", "stop", brow.backend.id]) }
         PanelActionButton { iconText: "󰄬"; tooltipText: "Test: GET /v1/models with the backend's key"; visible: brow.backend && brow.backend.url; onClicked: tab.popup(["backends", "test", brow.backend.id]) }
-        PanelActionButton { iconText: "󰚩"; tooltipText: "Run Jarvis on this backend"; visible: brow.backend && brow.backend.ready; onClicked: dash.act([tab.launcher, "jarvis", "setup", brow.backend.id]) }
+        PanelActionButton { iconText: "󰚩"; tooltipText: "Run Rix on this backend"; visible: brow.backend && brow.backend.ready; onClicked: dash.act([tab.launcher, "rix", "setup", brow.backend.id]) }
         PanelActionButton { iconText: "󰩺"; tooltipText: "Remove this backend (stop it first)"; hoverColor: dash.urgent; onClicked: { tab.pendingRemove = brow.backend.id; confirm.opened = true } }
       }
     }

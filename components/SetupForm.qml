@@ -194,7 +194,7 @@ Item {
     if (jobText === "") { error = "Write a job description first."; jobEditor.focusEditor(); return }
     if (model.trim() === "") { error = "Pick or type a model id."; return }
     if (!runtimeOk) { error = "Runtime not ready: " + runtimeStatus; return }
-    if (isEndpoint && backend === "") { error = "Add a backend on the Jarvis page first (a Modal endpoint or a shared URL)."; return }
+    if (isEndpoint && backend === "") { error = "Add a backend on the Rix page first (a Modal endpoint or a shared URL)."; return }
     var authValue = auth === "saved-key" ? "api-key" : auth
     var argv = [root.launcher, "create", "--json", "--name", n, "--agent", agent, "--runtime", runtime,
                 "--provider", provider, "--auth", authValue, "--model", model.trim(), "--mode", mode,
@@ -356,7 +356,7 @@ Item {
                 width: parent.width; spacing: Style.spacing.labelGap
                 visible: root.isEndpoint
                 FieldLabel { text: "BACKEND" }
-                Hint { width: parent.width; visible: root.backendOptions.length === 0; color: root.urgent; text: "No endpoint backends yet. Add a Modal endpoint, sandbox, or shared URL on the Jarvis page." }
+                Hint { width: parent.width; visible: root.backendOptions.length === 0; color: root.urgent; text: "No endpoint backends yet. Add a Modal endpoint, sandbox, or shared URL on the Rix page." }
                 PanelDropdown {
                   id: backendDrop
                   width: parent.width
@@ -369,7 +369,7 @@ Item {
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onChanged: function(v) { root.backend = v }
                 }
-                Hint { width: parent.width; visible: root.backend !== "" && root.findBackend(root.backend) && !root.findBackend(root.backend).ready; color: root.urgent; text: "This backend is not running yet; deploy or start it on the Jarvis page before launching." }
+                Hint { width: parent.width; visible: root.backend !== "" && root.findBackend(root.backend) && !root.findBackend(root.backend).ready; color: root.urgent; text: "This backend is not running yet; deploy or start it on the Rix page before launching." }
               }
               Column {
                 width: parent.width; spacing: Style.spacing.labelGap

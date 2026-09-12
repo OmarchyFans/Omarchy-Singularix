@@ -207,7 +207,7 @@ if command -v sqlite3 >/dev/null; then
   [[ $(jq -r '.tasks[0].cost_basis' <<<"$u") == "hermes estimate (plan)" ]] || tfail "cost basis label"
   [[ $(jq -r '.tasks|length' <<<"$u") == 1 ]] || tfail "archived session must be skipped"
   st=$("$L" status --json); [[ $(jq -r '.agents[]|select(.name=="ub")|.usage.cost_usd' <<<"$st") == 0.5 ]] || tfail "usage in status --json"
-  jq -e '.usage.totals and (.backends|type=="array") and .jarvis and .modal' <<<"$st" >/dev/null || tfail "status --json: jarvis/usage/backends/modal"
+  jq -e '.usage.totals and (.backends|type=="array") and .rix and .modal' <<<"$st" >/dev/null || tfail "status --json: rix/usage/backends/modal"
   "$L" usage | grep -q "Write the changelog" || tfail "usage (human)"
   "$L" remove ub --yes >/dev/null
   pass "usage: totals, per task, cost basis, archived skipped, in status"
@@ -243,16 +243,36 @@ printf 'job\n' | "$L" create --name onbig --backend big --mode unattended --job-
 "$L" remove onteam --yes >/dev/null
 pass "backends"
 
-echo "== jarvis: setup, delegate, result, brief"
+echo "== rix migration: a pre-0.9 jarvis chief of staff becomes rix"
+profile_write jarvis hermes local anthropic api-key claude-sonnet-5 - interactive ""
+profile_set jarvis role '"chief-of-staff"'
+printf '# Chief of staff\nYou are Jarvis, the chief of staff.\n' >"$(job_path jarvis)"
+mkdir -p "$(stage_dir jarvis)/hermes"; printf 'You are "jarvis", chief of staff.\n' >"$(stage_dir jarvis)/hermes/SOUL.md"
+profile_write worker1 hermes local anthropic api-key claude-sonnet-5 - unattended ""
+profile_set worker1 parent '"jarvis"'
+event_emit jarvis blocker "Needs a decision" --level blocker --key decide >/dev/null 2>&1
+"$L" list >/dev/null 2>&1 || tfail "list after migration"
+profile_exists rix && ! profile_exists jarvis || tfail "profile moved to rix"
+[[ $(jq -r .name "$(profile_path rix)") == rix ]] || tfail "profile name is rix"
+grep -q "You are Rix" "$(job_path rix)" || tfail "job renamed"
+[[ -d $(stage_dir rix) && ! -d $(stage_dir jarvis) ]] || tfail "agent home moved"
+grep -q '"rix"' "$(stage_dir rix)/hermes/SOUL.md" || tfail "SOUL renamed"
+[[ $(jq -r .parent "$(profile_path worker1)") == rix ]] || tfail "worker parent rewritten"
+jq -e 'has("rix/decide") and (has("jarvis/decide") | not) and .["rix/decide"].agent == "rix"' "$OAL_BLOCKERS" >/dev/null || { cat "$OAL_BLOCKERS"; tfail "blocker rekeyed"; }
+"$L" list >/dev/null 2>&1; profile_exists rix || tfail "migration must be idempotent"
+"$L" remove worker1 --yes >/dev/null; "$L" remove rix --yes >/dev/null; rm -f "$OAL_BLOCKERS" "$OAL_BLOCKERS.bak"
+pass "rix migration"
+
+echo "== rix: setup, delegate, result, brief"
 if command -v hermes >/dev/null; then
-  "$L" jarvis setup anthropic claude-sonnet-5 >/dev/null || tfail "jarvis setup"
-  [[ $(jq -r .role "$(profile_path jarvis)") == chief-of-staff && $(jq -r .backend "$(profile_path jarvis)") == anthropic ]] || tfail "jarvis profile"
-  ( source "$ROOT/lib/agents/hermes.sh"; source "$ROOT/lib/backends.sh"; source "$ROOT/lib/jarvis.sh"; OAL_ROOT="$ROOT"; agent_provision jarvis )
-  [[ -f $XDG_DATA_HOME/omarchy-agent-launcher/agents/jarvis/hermes/skills/omarchy/jarvis/SKILL.md ]] || tfail "jarvis skill copied into its home"
-  grep -q "chief of staff" "$XDG_DATA_HOME/omarchy-agent-launcher/agents/jarvis/hermes/SOUL.md" || tfail "jarvis SOUL"
-  out=$("$L" --dry-run --inline launch jarvis 2>&1); grep -q -- "-s jarvis" <<<"$out" || { echo "$out"; tfail "jarvis skill preload flag"; }
+  "$L" rix setup anthropic claude-sonnet-5 >/dev/null || tfail "rix setup"
+  [[ $(jq -r .role "$(profile_path rix)") == chief-of-staff && $(jq -r .backend "$(profile_path rix)") == anthropic ]] || tfail "rix profile"
+  ( source "$ROOT/lib/agents/hermes.sh"; source "$ROOT/lib/backends.sh"; source "$ROOT/lib/rix.sh"; OAL_ROOT="$ROOT"; agent_provision rix )
+  [[ -f $XDG_DATA_HOME/omarchy-agent-launcher/agents/rix/hermes/skills/omarchy/rix/SKILL.md ]] || tfail "rix skill copied into its home"
+  grep -q "chief of staff" "$XDG_DATA_HOME/omarchy-agent-launcher/agents/rix/hermes/SOUL.md" || tfail "rix SOUL"
+  out=$("$L" --dry-run --inline launch rix 2>&1); grep -q -- "-s rix" <<<"$out" || { echo "$out"; tfail "rix skill preload flag"; }
   out=$(printf 'Summarize the repo.\n' | "$L" --dry-run delegate --backend anthropic --name summ --task-title "Summarize" --job-stdin 2>&1) || { echo "$out"; tfail "delegate"; }
-  [[ $(jq -r .parent "$(profile_path summ)") == jarvis && $(jq -r .role "$(profile_path summ)") == worker && $(jq -r .mode "$(profile_path summ)") == unattended && $(jq -r .task_title "$(profile_path summ)") == Summarize ]] || tfail "delegate profile"
+  [[ $(jq -r .parent "$(profile_path summ)") == rix && $(jq -r .role "$(profile_path summ)") == worker && $(jq -r .mode "$(profile_path summ)") == unattended && $(jq -r .task_title "$(profile_path summ)") == Summarize ]] || tfail "delegate profile"
   grep -q "would open window" <<<"$out" || tfail "delegate must launch the worker"
   out=$(printf 'x\n' | "$L" --dry-run delegate --backend anthropic --name summ2 --job-stdin --wait 2>&1); grep -q "would run and wait" <<<"$out" || { echo "$out"; tfail "delegate --wait dry-run"; }
   "$L" result summ >/dev/null 2>&1 && tfail "result without runs must fail"
@@ -260,11 +280,15 @@ if command -v hermes >/dev/null; then
   grep -q "needs GEMINI_API_KEY" <<<"$out" || { echo "$out"; tfail "keyless provider message"; }
   mkdir -p "$XDG_DATA_HOME/omarchy-agent-launcher/agents/summ/runs"; printf '\033[32mdone\033[0m: 3 files\n' >"$XDG_DATA_HOME/omarchy-agent-launcher/agents/summ/runs/20260908-120000.log"
   "$L" result summ | grep -q "^done: 3 files$" || tfail "result strips ANSI"
-  "$L" jarvis brief | grep -q "Jarvis brief" || tfail "jarvis brief"
-  st=$("$L" status --json); [[ $(jq -r '.jarvis.configured' <<<"$st") == true && $(jq -r '.jarvis.workers|index("summ") != null' <<<"$st") == true ]] || tfail "jarvis status lists its workers"
-  [[ $(jq -r '.agents[]|select(.name=="summ")|.parent' <<<"$st") == jarvis ]] || tfail "worker parent in status"
-  "$L" remove summ --yes >/dev/null; "$L" remove summ2 --yes >/dev/null; "$L" remove jarvis --yes >/dev/null
-  pass "jarvis"
+  "$L" rix brief | grep -q "Rix brief" || tfail "rix brief"
+  st=$("$L" status --json); [[ $(jq -r '.rix.configured' <<<"$st") == true && $(jq -r '.rix.workers|index("summ") != null' <<<"$st") == true ]] || tfail "rix status lists its workers"
+  [[ $(jq -r '.agents[]|select(.name=="summ")|.parent' <<<"$st") == rix ]] || tfail "worker parent in status"
+  # "jarvis" is the pre-0.9 name: the subcommand and the status key still work.
+  "$L" jarvis brief | grep -q "Rix brief" || tfail "jarvis alias: brief"
+  [[ $("$L" jarvis status | jq -r .name) == rix ]] || tfail "jarvis alias: status"
+  [[ $(jq -r '.jarvis.name' <<<"$st") == rix ]] || tfail "status --json keeps a jarvis key"
+  "$L" remove summ --yes >/dev/null; "$L" remove summ2 --yes >/dev/null; "$L" remove rix --yes >/dev/null
+  pass "rix"
 
   echo "== oauth inheritance: a new home copies an existing sign-in for the same provider"
   "$L" backends list --json | jq -e '.[] | select(.id=="anthropic") | .auth == "api-key"' >/dev/null || tfail "without a sign-in anthropic falls back to the saved key"
@@ -273,17 +297,17 @@ if command -v hermes >/dev/null; then
   profile_set donor signed_in true; mkdir -p "$(stage_dir donor)/hermes"; printf '{"anthropic":{"token":"t"}}\n' >"$(stage_dir donor)/hermes/auth.json"
   "$L" backends list --json | jq -e '.[] | select(.id=="anthropic") | .ready == true and .state == "signed in"' >/dev/null || tfail "anthropic ready after a sign-in"
   printf 'w\n' | "$L" create --name heir --backend anthropic --mode unattended --job-stdin >/dev/null || tfail "create heir"
-  ( source "$ROOT/lib/agents/hermes.sh"; source "$ROOT/lib/backends.sh"; source "$ROOT/lib/jarvis.sh"; OAL_ROOT="$ROOT"; agent_provision heir )
+  ( source "$ROOT/lib/agents/hermes.sh"; source "$ROOT/lib/backends.sh"; source "$ROOT/lib/rix.sh"; OAL_ROOT="$ROOT"; agent_provision heir )
   [[ -s $(stage_dir heir)/hermes/auth.json && $(stat -c %a "$(stage_dir heir)/hermes/auth.json") == 600 ]] || tfail "auth.json inherited"
   [[ $(jq -r .signed_in "$(profile_path heir)") == true ]] || tfail "heir marked signed in"
-  "$L" jarvis setup anthropic >/dev/null; ( source "$ROOT/lib/agents/hermes.sh"; source "$ROOT/lib/backends.sh"; source "$ROOT/lib/jarvis.sh"; OAL_ROOT="$ROOT"; agent_provision jarvis )
-  [[ $(jq -r .signed_in "$(profile_path jarvis)") == true ]] || tfail "jarvis inherits the sign-in"
-  "$L" jarvis setup anthropic >/dev/null; [[ $(jq -r .signed_in "$(profile_path jarvis)") == true ]] || tfail "jarvis setup must keep signed_in for the same provider"
+  "$L" rix setup anthropic >/dev/null; ( source "$ROOT/lib/agents/hermes.sh"; source "$ROOT/lib/backends.sh"; source "$ROOT/lib/rix.sh"; OAL_ROOT="$ROOT"; agent_provision rix )
+  [[ $(jq -r .signed_in "$(profile_path rix)") == true ]] || tfail "rix inherits the sign-in"
+  "$L" rix setup anthropic >/dev/null; [[ $(jq -r .signed_in "$(profile_path rix)") == true ]] || tfail "rix setup must keep signed_in for the same provider"
   secret_set HF_TOKEN hf_secret_123; out=$("$L" --dry-run backends deploy big 2>&1); grep -q "hf_secret_123" <<<"$out" && tfail "HF_TOKEN printed by dry-run"
-  "$L" remove heir --yes >/dev/null; "$L" remove donor --yes >/dev/null; "$L" remove jarvis --yes >/dev/null
+  "$L" remove heir --yes >/dev/null; "$L" remove donor --yes >/dev/null; "$L" remove rix --yes >/dev/null
   pass "oauth inheritance, backend readiness, HF_TOKEN redaction"
 else
-  echo "  skip (hermes not installed): jarvis"
+  echo "  skip (hermes not installed): rix"
 fi
 
 echo "== list / show / remove"
