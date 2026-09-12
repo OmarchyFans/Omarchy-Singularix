@@ -51,7 +51,25 @@ tmux_for() { # tmux_for <name> <tmux args...>
 window_address() {
   have hyprctl || return 0
   hyprctl clients -j 2>/dev/null | jq -r --arg t "$(window_title "$1")" \
-    '.[] | select(.initialTitle==$t or .title==$t) | .address' | head -n1
+    '.[] | select(.class=="org.omarchy.agent" and (.initialTitle==$t or .title==$t)) | .address' | head -n1
+}
+# Address of any window whose current or initial title is exactly TITLE.
+window_address_by_title() {
+  have hyprctl || return 0
+  hyprctl clients -j 2>/dev/null | jq -r --arg t "$1" '.[] | select(.initialTitle==$t or .title==$t) | .address' | head -n1
+}
+# Focus a window by address, switching to its workspace. Hyprland's dispatch is
+# Lua on current Omarchy (`hl.dsp.focus`); the old `focuswindow address:` form is
+# rejected there, and a rejected dispatch can still exit 0, so check the effect
+# and only then try the old form for older Hyprland builds.
+focus_address() { # focus_address <address>
+  local addr=$1
+  if (( OAL_DRY_RUN )); then run hyprctl dispatch "hl.dsp.focus({ window = \"address:$addr\" })"; return 0; fi
+  have hyprctl || return 1
+  hyprctl dispatch "hl.dsp.focus({ window = \"address:$addr\" })" >/dev/null 2>&1 || true
+  [[ $(hyprctl activewindow -j 2>/dev/null | jq -r '.address // ""') == "$addr" ]] && return 0
+  hyprctl dispatch focuswindow "address:$addr" >/dev/null 2>&1 || true
+  [[ $(hyprctl activewindow -j 2>/dev/null | jq -r '.address // ""') == "$addr" ]]
 }
 session_alive() { have tmux && tmux_for "$1" has-session -t "$(tmux_session "$1")" 2>/dev/null; }
 
@@ -61,13 +79,17 @@ open_agent_window() { # open_agent_window <name>
   local name=$1 addr
   addr=$(window_address "$name")
   if [[ -n $addr ]]; then
-    run hyprctl dispatch focuswindow "address:$addr" >/dev/null
+    focus_address "$addr" || warn "could not focus the window for $name ($addr)"
     return 0
   fi
   local -a inner
   if have tmux; then
     mkdir -p "$(dirname "$(tmux_socket "$name")")"
-    inner=(tmux -S "$(tmux_socket "$name")" new-session -A -s "$(tmux_session "$name")" -- "$OAL_SELF" session "$name")
+    # tmux retitles its terminal (set-titles, often '#h:#W' in the user's config),
+    # which would hide the window from window_address and make every Chat open a
+    # duplicate. Pin the title on this agent's private server only.
+    inner=(tmux -S "$(tmux_socket "$name")" new-session -A -s "$(tmux_session "$name")" -- "$OAL_SELF" session "$name"
+           ";" set-option -g set-titles on ";" set-option -g set-titles-string "$(window_title "$name")")
   else
     warn "tmux not found; the session will not survive closing its window (omarchy pkg add tmux)"
     inner=("$OAL_SELF" session "$name")

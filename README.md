@@ -105,7 +105,7 @@ convenience: machines and GPUs we run for you, sold under omarchy.fans' terms.
 ```bash
 omarchy plugin add https://github.com/OmarchyFans/omarchy-fans-agent-launcher
 omarchy plugin enable fans.omarchy.agent-launcher
-~/.config/omarchy/plugins/fans.omarchy.agent-launcher/install.sh   # optional: keybinding, window rule, menu entry (asks first)
+~/.config/omarchy/plugins/fans.omarchy.agent-launcher/install.sh   # optional: keybinding and menu entry (asks first)
 ```
 
 `omarchy plugin add` clones the repo and lands it **disabled** so you can read

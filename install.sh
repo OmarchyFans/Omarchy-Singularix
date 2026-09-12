@@ -6,7 +6,7 @@
 #
 #   1. symlink bin/omarchy-agent-launcher into ~/.local/bin
 #   2. add a SUPER + ALT + A keybinding (opens the Agent Dashboard) to ~/.config/hypr/bindings.lua
-#   3. add a window rule that floats the dashboard to ~/.config/hypr/looknfeel.lua
+#   3. remove the pre-0.9 rule that floated the dashboard (it now tiles like any app)
 #   4. append an "Agents" submenu to ~/.config/omarchy/extensions/omarchy-menu.jsonc
 #
 # Nothing is overwritten: existing lines are detected and skipped, and a
@@ -47,18 +47,14 @@ LUA
   echo "  appended; run 'hyprctl reload && hyprctl configerrors' to verify"
 fi
 
-# 3. Window rule: the dashboard is a Quickshell toplevel (class org.quickshell), matched by title.
+# 3. Window rule: none. The dashboard is a normal toplevel and tiles like any
+#    app. Versions before 0.9 offered a rule that floated and centered it over
+#    other windows; remove that rule if it is still there.
 LF="$HOME/.config/hypr/looknfeel.lua"
 if [[ -f $LF ]] && grep -q "$MARK) dashboard" "$LF"; then
-  echo "  dashboard window rule already present in $LF"
-elif ask "Float and center the Agent Dashboard window (rule in $LF)?"; then
-  [[ -f $LF ]] && cp -a "$LF" "$LF.bak.$(date +%s)"
-  cat >>"$LF" <<LUA
-
--- Omarchy Agent Launcher ($MARK) dashboard window: float it (it tiles without this).
-o.window({ class = "^org.quickshell$", title = "^Agent Dashboard$" }, { float = true, center = true, size = { 1180, 760 }, opacity = "1 1" })
-LUA
-  echo "  appended; hyprctl reload picks it up"
+  cp -a "$LF" "$LF.bak.$(date +%s)"
+  sed -i "/-- Omarchy Agent Launcher ($MARK) dashboard/,+1d" "$LF"
+  echo "  removed the old floating-dashboard rule from $LF (backup kept); the dashboard now tiles"
 fi
 
 # 4. Menu entry

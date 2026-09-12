@@ -13,6 +13,7 @@
 #   omarchy-agent-launcher new             the new-agent form
 #   omarchy-agent-launcher launch <name>   open (or focus) the agent's window and start it
 #   omarchy-agent-launcher chat <name>     same: focus the running session, or start one
+#   omarchy-agent-launcher focus-window <title>   focus a window by exact title (switches workspace)
 #   omarchy-agent-launcher manage          show / edit job / sign in / remove / destroy
 #   omarchy-agent-launcher list | show <name> | job <name> | sign-in <name>
 #   omarchy-agent-launcher remove <name>   forget a saved agent (and its local home)
@@ -812,6 +813,16 @@ cmd_local_server() {
   esac
 }
 
+# Focus a window by exact title (the dashboard uses this on every summon, so a
+# dashboard already open on another workspace is brought forward).
+cmd_focus_window() {
+  local t=$1 addr
+  if (( OAL_DRY_RUN )); then focus_address "<address of '$t'>"; return 0; fi
+  addr=$(window_address_by_title "$t")
+  [[ -n $addr ]] || fail "no window titled '$t'"
+  focus_address "$addr"
+}
+
 # ==================================================================== main ====
 case "${CMD[0]:-menu}" in
   menu)    cmd_menu ;;
@@ -844,5 +855,6 @@ case "${CMD[0]:-menu}" in
   providers) cmd_providers ;;
   fallback) cmd_fallback "${CMD[@]:1}" ;;
   modal)    cmd_modal ;;
+  focus-window) cmd_focus_window "${CMD[1]:?focus-window needs a window title}" ;;
   *) fail "unknown command: ${CMD[0]} (try --help)" ;;
 esac
