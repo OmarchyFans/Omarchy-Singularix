@@ -104,7 +104,7 @@ agent_provision() { # agent_provision <name>
     write_env_file "$home/.env" "" ""
   fi
 
-  # Browser sign-ins are per home. A new home (a delegated worker, Jarvis moving
+  # Browser sign-ins are per home. A new home (a delegated worker, Rix moving
   # to a provider) inherits the credentials of a home already signed in to the
   # same provider, so it never stalls on a sign-in prompt nobody is watching.
   if [[ $auth == oauth && ! -f $home/auth.json ]]; then
@@ -117,9 +117,9 @@ agent_provision() { # agent_provision <name>
   fi
 
   if [[ $role == chief-of-staff ]]; then
-    [[ -f $home/SOUL.md ]] || jarvis_soul "$name" >"$home/SOUL.md"
-    # The bundled skill that teaches Jarvis the launcher's commands (refreshed every launch).
-    rm -rf "$home/skills/omarchy/jarvis"; mkdir -p "$home/skills/omarchy"; cp -R "$OAL_ROOT/skills/jarvis" "$home/skills/omarchy/jarvis"
+    [[ -f $home/SOUL.md ]] || rix_soul "$name" >"$home/SOUL.md"
+    # The bundled skill that teaches Rix the launcher's commands (refreshed every launch).
+    rm -rf "$home/skills/omarchy/rix" "$home/skills/omarchy/jarvis"; mkdir -p "$home/skills/omarchy"; cp -R "$OAL_ROOT/skills/rix" "$home/skills/omarchy/rix"
   fi
   [[ -f $home/SOUL.md ]] || cat >"$home/SOUL.md" <<SOUL
 # Identity
@@ -179,7 +179,7 @@ agent_launch_args() { # agent_launch_args <name> [resume]
   local name=$1 resume=${2:-0} mode skill
   mode=$(profile_get "$name" mode)
   printf '%s\n' chat
-  [[ $(profile_get "$name" role) == chief-of-staff ]] && printf '%s\n' -s jarvis
+  [[ $(profile_get "$name" role) == chief-of-staff ]] && printf '%s\n' -s rix
   while IFS= read -r skill; do
     [[ -n $skill ]] && printf '%s\n' -s "$(agent_skill_short "$skill")"
   done < <(profile_skills "$name")

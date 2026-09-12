@@ -27,11 +27,11 @@
 #                                          OAL_AGENT holds the agent's own name inside its session)
 #   omarchy-agent-launcher settings get|set <key> [value]   e.g. notify_blockers false
 #
-# Jarvis (chief of staff) and the fleet:
-#   omarchy-agent-launcher jarvis [chat]             open Jarvis (set up on the local GPU the first time)
-#   omarchy-agent-launcher jarvis setup [BACKEND] [MODEL]   choose what Jarvis runs on
-#   omarchy-agent-launcher jarvis brief              plain status brief: agents, blockers, tokens, USD
-#   omarchy-agent-launcher jarvis ask "<question>"   one answer from Jarvis, no window
+# Rix (chief of staff) and the fleet:
+#   omarchy-agent-launcher rix [chat]             open Rix (set up on the local GPU the first time)
+#   omarchy-agent-launcher rix setup [BACKEND] [MODEL]   choose what Rix runs on
+#   omarchy-agent-launcher rix brief              plain status brief: agents, blockers, tokens, USD
+#   omarchy-agent-launcher rix ask "<question>"   one answer from Rix, no window
 #   omarchy-agent-launcher delegate --backend B --name N --task-title T (--job-stdin|--job-env|--job-file F) [--wait] [--model M]
 #                                          hand a job to a worker agent on that backend
 #   omarchy-agent-launcher result <name> [--list]    a worker's latest unattended run output
@@ -75,7 +75,7 @@ source "$OAL_LIB/backends.sh"
 source "$OAL_LIB/modal.sh"
 source "$OAL_LIB/usage.sh"
 source "$OAL_LIB/fallback.sh"
-source "$OAL_LIB/jarvis.sh"
+source "$OAL_LIB/rix.sh"
 # Tests replace the gum wrappers with scripted answers (see tests/run.sh).
 # shellcheck source=/dev/null
 [[ -n ${OAL_UI_STUBS:-} ]] && source "$OAL_UI_STUBS"
@@ -113,6 +113,7 @@ if [[ ${OAL_POPUP:-0} == 1 ]]; then
 fi
 
 need jq
+rix_migrate   # one-time Jarvis -> Rix rename of the chief of staff's profile (no-op afterwards)
 ui_need() { need gum; [[ -f /usr/share/omarchy/bin/omarchy-restart-gum ]] && source omarchy-restart-gum 2>/dev/null; return 0; }   # gum + theme colors, interactive commands only
 opt_flag() { local o; for o in "${OPTS[@]}"; do [[ $o == "$1" ]] && return 0; done; return 1; }
 opt_value() { local i; for ((i=0; i<${#OPTS[@]}; i++)); do [[ ${OPTS[i]} == "$1" ]] && { printf '%s' "${OPTS[i+1]:-}"; return 0; }; done; return 1; }
@@ -313,7 +314,7 @@ cmd_launch() {
 
 # One run of the agent's session in this terminal: prepare, start, log events,
 # and for an unattended run keep a copy of the output under
-# <agent home>/runs/<timestamp>.log so `result NAME` (and Jarvis) can read it.
+# <agent home>/runs/<timestamp>.log so `result NAME` (and Rix) can read it.
 # session_run_once <name> <resume:0|1>  -> the agent's exit code
 session_run_once() {
   local name=$1 resume=${2:-0} code mode; mode=$(profile_get "$name" mode)
@@ -504,7 +505,7 @@ cmd_info() {
     first=1
     while IFS= read -r id; do [[ -n $id ]] || continue; (( first )) || echo ','; first=0; jq -c . "$(profile_path "$id")"; done < <(profile_list)
     echo '],"local":'"$(local_status_json)"
-    echo ',"backends":'"$(backends_list_json)"',"gpus":'"$(modal_gpus_json)"',"modal":'"$(modal_status_json quick)"',"jarvis":'"$(jarvis_status_json)"
+    echo ',"backends":'"$(backends_list_json)"',"gpus":'"$(modal_gpus_json)"',"modal":'"$(modal_status_json quick)"',"rix":'"$(rix_status_json)"',"jarvis":'"$(rix_status_json)"
     echo ',"catalog":{"source":"'"$(models_catalog_available && echo models.dev || echo static)"'","updated":'"$(jq -Rn --arg v "$(models_catalog_updated || true)" '$v')"',"url":"https://models.dev"}'
     echo ',"paths":{"config":'"$(jq -Rn --arg v "$OAL_CONF" '$v')"',"data":'"$(jq -Rn --arg v "$OAL_DATA" '$v')"'}}'
   } | jq .
@@ -598,7 +599,7 @@ cmd_projects_json() {
 }
 
 # Everything the dashboard needs, as one compact JSON document: agents (status,
-# window, tasks, blockers), Jarvis, usage (tokens + USD), backends, projects
+# window, tasks, blockers), Rix, usage (tokens + USD), backends, projects
 # (waterfall phase per registered project). No network.
 cmd_status_json() {
   cmd_kanban_sync >/dev/null 2>&1 || true
@@ -609,9 +610,11 @@ cmd_status_json() {
   # What the local server actually serves; a saved agent may pin an older file name.
   local served=""
   if declare -F local_online >/dev/null && local_online; then served=$(local_models_json | jq -r '.[0].id // ""' 2>/dev/null || true); fi
+  local rixj; rixj=$(rix_status_json)
   {
-    printf '{"version":%s,"blockers":%s,"jarvis":%s,"usage":%s,"backends":%s,"modal":%s,"projects":%s,"agents":[' \
-      "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")" "$(jarvis_status_json)" "$(usage_json)" "$(backends_list_json)" "$(modal_status_json quick)" "$projects"
+    # "jarvis" duplicates "rix" for one release (pre-0.9 readers).
+    printf '{"version":%s,"blockers":%s,"rix":%s,"jarvis":%s,"usage":%s,"backends":%s,"modal":%s,"projects":%s,"agents":[' \
+      "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")" "$rixj" "$rixj" "$(usage_json)" "$(backends_list_json)" "$(modal_status_json quick)" "$projects"
     local first=1
     while IFS= read -r n; do
       [[ -n $n ]] || continue; (( first )) || printf ','; first=0
@@ -642,21 +645,21 @@ cmd_status_json() {
 }
 cmd_status() { if (( JSON )); then cmd_status_json | jq .; else cmd_list; fi; }
 
-# ------------------------------------------------------------- Jarvis & co ----
+# ------------------------------------------------------------- Rix & co ----
 cmd_usage() { if (( JSON )); then usage_json | jq .; else usage_print; fi; }
 
-cmd_jarvis() {
+cmd_rix() {
   case "${CMD[1]:-chat}" in
-    setup)     jarvis_setup "${CMD[2]:-}" "${CMD[3]:-}" ;;
-    chat|open) jarvis_exists || jarvis_setup; cmd_launch "$JARVIS_NAME" ;;
-    brief)     jarvis_brief ;;
-    ask)       jarvis_ask "${CMD[2]:?jarvis ask needs a question}" ;;
-    status)    jarvis_status_json | jq . ;;
-    *) fail "usage: omarchy-agent-launcher jarvis [chat|setup [BACKEND [MODEL]]|brief|ask \"…\"|status]" ;;
+    setup)     rix_setup "${CMD[2]:-}" "${CMD[3]:-}" ;;
+    chat|open) rix_exists || rix_setup; cmd_launch "$RIX_NAME" ;;
+    brief)     rix_brief ;;
+    ask)       rix_ask "${CMD[2]:?rix ask needs a question}" ;;
+    status)    rix_status_json | jq . ;;
+    *) fail "usage: omarchy-agent-launcher rix [chat|setup [BACKEND [MODEL]]|brief|ask \"…\"|status]" ;;
   esac
 }
 
-# Hand a job to a worker agent on a backend. Jarvis calls this from its session
+# Hand a job to a worker agent on a backend. Rix calls this from its session
 # (OAL_AGENT is set, so the worker records it as parent); you can too.
 cmd_delegate() {
   local backend name title mode=unattended model
@@ -664,7 +667,7 @@ cmd_delegate() {
   name=$(opt_value --name || echo "task-$(date +%m%d%H%M%S)"); name=$(slugify "$name")
   title=$(opt_value --task-title || echo "$name"); model=$(opt_value --model || true)
   opt_flag --interactive && mode=interactive
-  local parent=${OAL_AGENT:-}; [[ -z $parent ]] && jarvis_exists && parent=$JARVIS_NAME
+  local parent=${OAL_AGENT:-}; [[ -z $parent ]] && rix_exists && parent=$RIX_NAME
   local -a create=(--name "$name" --agent hermes --runtime local --backend "$backend" --mode "$mode" --role worker --task-title "$title")
   [[ -n $parent ]] && create+=(--parent "$parent")
   [[ -n $model ]] && create+=(--model "$model")
@@ -848,7 +851,7 @@ case "${CMD[0]:-menu}" in
   kanban-sync) cmd_kanban_sync "${CMD[1]:-}" ;;
   local-server) cmd_local_server ;;
   usage)    cmd_usage ;;
-  jarvis)   cmd_jarvis ;;
+  rix|jarvis) cmd_rix ;;   # "jarvis" is the pre-0.9 name, kept as an alias
   delegate) cmd_delegate ;;
   result)   cmd_result "${CMD[1]:?result needs a name}" ;;
   backends) cmd_backends ;;

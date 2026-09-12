@@ -7,7 +7,7 @@ import qs.Ui
 import "components"
 
 // Agent Dashboard: a persistent window (a normal toplevel, not a popup) with
-// six pages: Jarvis (the chief of staff: brief, ask, backends, tokens and
+// six pages: Rix (the chief of staff: brief, ask, backends, tokens and
 // USD per task), Agents (status, switch to chat), New agent (the setup form),
 // Events (sortable, filterable log), Notifications (open blockers), Projects
 // (per-project waterfall phase, progress, and blockers at a glance).
@@ -15,7 +15,7 @@ import "components"
 // Host contract (kind "panel", keepLoaded): the shell injects `shell` and
 // `manifest`, calls open(payloadJson) / close(), reads `opened`; we call
 // shell.hide(id) when the user closes the window (same plumbing as the
-// first-party dev gallery). Payload: {"tab": "jarvis|agents|new|events|notifications|projects",
+// first-party dev gallery). Payload: {"tab": "rix|agents|new|events|notifications|projects",
 // "agent": "<name>"}.
 //
 // Data: `omarchy-agent-launcher status --json` (on open, every 30 s while
@@ -42,7 +42,7 @@ Item {
   readonly property color warnColor: "#e0af68"
 
   // ---- state shared with the tabs ---------------------------------------
-  property string tab: "jarvis"
+  property string tab: "rix"
   property var status: null            // parsed `status --json`
   property var blockers: ({})          // parsed blockers.json
   property var events: []              // ingested events.jsonl lines (capped)
@@ -56,7 +56,7 @@ Item {
   readonly property int runningCount: status ? status.agents.filter(function(a) { return a.running }).length : 0
   readonly property int agentCount: status ? status.agents.length : 0
 
-  readonly property var currentTab: tab === "jarvis" ? jarvisTab : (tab === "new" ? setupForm : (tab === "events" ? eventsTab : (tab === "notifications" ? notifTab : (tab === "projects" ? projectsTab : agentsTab))))
+  readonly property var currentTab: tab === "rix" ? rixTab : (tab === "new" ? setupForm : (tab === "events" ? eventsTab : (tab === "notifications" ? notifTab : (tab === "projects" ? projectsTab : agentsTab))))
   readonly property var usage: status && status.usage ? status.usage : null
   readonly property real totalCost: usage ? usage.totals.cost_usd : 0
 
@@ -81,7 +81,8 @@ Item {
     if (payloadJson) {
       try { var p = JSON.parse(String(payloadJson)); if (p && typeof p.tab === "string") wanted = p.tab; if (p && typeof p.agent === "string") agent = p.agent } catch (e) {}
     }
-    if (["jarvis", "agents", "new", "events", "notifications", "projects"].indexOf(wanted) >= 0) tab = wanted
+    if (wanted === "jarvis") wanted = "rix"   // pre-0.9 name of the chief of staff's page
+    if (["rix", "agents", "new", "events", "notifications", "projects"].indexOf(wanted) >= 0) tab = wanted
     if (agent !== "") requestedAgent = agent
     window.visible = true
     refreshStatus()
@@ -212,12 +213,12 @@ Item {
         onActivateRequested: if (dash.cursorActive && dash.currentTab && typeof dash.currentTab.activate === "function") dash.currentTab.activate(dash.selectedIndex)
         onReturnRequested: if (dash.cursorActive && dash.currentTab && typeof dash.currentTab.activate === "function") dash.currentTab.activate(dash.selectedIndex)
         onTabRequested: function(direction) {
-          var order = ["jarvis", "agents", "new", "events", "notifications", "projects"]
+          var order = ["rix", "agents", "new", "events", "notifications", "projects"]
           var i = (order.indexOf(dash.tab) + (direction < 0 ? -1 : 1) + order.length) % order.length
           dash.selectTab(order[i])
         }
         onTextKey: function(t) {
-          if (t === "1") dash.selectTab("jarvis")
+          if (t === "1") dash.selectTab("rix")
           else if (t === "2") dash.selectTab("agents")
           else if (t === "3") dash.selectTab("new")
           else if (t === "4") dash.selectTab("events")
@@ -271,7 +272,7 @@ Item {
                   Text { id: badgeText; anchors.centerIn: parent; text: parent.parent.badge; color: dash.background; font.family: dash.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
                 }
               }
-              NavButton { tabId: "jarvis"; iconText: "󰚩"; text: "Jarvis" }
+              NavButton { tabId: "rix"; iconText: "󰚩"; text: "Rix" }
               NavButton { tabId: "agents"; iconText: "󰙨"; text: "Agents"; badge: dash.runningCount; badgeColor: dash.okColor }
               NavButton { tabId: "new"; iconText: ""; text: "New agent" }
               NavButton { tabId: "events"; iconText: "󰈙"; text: "Events" }
@@ -305,7 +306,7 @@ Item {
             width: parent.width - sidebar.width
             height: parent.height
 
-            JarvisTab { id: jarvisTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "jarvis"; dash: dash }
+            RixTab { id: rixTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "rix"; dash: dash }
             AgentsTab { id: agentsTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "agents"; dash: dash }
             SetupForm {
               id: setupForm; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "new"; dash: dash

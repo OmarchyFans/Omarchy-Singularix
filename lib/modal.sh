@@ -82,26 +82,26 @@ modal_backend_up() { # modal_backend_up <id>
   local -a shown=("${env[@]//OAL_API_KEY=*/OAL_API_KEY=<key>}"); shown=("${shown[@]//HF_TOKEN=*/HF_TOKEN=<token>}")   # for dry-run output only
   say "Backend $id: $(jq -r '"\(.model) on \(.gpu) ×\(.gpu_count) ($\(.gpu_hourly * .gpu_count)/h while a container runs)"' <<<"$b")"
   backend_patch "$id" '{state:"starting"}'
-  event_emit "jarvis" backend_starting "Backend $id: $kind on $(jq -r .gpu <<<"$b") starting" --task "backend $id"
+  event_emit "rix" backend_starting "Backend $id: $kind on $(jq -r .gpu <<<"$b") starting" --task "backend $id"
   if [[ $kind == modal-dedicated ]]; then
     local out
     if (( OAL_DRY_RUN )); then run env "${shown[@]}" modal deploy "$MODAL_SCRIPTS/vllm_endpoint.py"; backend_patch "$id" '{state:"configured"}'; return 0; fi
-    out=$(env "${env[@]}" modal deploy "$MODAL_SCRIPTS/vllm_endpoint.py" 2>&1 | tee /dev/stderr) || { backend_patch "$id" '{state:"error"}'; event_emit jarvis blocker "Backend $id failed to deploy on Modal (see the terminal)" --level blocker --key "backend-$id"; return 1; }
+    out=$(env "${env[@]}" modal deploy "$MODAL_SCRIPTS/vllm_endpoint.py" 2>&1 | tee /dev/stderr) || { backend_patch "$id" '{state:"error"}'; event_emit rix blocker "Backend $id failed to deploy on Modal (see the terminal)" --level blocker --key "backend-$id"; return 1; }
     local url; url=$(grep -oE 'https://[A-Za-z0-9._-]+\.modal\.run[^ ]*' <<<"$out" | head -n1)
     [[ -n $url ]] || url=$(env "${env[@]}" modal run "$MODAL_SCRIPTS/vllm_endpoint.py::url" 2>/dev/null | grep -oE 'https://[^ ]+' | tail -n1)
     [[ -n $url ]] || { backend_patch "$id" '{state:"error"}'; fail "deployed, but could not read the endpoint URL; run: modal app list"; }
     backend_mark_started "$id" "$url"
-    event_emit jarvis backend_ready "Backend $id ready at $url" --task "backend $id"; event_emit jarvis blocker_cleared "" --key "backend-$id"
+    event_emit rix backend_ready "Backend $id ready at $url" --task "backend $id"; event_emit rix blocker_cleared "" --key "backend-$id"
     say "ready: $url  (first request wakes the container; it sleeps after $(jq -r .scaledown_min <<<"$b") idle minutes)"
   else
     local out
     if (( OAL_DRY_RUN )); then run env "${shown[@]}" modal run "$MODAL_SCRIPTS/vllm_sandbox.py::start"; backend_patch "$id" '{state:"configured"}'; return 0; fi
-    out=$(env "${env[@]}" modal run "$MODAL_SCRIPTS/vllm_sandbox.py::start" 2> >(tee /dev/stderr >&2)) || { backend_patch "$id" '{state:"error"}'; event_emit jarvis blocker "Backend $id: the Modal sandbox did not start (see the terminal)" --level blocker --key "backend-$id"; return 1; }
+    out=$(env "${env[@]}" modal run "$MODAL_SCRIPTS/vllm_sandbox.py::start" 2> >(tee /dev/stderr >&2)) || { backend_patch "$id" '{state:"error"}'; event_emit rix blocker "Backend $id: the Modal sandbox did not start (see the terminal)" --level blocker --key "backend-$id"; return 1; }
     local line; line=$(grep -E '^\{.*"sandbox_id"' <<<"$out" | tail -n1)
     [[ -n $line ]] || { backend_patch "$id" '{state:"error"}'; fail "sandbox started but printed no handle; run: modal sandbox list"; }
     backend_mark_started "$id" "$(jq -r .url <<<"$line")"
     backend_patch "$id" "{sandbox_id:$(jq -c .sandbox_id <<<"$line")}"
-    event_emit jarvis backend_ready "Backend $id sandbox ready at $(jq -r .url <<<"$line")" --task "backend $id"; event_emit jarvis blocker_cleared "" --key "backend-$id"
+    event_emit rix backend_ready "Backend $id sandbox ready at $(jq -r .url <<<"$line")" --task "backend $id"; event_emit rix blocker_cleared "" --key "backend-$id"
     say "ready: $(jq -r .url <<<"$line")  (sandbox $(jq -r .sandbox_id <<<"$line"); lives $(jq -r .timeout_hours <<<"$b") h or until stopped; billed the whole time)"
   fi
 }
@@ -113,7 +113,7 @@ modal_backend_down() { # modal_backend_down <id>
   if [[ $kind == modal-dedicated ]]; then run modal app stop "$(jq -r .app <<<"$b")" || warn "modal app stop failed (already stopped?)"
   else local sb; sb=$(jq -r '.sandbox_id // empty' <<<"$b"); [[ -n $sb ]] && { run modal sandbox terminate "$sb" || warn "terminate failed (already gone?)"; }; fi
   (( OAL_DRY_RUN )) || backend_mark_stopped "$id"
-  event_emit jarvis backend_stopped "Backend $id stopped" --task "backend $id"
+  event_emit rix backend_stopped "Backend $id stopped" --task "backend $id"
   say "stopped $id"
 }
 

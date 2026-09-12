@@ -9,7 +9,7 @@ Scope confirmed with user: 4 separate projects, build order A -> D -> B -> C
 ## Project A: Model outage / fallback policy  (BUILD FIRST)
 
 ### Problem
-Fable5.1 (jarvis's model) ran out of tokens mid-session with no defined
+Fable5.1 (rix's model) ran out of tokens mid-session with no defined
 fallback behavior. Need a documented, enforced chain: fable5.1 -> opus5 <-> sonnet5
 (mutual fallback) -> local qwen3.8-4B-distilled (ultimate free local fallback).
 
@@ -42,7 +42,7 @@ User holds multiple vendor accounts with frontier-level models beyond the
 original four (Anthropic, OpenAI, xAI, OpenRouter, DeepSeek, z.ai, plus
 Modal.com for self-hosted GPU backends). The fallback *sequence* is
 explicitly volatile — "changes from week to week as new better performing
-models replace the existing ones" — so it must be a **user/jarvis-editable
+models replace the existing ones" — so it must be a **user/rix-editable
 ordered list covering every model in the agent launcher**, not a value
 hardcoded into this doc or into any one agent's config. This pushes the
 design toward a single shared, centrally-editable fallback-policy artifact
@@ -51,7 +51,7 @@ generated from) rather than per-agent hand-set `fallback_providers` lists
 that drift out of sync with each other.
 
 ### Open questions to resolve in Design phase
-1. Is jarvis's fable5.1 auth OAuth/subscription-based? If so, does a quota
+1. Is rix's fable5.1 auth OAuth/subscription-based? If so, does a quota
    exhaustion surface as HTTP 429, or as some other failure shape Hermes's
    fallback trigger list doesn't catch? (Directly relevant to why this
    incident wasn't auto-handled.)
@@ -69,7 +69,7 @@ that drift out of sync with each other.
    notification pipeline already used for blockers.)
 5. Design a single editable fallback-sequence store (format TBD: JSON/YAML
    under `~/.config/omarchy-agent-launcher/`) that both the user (via CLI/
-   dashboard) and jarvis (programmatically) can reorder, covering every
+   dashboard) and rix (programmatically) can reorder, covering every
    vendor account currently configured — and a mechanism to regenerate
    every affected agent's `fallback_providers` config.yaml block from it,
    consistent with this codebase's existing profile -> provision ->
@@ -192,7 +192,7 @@ full-text store) verified against a live session, before Project C starts.
 
 ---
 
-## Project C: PageIndex encrypted memstore + jarvis gatekeeping (DEPENDS ON B)
+## Project C: PageIndex encrypted memstore + rix gatekeeping (DEPENDS ON B)
 
 ### Purpose, clarified by user (2026-09-09) — read this before Design
 The primary problem PageIndex solves is **NOT** "store chat history
@@ -218,7 +218,7 @@ somewhere encrypted." It solves two specific, higher-value problems:
    find and consume it.
 3. **Cross-session solved-problems knowledge base**: PageIndex sections
    should accumulate hard-won lessons and solutions ("we already solved
-   this once") so a future session (any agent, or jarvis on their behalf)
+   this once") so a future session (any agent, or rix on their behalf)
    can retrieve the existing solution instead of re-deriving it —
    directly reducing token spend on recurring problem classes. This is
    conceptually the same pattern as this Hermes profile's own skill
@@ -228,7 +228,7 @@ somewhere encrypted." It solves two specific, higher-value problems:
    separate mechanisms or whether skills and PageIndex should overlap /
    cross-reference each other.
 
-Encryption-at-rest and jarvis's cross-agent gatekeeping (described below)
+Encryption-at-rest and rix's cross-agent gatekeeping (described below)
 remain real requirements, but they are a property of *how* this store is
 protected, not the reason it exists.
 
@@ -247,9 +247,9 @@ full chat history as a corpus."
 ### Design intent (from user's description, to formalize in Design phase)
 - Each agent gets its own sandboxed section of the PageIndex store,
   populated from Project B's full-text export.
-- jarvis has cross-section read access; other agents do not see each
+- rix has cross-section read access; other agents do not see each
   other's sections directly.
-- An agent wanting cross-agent info asks jarvis, who searches on its
+- An agent wanting cross-agent info asks rix, who searches on its
   behalf and gatekeeps (decides what's safe to reveal, filtering
   proprietary/sensitive info) — using the **local model** for that
   gatekeeping work specifically (not a cloud model), per user's design.
@@ -273,10 +273,10 @@ full chat history as a corpus."
    phase before committing to an implementation approach.
 2. Per-request unlock (every agent read triggers a Chromium tab), or
    unlock-once-per-session/timeboxed grant? A per-read WebAuthn prompt
-   would make the memstore nearly unusable for routine jarvis lookups —
+   would make the memstore nearly unusable for routine rix lookups —
    needs explicit UX decision.
-3. What counts as "proprietary" for jarvis's gatekeeping filter — a rule
-   list, a classifier, or jarvis's own judgment per-request? Needs
+3. What counts as "proprietary" for rix's gatekeeping filter — a rule
+   list, a classifier, or rix's own judgment per-request? Needs
    examples from the user to design the filter.
 4. Does PageIndex's local mode support incremental updates (append new
    chat turns) or is it a batch reindex — matters a lot for freshness vs.

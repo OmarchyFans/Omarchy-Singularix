@@ -1,5 +1,5 @@
 #!/bin/bash
-# Backends: the models Jarvis (and you) can hand work to.
+# Backends: the models Rix (and you) can hand work to.
 #
 #   ~/.config/omarchy-agent-launcher/backends.json   {"<id>": {...}}
 #

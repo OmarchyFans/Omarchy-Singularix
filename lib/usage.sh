@@ -6,7 +6,7 @@
 # token counts (input, output, cache read, cache write, reasoning) and its own
 # cost estimate. We read it read-only (sqlite3 -readonly) and never write.
 #
-# Definitions used everywhere (dashboard, `usage`, Jarvis' brief):
+# Definitions used everywhere (dashboard, `usage`, Rix's brief):
 #   prompt tokens = input + cache_read + cache_write   (what the provider billed as prompt)
 #   task          = one Hermes session; a delegated worker agent is one task whose sessions roll up
 #   cost basis    = where a USD figure comes from, one label per row:
