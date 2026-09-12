@@ -27,7 +27,7 @@ Item {
   // ---- Dashboard contract -------------------------------------------------
   readonly property int rowCount: tasks.length
   readonly property bool editing: askField.activeFocus || addForm.editing
-  readonly property bool popupOpen: backendPick.popupOpen || taskAgentDrop.popupOpen || addForm.popupOpen || confirm.opened
+  readonly property bool popupOpen: modelPick.popupOpen || taskAgentDrop.popupOpen || addForm.popupOpen || confirm.opened || switchConfirm.opened
   function activate(i) { if (tasks[i]) dash.chat(tasks[i].agent) }
 
   // ---- tasks table --------------------------------------------------------
@@ -64,7 +64,35 @@ Item {
 
   // ---- backends -----------------------------------------------------------
   // Ready backends, plus the local GPU even when it is not ready yet: it is the default and must stay visible.
-  readonly property var readyBackends: backends.filter(function(b) { return b.ready || b.id === "local" || (rix && b.id === rix.backend) }).map(function(b) { return { value: b.id, label: b.label + "  ·  " + b.model + (b.ready ? "" : "  ·  " + b.state) } })
+  // ---- model picker (what Rix runs on) --------------------------------------
+  property var modelTree: null        // `models --json`
+  property string keyHint: ""          // shown when a vendor without a key is chosen
+  property string pendingLocal: ""     // local model file waiting for the switch confirmation
+  function loadModels() { if (modelsProc.running) return; modelsProc.command = [launcher, "models", "--json"]; modelsProc.running = true }
+  Process {
+    id: modelsProc
+    stdout: StdioCollector { id: modelsOut; waitForEnd: true }
+    onExited: function(code) { if (code === 0) { try { tab.modelTree = JSON.parse(String(modelsOut.text || "")) } catch (e) {} } }
+  }
+  Timer { id: modelsRefresh; interval: 2500; onTriggered: tab.loadModels() }
+  function pickModel(backend, model) {
+    keyHint = ""
+    var served = modelTree && modelTree.local ? modelTree.local.served : ""
+    if (backend === "local" && served !== "" && model !== served) { pendingLocal = model; switchConfirm.opened = true; return }
+    if (backend === "local") dash.act([launcher, "rix", "setup", "local"])
+    else dash.act([launcher, "rix", "setup", backend, model])
+    modelsRefresh.restart()
+  }
+  function switchLocal() {
+    var loc = info && info.local ? info.local : null
+    var argv = ["local-server", "tune", "--model", pendingLocal]
+    if (loc && loc.n_ctx > 0) argv.push("--ctx", String(loc.n_ctx))
+    if (loc && loc.slots > 0) argv.push("--slots", String(loc.slots))
+    if (!rix || rix.backend !== "local") dash.act([launcher, "rix", "setup", "local"])
+    popup(argv)
+    pendingLocal = ""
+    modelsRefresh.restart()
+  }
   readonly property var customBackends: backends.filter(function(b) { return b.kind !== "provider" })
   readonly property var providerBackends: backends.filter(function(b) { return b.kind === "provider" })
   property string pendingRemove: ""
@@ -106,7 +134,8 @@ Item {
     stdout: StdioCollector { id: infoOut; waitForEnd: true }
     onExited: function(code) { if (code === 0) { try { tab.setupInfo = JSON.parse(String(infoOut.text || "")) } catch (e) {} } }
   }
-  Connections { target: dash; function onOpenedChanged() { if (dash.opened && !tab.setupInfo) tab.loadInfo() } }
+  Connections { target: dash; function onOpenedChanged() { if (dash.opened) { if (!tab.setupInfo) tab.loadInfo(); tab.loadModels() } } }
+  Component.onCompleted: if (dash.opened) tab.loadModels()
 
   // Table pieces (inline components must sit at the root of the file).
   component HeaderCell: Text {
@@ -192,17 +221,24 @@ Item {
           PanelActionButton { iconText: "󰓛"; tooltipText: "Stop Rix's session"; visible: tab.rix && tab.rix.running; hoverColor: dash.urgent; onClicked: dash.act([tab.launcher, "stop", tab.rix.name]) }
           Item { width: Style.space(12); height: 1 }
           Cap { text: "RUNS ON"; anchors.verticalCenter: parent.verticalCenter }
-          PanelDropdown {
-            id: backendPick
-            width: Style.space(320)
-            showLabel: false
-            options: tab.readyBackends.length ? tab.readyBackends : [{ value: "", label: "no ready backend" }]
-            value: tab.rix ? tab.rix.backend : ""
+          ModelPicker {
+            id: modelPick
+            width: Style.space(360)
+            tree: tab.modelTree
+            backend: tab.rix ? tab.rix.backend : ""
+            model: tab.rix ? tab.rix.model : ""
             popupParent: tab
             ownerOpen: dash.opened && dash.tab === "rix"
-            foreground: dash.foreground; fontFamily: dash.fontFamily
-            onChanged: function(v) { if (v !== "" && (!tab.rix || v !== tab.rix.backend)) dash.act([tab.launcher, "rix", "setup", v]) }
+            foreground: dash.foreground; urgent: dash.urgent; fontFamily: dash.fontFamily
+            onPicked: function(b, m) { tab.pickModel(b, m) }
+            onNeedsKey: function(b, label, needs) { tab.keyHint = label + ": " + (needs || "needs a key or sign-in") + ". Add it on the New agent page, then pick the model again." }
           }
+        }
+        Row {
+          width: parent.width; spacing: Style.spacing.controlGap
+          visible: tab.keyHint !== ""
+          Dim { anchors.verticalCenter: parent.verticalCenter; text: tab.keyHint; color: dash.urgent }
+          Button { text: "New agent page"; iconText: ""; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: { tab.keyHint = ""; dash.selectTab("new") } }
         }
         Dim { width: parent.width; text: "Rix is a Hermes agent on this machine that manages every other agent through the launcher: it reads status and usage, hands work to bigger models with delegate, reads results, and can stop or remove agents. It asks before spending money." }
 
@@ -395,5 +431,14 @@ Item {
     foreground: dash.foreground; fontFamily: dash.fontFamily
     onConfirmed: { opened = false; dash.act([tab.launcher, "backends", "remove", tab.pendingRemove]); tab.pendingRemove = "" }
     onCanceled: { opened = false; tab.pendingRemove = "" }
+  }
+  ConfirmDialog {
+    id: switchConfirm
+    anchors.fill: parent
+    message: "Switch the local GPU server to " + String(tab.pendingLocal).replace(/\.gguf$/, "") + "? The server restarts with that model (about a minute); agents using it pause until it is back."
+    confirmText: "Switch"
+    foreground: dash.foreground; fontFamily: dash.fontFamily
+    onConfirmed: { opened = false; tab.switchLocal() }
+    onCanceled: { opened = false; tab.pendingLocal = "" }
   }
 }

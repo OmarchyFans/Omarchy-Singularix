@@ -32,6 +32,8 @@
 #   omarchy-agent-launcher rix setup [BACKEND] [MODEL]   choose what Rix runs on
 #   omarchy-agent-launcher rix brief              plain status brief: agents, blockers, tokens, USD
 #   omarchy-agent-launcher rix ask "<question>"   one answer from Rix, no window
+#   omarchy-agent-launcher models [--json]        every model Rix can run on: local models, then each
+#                                          vendor's models with $/M in/out, data country and IP-safe badge
 #   omarchy-agent-launcher delegate --backend B --name N --task-title T (--job-stdin|--job-env|--job-file F) [--wait] [--model M]
 #                                          hand a job to a worker agent on that backend
 #   omarchy-agent-launcher result <name> [--list]    a worker's latest unattended run output
@@ -76,6 +78,7 @@ source "$OAL_LIB/modal.sh"
 source "$OAL_LIB/usage.sh"
 source "$OAL_LIB/fallback.sh"
 source "$OAL_LIB/rix.sh"
+source "$OAL_LIB/vendors.sh"
 # Tests replace the gum wrappers with scripted answers (see tests/run.sh).
 # shellcheck source=/dev/null
 [[ -n ${OAL_UI_STUBS:-} ]] && source "$OAL_UI_STUBS"
@@ -87,7 +90,7 @@ while (($#)); do
     --inline)  INLINE=1 ;;
     --dry-run) OAL_DRY_RUN=1 ;;
     --json)    JSON=1 ;;
-    -h|--help) sed -n '3,47p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --version) echo "omarchy-agent-launcher $OAL_VERSION"; exit 0 ;;
     --name|--agent|--runtime|--provider|--auth|--model|--base-url|--mode|--skill|--job-file|--task|--level|--key|--ctx|--kv|--slots|\
     --backend|--parent|--role|--task-title|--id|--kind|--label|--url|--gpu|--gpu-count|--scaledown|--timeout-hours|--input-per-m|--output-per-m)
@@ -859,5 +862,7 @@ case "${CMD[0]:-menu}" in
   fallback) cmd_fallback "${CMD[@]:1}" ;;
   modal)    cmd_modal ;;
   focus-window) cmd_focus_window "${CMD[1]:?focus-window needs a window title}" ;;
+  models)   [[ ${OAL_OFFLINE:-0} == 1 ]] || models_catalog_refresh >/dev/null 2>&1 || true
+            if (( JSON )); then models_tree_json | jq .; else models_tree_print; fi ;;
   *) fail "unknown command: ${CMD[0]} (try --help)" ;;
 esac

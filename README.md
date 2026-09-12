@@ -174,7 +174,7 @@ local GPU when one is available, so it costs nothing to keep around. From its
 page or its chat:
 
 - **Brief**: a plain-language status of every agent, blocker, and today's spend.
-- **Ask**: a one-shot question answered by Rix'ss model with the current status as context.
+- **Ask**: a one-shot question answered by Rix's model with the current status as context.
 - **Delegate**: `omarchy-agent-launcher delegate --backend NAME --task-title "…" [--wait]` hands a job to a worker agent on a backend; the worker records Rix as its parent, and `result NAME` returns what it produced. Rix proposes the backend and price and waits for your yes before anything that costs money.
 
 **Backends** are where delegated work can go, kept in a registry
@@ -283,6 +283,26 @@ and output prices in USD per million tokens from the open
 your keys. Subscription sign-ins show no prices because the plan covers usage;
 Ollama lists what `ollama list` reports; offline, static suggestions are used.
 "Custom model id…" is always offered.
+
+On the Rix page, **Runs on** opens the model picker. Local models come first:
+with more than one, a **Local models** row opens with Right or Enter and closes
+with Left or Escape. Picking a file other than the one being served asks before
+it restarts the local server. Every vendor follows, usable ones first; rows
+without a key are dimmed and point you to the New agent page. Each model row
+shows the vendor, the price in and out per million tokens, where the vendor
+processes your data, and a badge:
+
+| Badge | Meaning |
+|-------|---------|
+| **IP-safe** | The vendor does not train on API data by default, and processes it only in a jurisdiction with enforceable IP protection for foreign customers |
+| **not IP-safe** | It trains on API data by default (an opt-out does not count), or processes it in a country outside that list, such as China |
+| **unverified** | The vendor's own pages do not say where it processes API data, or whether it trains on it |
+| **varies** | An aggregator: it depends on the upstream provider that serves the model |
+
+The facts behind each badge live in `data/vendors.json`, each with the vendor's
+own source pages and the date they were checked. They are not legal advice.
+The safe list is overridable with `OAL_IP_SAFE_JURISDICTIONS`. The same tree is
+available as `omarchy-agent-launcher models --json`.
 
 ### Hosting: your own, or omarchy.fans cloud
 

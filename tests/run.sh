@@ -115,6 +115,31 @@ grep -q "would open window\|would launch" <<<"$out" || tfail "create --launch ou
 "$L" create --name x --agent hermes --runtime local --provider openai --auth api-key --mode interactive --job-file /dev/null 2>/dev/null && tfail "create should reject empty job"
 pass "info --json, create, create --launch, validation"
 
+echo "== models --json: picker tree, prices, vendor facts, IP-safe badge"
+mkdir -p "$T/cache/omarchy-agent-launcher"
+cat >"$T/cache/omarchy-agent-launcher/models.json" <<'J'
+{"anthropic":{"models":{"claude-sonnet-5":{"name":"Claude Sonnet 5","tool_call":true,"release_date":"2026-05-01","cost":{"input":3,"output":15},"limit":{"context":1000000}}}},
+ "deepseek":{"models":{"deepseek-chat":{"name":"DeepSeek Chat","tool_call":true,"release_date":"2026-01-01","cost":{"input":0.27,"output":1.1},"limit":{"context":128000}}}},
+ "openrouter":{"models":{"x/y":{"name":"Y","tool_call":true,"release_date":"2026-01-01","cost":{"input":1,"output":2},"limit":{"context":8000}}}}}
+J
+XDG_CACHE_HOME="$T/cache" "$L" models --json >"$T/models.json" 2>/dev/null || tfail "models --json"
+jq -e 'has("local") and (.local | has("served") and has("rows")) and (.online | length > 0)' "$T/models.json" >/dev/null || tfail "models tree shape"
+jq -e '.online | all(has("backend") and has("vendor") and has("ready") and has("needs") and has("country") and has("ip_safe") and has("badge") and has("models"))' "$T/models.json" >/dev/null || tfail "online entry keys"
+jq -e '.online[] | select(.backend == "anthropic") | .ready == true and (.models[0] | .id == "claude-sonnet-5" and .input == 3 and .output == 15)' "$T/models.json" >/dev/null || tfail "anthropic ready with catalog prices"
+jq -e '.online[] | select(.backend == "deepseek") | .ip_safe == false and .badge == "unsafe" and .country == "CN"' "$T/models.json" >/dev/null || tfail "deepseek not IP-safe"
+jq -e '.online[] | select(.backend == "openrouter") | .ip_safe == null and .badge == "varies"' "$T/models.json" >/dev/null || tfail "openrouter aggregator badge"
+jq -e '.online[] | select(.backend == "xai") | .ip_safe == null and .badge == "unverified"' "$T/models.json" >/dev/null || tfail "xai unverified"
+jq -e '[.online[].ready] | . == (sort | reverse)' "$T/models.json" >/dev/null || tfail "ready entries not first"
+jq -e 'to_entries | all(.value | has("label") and has("processing_countries") and has("trains_on_api_data") and has("basis") and (.sources | length > 0) and .reviewed != null)' "$ROOT/data/vendors.json" >/dev/null || tfail "vendors.json facts incomplete"
+printf '{"acme":{"label":"Acme","processing_countries":["JP"],"trains_on_api_data":false},"bad":{"label":"Bad","processing_countries":["US","CN"],"trains_on_api_data":false}}' >"$T/vendors.json"
+OAL_ROOT="$ROOT" OAL_VENDORS_FILE="$T/vendors.json"; source "$ROOT/lib/vendors.sh"
+jq -e '.ip_safe == true and .badge == "safe" and .country == "JP"' <<<"$(vendor_json acme)" >/dev/null || tfail "safe derivation"
+jq -e '.ip_safe == false and .badge == "unsafe"' <<<"$(vendor_json bad)" >/dev/null || tfail "unsafe jurisdiction derivation"
+jq -e '.badge == null' <<<"$(vendor_json nobody)" >/dev/null || tfail "unknown vendor has no badge"
+unset OAL_VENDORS_FILE
+XDG_CACHE_HOME="$T/cache" "$L" models 2>/dev/null | grep -q "not IP-safe" || tfail "models plain listing"
+pass "models tree, catalog prices, badges, ready-first order"
+
 echo "== events, blockers, status, settings, rotation, stop, switch"
 S="$XDG_STATE_HOME/omarchy-agent-launcher"
 grep -q '"kind":"created"' "$S/events.jsonl" || tfail "create did not log an event"

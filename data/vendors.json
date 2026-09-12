@@ -1,0 +1,237 @@
+{
+  "anthropic": {
+    "label": "Anthropic",
+    "hq_country": "US",
+    "processing_countries": null,
+    "stored_countries": ["US"],
+    "regions_selectable": true,
+    "trains_on_api_data": false,
+    "aggregator": false,
+    "basis": "Does not train on API content by default. Stored data stays in the US, but inference runs in any available geography by default (it can be pinned to the US per request or workspace), so the processing country is not fixed.",
+    "quotes": [
+      "By default, we will not use your inputs or outputs from our commercial products (e.g. Claude for Work, Anthropic API, Claude Gov, etc.) to train our models.",
+      "\"global\" | Default. Inference may run in any available geography for optimal performance and availability.",
+      "Currently, \"us\" is the only available workspace geo."
+    ],
+    "sources": [
+      "https://privacy.claude.com/en/articles/7996868-is-my-data-used-for-model-training",
+      "https://www.anthropic.com/legal/commercial-terms",
+      "https://platform.claude.com/docs/en/manage-claude/data-residency"
+    ],
+    "reviewed": "2026-09-12"
+  },
+  "openai": {
+    "label": "OpenAI",
+    "hq_country": "US",
+    "processing_countries": null,
+    "stored_countries": null,
+    "regions_selectable": true,
+    "trains_on_api_data": false,
+    "aggregator": false,
+    "basis": "Does not train on API data unless you opt in. The default geography is global and unspecified; per-project data residency exists, but only some regions also keep inference local.",
+    "quotes": [
+      "As of March 1, 2023, data sent to the OpenAI API is not used to train or improve OpenAI models (unless you explicitly opt in to share data with us).",
+      "If your selected Region does not support regional processing, as identified below, OpenAI may also process and temporarily store Customer Content outside of the Region to deliver the services."
+    ],
+    "sources": [
+      "https://developers.openai.com/api/docs/guides/your-data",
+      "https://openai.com/policies/services-agreement/"
+    ],
+    "reviewed": "2026-09-12"
+  },
+  "xai": {
+    "label": "xAI",
+    "hq_country": null,
+    "processing_countries": null,
+    "stored_countries": null,
+    "regions_selectable": null,
+    "trains_on_api_data": false,
+    "aggregator": false,
+    "basis": "Never trains on API inputs or outputs without explicit permission and keeps them 30 days for abuse auditing. No processing location is published on a reachable xAI page.",
+    "quotes": [
+      "xAI never trains on your API inputs or outputs without your explicit permission.",
+      "By default, all API requests and responses are stored on our servers (encrypted at rest) for 30 days for auditing purposes in the event of suspected abuse or misuse."
+    ],
+    "sources": [
+      "https://docs.x.ai/developers/faq/security",
+      "https://docs.x.ai/developers/faq/general"
+    ],
+    "reviewed": "2026-09-12"
+  },
+  "google": {
+    "label": "Google Gemini",
+    "hq_country": "US",
+    "processing_countries": null,
+    "stored_countries": null,
+    "regions_selectable": null,
+    "trains_on_api_data": false,
+    "aggregator": false,
+    "basis": "On the paid tier prompts and responses are not used to improve Google products (the free tier is). Data may be stored or cached in any country where Google has facilities.",
+    "quotes": [
+      "Google doesn't use your prompts (including associated system instructions, cached content, and files such as images, videos, or documents) or responses to improve our products",
+      "This data may be stored transiently or cached in any country in which Google or its agents maintain facilities."
+    ],
+    "sources": [
+      "https://ai.google.dev/gemini-api/terms",
+      "https://cloud.google.com/terms/google-entity"
+    ],
+    "reviewed": "2026-09-12"
+  },
+  "deepseek": {
+    "label": "DeepSeek",
+    "hq_country": "CN",
+    "processing_countries": ["CN"],
+    "stored_countries": ["CN"],
+    "regions_selectable": false,
+    "trains_on_api_data": true,
+    "aggregator": false,
+    "basis": "The platform terms defer to a privacy policy that uses inputs to train models with only an opt-out, and data is collected, processed and stored in the People's Republic of China.",
+    "quotes": [
+      "To improve and develop the Services and to train and improve our technology, such as our machine learning models and algorithms.",
+      "the right to opt-out of using your Personal Data for training our models or optimizing our technologies.",
+      "To provide you with our services, we directly collect, process and store your Personal Data in People's Republic of China."
+    ],
+    "sources": [
+      "https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html",
+      "https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html"
+    ],
+    "reviewed": "2026-09-12"
+  },
+  "openrouter": {
+    "label": "OpenRouter",
+    "hq_country": "US",
+    "processing_countries": ["US"],
+    "stored_countries": ["US"],
+    "regions_selectable": true,
+    "trains_on_api_data": false,
+    "aggregator": true,
+    "basis": "OpenRouter itself does not train on inputs or outputs, but it routes each request to an upstream provider, and some of those may train on it; where data goes depends on the model and provider you pick.",
+    "quotes": [
+      "OpenRouter does not use your Inputs or Outputs for model training.",
+      "Some Model Providers may use your Inputs and Outputs for model training or improvement."
+    ],
+    "sources": [
+      "https://openrouter.ai/privacy",
+      "https://openrouter.ai/docs/guides/privacy/logging",
+      "https://openrouter.ai/terms"
+    ],
+    "reviewed": "2026-09-12"
+  },
+  "zai": {
+    "label": "Z.ai",
+    "hq_country": "SG",
+    "processing_countries": ["SG"],
+    "stored_countries": null,
+    "regions_selectable": false,
+    "trains_on_api_data": null,
+    "aggregator": false,
+    "basis": "Customer data is generally processed in Singapore by a Singapore entity and API content is not stored, but no page states whether API content may be used for training.",
+    "quotes": [
+      "The Company do not store any of the content the Customer or its End Users provide or generate while using our Services.",
+      "As a result, Customer Data is generally processed in Singapore."
+    ],
+    "sources": [
+      "https://docs.z.ai/legal-agreement/privacy-policy",
+      "https://docs.z.ai/legal-agreement/terms-of-use.md"
+    ],
+    "reviewed": "2026-09-12"
+  },
+  "zhipuai": {
+    "label": "Zhipu BigModel",
+    "hq_country": "CN",
+    "processing_countries": ["CN"],
+    "stored_countries": ["CN"],
+    "regions_selectable": false,
+    "trains_on_api_data": null,
+    "aggregator": false,
+    "basis": "Personal information collected in China is stored in China with no cross-border transfer; the policy mentions training on anonymised data and does not clearly address API inputs and outputs.",
+    "quotes": [
+      "我们在中国境内运营中收集和产生的个人信息存储在中国境内",
+      "以及改进我们的产品和服务（包括使用匿名数据进行机器学习或模型算法训练）"
+    ],
+    "sources": [
+      "https://docs.bigmodel.cn/cn/terms/privacy-policy.md",
+      "https://docs.bigmodel.cn/cn/terms/service-agreement.md"
+    ],
+    "reviewed": "2026-09-12"
+  },
+  "moonshotai": {
+    "label": "Moonshot AI (Kimi)",
+    "hq_country": "SG",
+    "processing_countries": ["SG"],
+    "stored_countries": ["SG"],
+    "regions_selectable": false,
+    "trains_on_api_data": true,
+    "aggregator": false,
+    "basis": "On the international platform, customer content may be used to improve Moonshot's models unless an enterprise agreement says otherwise; servers are in Singapore. The .cn platform stores data in the PRC.",
+    "quotes": [
+      "Unless otherwise expressly agreed in writing, Customer Content may be used for the foregoing purposes.",
+      "Our servers are situated in Singapore."
+    ],
+    "sources": [
+      "https://platform.kimi.ai/docs/agreement/modeluse",
+      "https://platform.kimi.ai/docs/agreement/userprivacy",
+      "https://platform.kimi.com/docs/agreement/userprivacy"
+    ],
+    "reviewed": "2026-09-12"
+  },
+  "alibaba": {
+    "label": "Alibaba Cloud Model Studio (Qwen)",
+    "hq_country": "SG",
+    "processing_countries": ["SG"],
+    "stored_countries": ["SG"],
+    "regions_selectable": true,
+    "trains_on_api_data": false,
+    "aggregator": false,
+    "basis": "Alibaba Cloud says it never uses customer data for model training; the International scope is served from Singapore by a Singapore entity, while the China (Beijing) region is mainland-only.",
+    "quotes": [
+      "Alibaba Cloud protects data privacy and will never use your data for model training.",
+      "China (Beijing) and Singapore regions each support only one service deployment scope (Chinese mainland and International, respectively), so no selection is needed."
+    ],
+    "sources": [
+      "https://docs.modelstudio.console.alibabacloud.com/en/model-studio/what-is-model-studio",
+      "https://www.alibabacloud.com/help/en/model-studio/regions/",
+      "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy"
+    ],
+    "reviewed": "2026-09-12"
+  },
+  "mistral": {
+    "label": "Mistral AI",
+    "hq_country": "FR",
+    "processing_countries": ["EU"],
+    "stored_countries": ["EU"],
+    "regions_selectable": true,
+    "trains_on_api_data": true,
+    "aggregator": false,
+    "basis": "On pay-as-you-go API use, training on customer data can only be switched off by opting out (Enterprise is opted out by default). Data is hosted in the EU by default, or in the US through the US endpoint.",
+    "quotes": [
+      "Pay-as-you-go: Customers retain full control over this processing and have the right to opt out at any time.",
+      "By default, your data is hosted in the European Union."
+    ],
+    "sources": [
+      "https://help.mistral.ai/en/articles/347617-do-you-use-my-user-data-to-train-your-artificial-intelligence-models",
+      "https://legal.mistral.ai/terms/commercial-terms-of-service",
+      "https://help.mistral.ai/en/articles/347629-where-do-you-store-my-data-or-my-organization-s-data"
+    ],
+    "reviewed": "2026-09-12"
+  },
+  "nous": {
+    "label": "Nous Research",
+    "hq_country": "US",
+    "processing_countries": null,
+    "stored_countries": null,
+    "regions_selectable": null,
+    "trains_on_api_data": true,
+    "aggregator": false,
+    "basis": "The Portal terms license your data for model training; the opt-out is Privacy Mode. No processing location is published.",
+    "quotes": [
+      "You hereby grant Nous Research a non-exclusive, worldwide, royalty-free, fully paid-up, transferable, and sublicensable license to use, reproduce, modify, create derivative works from, and otherwise process Your Data for the purposes of ... (iii) training, fine-tuning, refining, grounding, evaluating, developing, operating, testing, and enhancing machine learning and artificial intelligence models",
+      "In particular, users may elect to enable \"Privacy Mode,\" which allows users to opt out of the storage and use of certain inference payloads for training, product improvement, and support purposes."
+    ],
+    "sources": [
+      "https://portal.nousresearch.com/terms",
+      "https://portal.nousresearch.com/privacy"
+    ],
+    "reviewed": "2026-09-12"
+  }
+}
