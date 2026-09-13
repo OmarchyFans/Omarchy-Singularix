@@ -105,6 +105,8 @@ when you have them. You are the user's memory of what every agent is doing.
 - You hand off work with \`omarchy-agent-launcher delegate …\` and read it back with
   \`omarchy-agent-launcher result NAME\`. Workers are other agents; you are not one.
 - Money needs a yes: state the backend and its price before anything paid starts.
+- If Sentinel is installed, it guards the user's assets and advises you; it never
+  does the work. You orchestrate its advisories: \`omarchy-agent-launcher sentinel advisories\`.
 - Post progress for the dashboard:
   omarchy-agent-launcher event "\$OAL_AGENT" note "what happened" [--task NAME]
   omarchy-agent-launcher event "\$OAL_AGENT" blocker "what you need" --level blocker
@@ -131,7 +133,7 @@ rix_setup() {
   [[ -n $keep_signin ]] && profile_set "$RIX_NAME" signed_in true
   profile_set "$RIX_NAME" role '"chief-of-staff"'
   profile_set "$RIX_NAME" backend "$(jq -Rn --arg v "$backend" '$v')"
-  [[ -n $existing_job ]] || rix_job >"$(job_path "$RIX_NAME")"
+  [[ -n $existing_job ]] || { rix_job; sentinel_installed && rix_sentinel_duty; } >"$(job_path "$RIX_NAME")"
   event_emit "$RIX_NAME" created "Rix set up on $backend/$m" --task "chief of staff"
   if [[ $provider == local ]] && declare -F local_status_json >/dev/null && ! local_status_json | jq -e '.agent_ready' >/dev/null 2>&1; then
     warn "the local GPU server is not ready for agents yet: run  omarchy-agent-launcher local-server tune --ctx 32768  (or pick another backend)"
@@ -153,6 +155,11 @@ rix_brief() {
       "Needs you:",
       (if ($s.blockers // 0) == 0 then "  nothing" else ($a[] | .open_blockers[]? | "  \(.agent): \(.message)") end),
       "",
+      (if ($s.sentinel.installed // false) then
+        "Sentinel advises: \($s.sentinel.pending) pending · \($s.sentinel.assigned) assigned · \($s.sentinel.to_verify) to verify",
+        ($s.sentinel.advisories[] | "  \(.id)\t\(.severity)\t\(.rix_state)\(if .worker != "" then " → " + .worker else "" end)\t\(.title[:60])"),
+        ""
+      else empty end),
       "Agents:",
       (if ($a | length) == 0 then "  none yet (omarchy-agent-launcher delegate … or the New agent page)" else
         ($a[] | "  \(.name)\t\(.status)\t\(.backend // .provider)/\(.model)\t\(.job_title[:50])" + (if .last then "\t\(.last.message[:60])" else "" end)) end)' | column -t -s $'\t'

@@ -13,6 +13,7 @@ unset "${!OAL_@}" 2>/dev/null || true
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export XDG_CONFIG_HOME="$T/config" XDG_DATA_HOME="$T/data" XDG_STATE_HOME="$T/state" HOME_REAL="$HOME"
+export OAL_SENTINEL_BIN=oal-test-no-sentinel   # never the real Sentinel install; the sentinel block uses a stub
 export OAL_OFFLINE=1 OAL_UI_STUBS="$ROOT/tests/ui-stubs.sh" OAL_ANSWERS="$T/answers" OAL_ASKED="$T/asked"
 export EDITOR="$T/fake-editor"
 printf '#!/bin/bash\nprintf "# Job\\nWrite release notes for the last tag.\\n" >"$1"\n' >"$EDITOR"; chmod +x "$EDITOR"
@@ -417,6 +418,65 @@ if command -v hermes >/dev/null; then
 else
   echo "  skip (hermes not installed): rix"
 fi
+
+echo "== sentinel: Rix reads advisories, records who handles them, Sentinel verifies"
+st=$("$L" status --json); [[ $(jq -r '.sentinel.installed' <<<"$st") == false ]] || tfail "sentinel not installed by default in tests"
+out=$("$L" sentinel advisories 2>&1) && tfail "sentinel without an install must fail"
+grep -q "Sentinel is not installed" <<<"$out" || { echo "$out"; tfail "install hint"; }
+SD="$T/sentinel-stub"; mkdir -p "$SD" "$T/bin"
+cat >"$SD/f.json" <<'JSON'
+{"a1":{"id":"a1","severity":"high","arena":"codebase","asset":"repo-1","title":"Leaked key in config.js","status":"open","advised_at":"2026-09-13T01:00:00Z","advisory":"/adv/a1.md"},
+ "a2":{"id":"a2","severity":"critical","arena":"attack-vectors","asset":"domain-1","title":"No DMARC record","status":"open","advised_at":"2026-09-13T02:00:00Z","advisory":"/adv/a2.md"},
+ "a3":{"id":"a3","severity":"medium","arena":"codebase","asset":"repo-1","title":"Unpinned action","status":"open"}}
+JSON
+cat >"$T/bin/sentinel-stub" <<STUB
+#!/bin/bash
+F="$SD/f.json"; a=(); for x in "\$@"; do [[ \$x == --json || \$x == --all ]] || a+=("\$x"); done
+case \${a[0]} in
+  advisories) jq -c '[.[] | select(.advisory) | {id, severity, arena, title, status, advised_at, advisory}]' "\$F" ;;
+  findings)   jq -c '[.[]]' "\$F" ;;
+  advisory)   jq -e --arg id "\${a[1]}" '.[\$id].advisory' "\$F" >/dev/null && echo "# Sentinel advisory for Rix · \${a[1]}" ;;
+  show)       jq -e --arg id "\${a[1]}" '.[\$id]' "\$F" ;;
+  scan)       echo "scan \${a[1]}" >>"$SD/scans"; [[ -f "$SD/fixed" ]] && while read -r id; do jq --arg id "\$id" '.[\$id].status = "fixed"' "\$F" >"\$F.t" && mv "\$F.t" "\$F"; done <"$SD/fixed"; echo '{}' ;;
+  *) exit 2 ;;
+esac
+STUB
+chmod +x "$T/bin/sentinel-stub"
+export OAL_SENTINEL_BIN="$T/bin/sentinel-stub"
+st=$("$L" status --json)
+jq -e '.sentinel.installed and .sentinel.pending == 2 and .sentinel.assigned == 0' <<<"$st" >/dev/null || { jq .sentinel <<<"$st"; tfail "status --json sentinel counts"; }
+adv=$("$L" sentinel advisories --json)
+[[ $(jq -r '.[0].id' <<<"$adv") == a2 && $(jq length <<<"$adv") == 2 ]] || { echo "$adv"; tfail "advisories: critical first, only advised findings"; }
+"$L" sentinel read a1 | grep -q "Sentinel advisory for Rix · a1" || tfail "sentinel read"
+"$L" sentinel assign a1 >/dev/null 2>&1 && tfail "assign needs a worker"
+"$L" sentinel assign nope fix-nope >/dev/null 2>&1 && tfail "assign an unknown advisory must fail"
+"$L" sentinel assign a1 fix-a1 >/dev/null || tfail "sentinel assign"
+[[ $("$L" sentinel advisories --json | jq -r '.[] | select(.id=="a1") | "\(.rix_state) \(.worker)"') == "assigned fix-a1" ]] || tfail "assigned state"
+grep -q '"key":"sentinel-a1"' "$XDG_STATE_HOME/omarchy-agent-launcher/events.jsonl" || tfail "assign posts an event"
+"$L" sentinel verify a1 >/dev/null && tfail "verify must fail while Sentinel still reports the finding open"
+grep -q '^scan codebase$' "$SD/scans" || tfail "verify asks Sentinel to re-scan the finding's arena"
+[[ $("$L" sentinel advisories --json | jq -r '.[] | select(.id=="a1") | .rix_state') == assigned ]] || tfail "still assigned after a failed verify"
+echo a1 >"$SD/fixed"
+"$L" sentinel verify a1 | grep -q "a1 verified" || tfail "verify after the fix"
+"$L" sentinel advisories --json | jq -e 'all(.[]; .id != "a1")' >/dev/null || tfail "verified advisories leave the default list"
+[[ $("$L" sentinel advisories --json --all | jq -r '.[] | select(.id=="a1") | .rix_state') == verified ]] || tfail "--all shows verified"
+"$L" sentinel decline a2 >/dev/null 2>&1 && tfail "decline needs a reason"
+"$L" sentinel decline a2 "user: domain sends no mail yet, revisit at launch" >/dev/null || tfail "sentinel decline"
+[[ $("$L" sentinel advisories --json --all | jq -r '.[] | select(.id=="a2") | .rix_state') == declined ]] || tfail "declined state"
+"$L" rix brief | grep -q "Sentinel advises: 0 pending" || { "$L" rix brief; tfail "brief shows Sentinel advisories"; }
+( source "$ROOT/lib/rix.sh"; source "$ROOT/lib/sentinel.sh"; rix_sentinel_duty ) | grep -q "never does the work" || tfail "Rix duty text"
+grep -q "sentinel advisories" "$ROOT/skills/rix/SKILL.md" || tfail "Rix skill teaches the sentinel commands"
+if command -v hermes >/dev/null; then
+  "$L" rix setup anthropic >/dev/null; grep -q '^## Sentinel advisories' "$(job_path rix)" || tfail "new Rix job includes the Sentinel duty"
+  printf '# Chief of staff\nold job\n' >"$(job_path rix)"
+  ( source "$ROOT/lib/agents/hermes.sh"; source "$ROOT/lib/backends.sh"; source "$ROOT/lib/rix.sh"; source "$ROOT/lib/sentinel.sh"; OAL_ROOT="$ROOT"; agent_provision rix ) >/dev/null
+  [[ $(grep -c '^## Sentinel advisories' "$(job_path rix)") == 1 ]] || tfail "an existing Rix job gets the duty appended"
+  ( source "$ROOT/lib/agents/hermes.sh"; source "$ROOT/lib/backends.sh"; source "$ROOT/lib/rix.sh"; source "$ROOT/lib/sentinel.sh"; OAL_ROOT="$ROOT"; agent_provision rix ) >/dev/null
+  [[ $(grep -c '^## Sentinel advisories' "$(job_path rix)") == 1 ]] || tfail "the duty is appended only once"
+  "$L" remove rix --yes >/dev/null
+fi
+export OAL_SENTINEL_BIN=oal-test-no-sentinel
+pass "sentinel advisories"
 
 echo "== list / show / remove"
 out=$("$L" list); grep -q "^prov " <<<"$out" || tfail "list"
