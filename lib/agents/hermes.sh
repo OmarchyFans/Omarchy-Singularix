@@ -4,15 +4,12 @@
 # Every launched agent gets its own Hermes home under
 #   ~/.local/share/omarchy-agent-launcher/agents/<name>/hermes
 # laid out exactly like ~/.hermes (config.yaml, .env, SOUL.md, skills/), so the
-# same directory is HERMES_HOME locally, /opt/data inside the official Docker
-# image, and ~/.hermes on a Sprite. Your real ~/.hermes is never read or written.
+# same directory is HERMES_HOME locally and /opt/data inside the official Docker
+# image. Your real ~/.hermes is never read or written.
 
 AGENT_BIN=hermes
 AGENT_LABEL="Hermes Agent"
 HERMES_IMAGE="${OAL_HERMES_IMAGE:-nousresearch/hermes-agent:latest}"
-HERMES_GIT_URL="https://github.com/NousResearch/hermes-agent"
-# Sprite installs are pinned to this exact commit (v0.21.0 line). Bump deliberately.
-HERMES_GIT_COMMIT="693641aa8b4359c602283bdbbc14041e03bc47bc"
 
 agent_available_local() { have hermes; }
 agent_install_hint() {
@@ -61,7 +58,7 @@ agent_provision() { # agent_provision <name>
       [[ $per =~ ^[0-9]+$ && $per -gt 0 ]] || per=32768
       echo "  context_length: $per"
     elif [[ $provider == endpoint ]]; then
-      # A backend we run (Modal) or were given: its vLLM --max-model-len.
+      # An endpoint backend (a cloud GPU machine or a shared server): its vLLM --max-model-len.
       local bctx=""; [[ -n $backend_id ]] && declare -F backend_get >/dev/null && bctx=$(backend_get "$backend_id" 2>/dev/null | jq -r '.model_ctx // empty' 2>/dev/null)
       echo "  context_length: ${bctx:-32768}"
     fi
@@ -202,34 +199,6 @@ agent_docker_image() { printf '%s' "$HERMES_IMAGE"; }
 agent_docker_home()  { printf '/opt/data'; }
 agent_docker_flags() { printf '%s\n' -e "HERMES_UID=$(id -u)" -e "HERMES_GID=$(id -g)"; }
 agent_docker_entry() { :; }   # image ENTRYPOINT dispatches `chat`, `auth`, ... directly
-
-# Sprite: where the home lands remotely, and an idempotent bootstrap script.
-agent_sprite_home() { printf '$HOME/.hermes'; }
-agent_sprite_bootstrap() {
-  cat <<BOOT
-set -e
-export PATH="\$HOME/.local/bin:\$PATH"
-if ! command -v hermes >/dev/null 2>&1; then
-  echo "== installing Hermes Agent (pinned $HERMES_GIT_COMMIT)"
-  mkdir -p "\$HOME/.hermes" "\$HOME/.local/bin"
-  if [ ! -d "\$HOME/.hermes/hermes-agent/.git" ]; then
-    git clone --quiet --no-checkout "$HERMES_GIT_URL" "\$HOME/.hermes/hermes-agent"
-  fi
-  git -C "\$HOME/.hermes/hermes-agent" checkout --quiet "$HERMES_GIT_COMMIT"
-  cd "\$HOME/.hermes/hermes-agent"
-  if command -v uv >/dev/null 2>&1; then
-    uv venv --quiet venv && uv pip install --quiet --python venv/bin/python -e .
-  else
-    python3 -m venv venv 2>/dev/null || { sudo apt-get install -y -qq python3-venv && python3 -m venv venv; }
-    ./venv/bin/pip install --quiet --upgrade pip
-    ./venv/bin/pip install --quiet -e .
-  fi
-  printf '#!/usr/bin/env bash\nunset PYTHONPATH PYTHONHOME\nexec "%s/venv/bin/python" "%s/hermes" "\$@"\n' "\$HOME/.hermes/hermes-agent" "\$HOME/.hermes/hermes-agent" >"\$HOME/.local/bin/hermes"
-  chmod +x "\$HOME/.local/bin/hermes"
-fi
-hermes --version || true
-BOOT
-}
 
 # ---- kanban board mirror ---------------------------------------------------
 # Hermes keeps a SQLite task board at the Hermes root, which for a launched

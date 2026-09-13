@@ -83,8 +83,7 @@ grep -q 'hl.dsp.focus' <<<"$out" || { echo "$out"; tfail "focus-window must use 
 pass "focus-window dispatch"
 
 echo "== dry-run launches for every agent × runtime"
-secret_set SPRITES_TOKEN org/id/secret
-for a in hermes openclaw; do for r in local docker sprite; do
+for a in hermes openclaw; do for r in local docker cloud; do
   n="m-$a-$r"; profile_write "$n" "$a" "$r" openrouter api-key m - interactive ""; cp "$(job_path prov)" "$(job_path "$n")"
   inl=$("$L" --dry-run --inline launch "$n" 2>&1) || { echo "$inl"; tfail "dry-run $n"; }
   grep -q "would launch" <<<"$inl" || { echo "$inl"; tfail "no launch line for $n"; }
@@ -95,7 +94,7 @@ for a in hermes openclaw; do for r in local docker sprite; do
   if command -v tmux >/dev/null; then grep -q -- "-S $XDG_STATE_HOME/omarchy-agent-launcher/tmux/oal-$n.sock" <<<"$out" || { echo "$out"; tfail "tmux socket for $n"; }; fi
   # The private server pins the terminal title, so Chat finds the window instead of opening a duplicate.
   if command -v tmux >/dev/null; then grep -q "set-titles-string" <<<"$out" || { echo "$out"; tfail "title pin for $n"; }; fi
-  case $r in docker) grep -q "docker run -it --rm" <<<"$inl" || tfail "$n docker cmd";; sprite) grep -q "sprite exec --tty" <<<"$inl" || tfail "$n sprite cmd";; esac
+  case $r in docker) grep -q "docker run -it --rm" <<<"$inl" || tfail "$n docker cmd";; cloud) grep -q "cloud console $n" <<<"$inl" || { echo "$inl"; tfail "$n cloud cmd"; };; esac
 done; done
 pass "6 combinations"
 
@@ -232,7 +231,7 @@ if command -v sqlite3 >/dev/null; then
   [[ $(jq -r '.tasks[0].cost_basis' <<<"$u") == "hermes estimate (plan)" ]] || tfail "cost basis label"
   [[ $(jq -r '.tasks|length' <<<"$u") == 1 ]] || tfail "archived session must be skipped"
   st=$("$L" status --json); [[ $(jq -r '.agents[]|select(.name=="ub")|.usage.cost_usd' <<<"$st") == 0.5 ]] || tfail "usage in status --json"
-  jq -e '.usage.totals and (.backends|type=="array") and .rix and .modal' <<<"$st" >/dev/null || tfail "status --json: rix/usage/backends/modal"
+  jq -e '.usage.totals and (.backends|type=="array") and .rix' <<<"$st" >/dev/null || tfail "status --json: rix/usage/backends"
   "$L" usage | grep -q "Write the changelog" || tfail "usage (human)"
   "$L" remove ub --yes >/dev/null
   pass "usage: totals, per task, cost basis, archived skipped, in status"
@@ -240,22 +239,16 @@ else
   echo "  skip (sqlite3 not installed): usage"
 fi
 
-echo "== backends: registry, Modal dry-run, create --backend, Hermes custom provider"
-b=$("$L" backends add --id big --kind modal-dedicated --gpu H100 --gpu-count 2 --model Qwen/Qwen3-32B --ctx 65536) || tfail "backends add"
-[[ $(jq -r .gpu_hourly <<<"$b") == 3.95 && $(jq -r .app <<<"$b") == oal-big && $(jq -r .state <<<"$b") == configured ]] || tfail "backend fields"
-BIGKEY=$(sed -n 's/^BACKEND_BIG_KEY=//p' "$XDG_CONFIG_HOME/omarchy-agent-launcher/secrets.env"); [[ ${#BIGKEY} -ge 24 ]] || tfail "backend key generated"
-OAL_BACKEND_KEY=sk-shared "$L" backends add --id team --kind endpoint --url https://llm.example.com/v1 --model my-model --key-env >/dev/null || tfail "endpoint add"
+echo "== backends: endpoint registry, test, create --backend, Hermes custom provider"
+OAL_BACKEND_KEY=sk-shared "$L" backends add --id team --kind endpoint --url https://llm.example.com/v1 --model my-model --key-env >"$T/team.json" || tfail "endpoint add"
+[[ $(jq -r .kind "$T/team.json") == endpoint && $(jq -r .state "$T/team.json") == ready && $(jq -r .url "$T/team.json") == https://llm.example.com/v1 ]] || tfail "endpoint fields"
+grep -q "sk-shared" "$T/team.json" && tfail "backend key echoed by add"
 "$L" backends list --json | jq -e 'map(.id) | index("team") != null and index("anthropic") != null and index("local") != null' >/dev/null || tfail "backends list mixes registry and providers"
-"$L" backends add --id bad --kind modal-dedicated --gpu Z9 2>/dev/null && tfail "unknown gpu accepted"
-"$L" modal gpus --json | jq -e '.gpus | map(.id) | index("H100") != null and index("T4") != null' >/dev/null || tfail "modal gpus"
-out=$("$L" --dry-run backends deploy big 2>&1) || { echo "$out"; tfail "deploy dry-run"; }
-grep -q "modal deploy" <<<"$out" && grep -q "OAL_GPU=H100" <<<"$out" && grep -q "OAL_GPU_COUNT=2" <<<"$out" || { echo "$out"; tfail "deploy env"; }
-grep -q "$BIGKEY" <<<"$out" && tfail "backend key printed by dry-run"
-[[ $(jq -r .big.state "$XDG_CONFIG_HOME/omarchy-agent-launcher/backends.json") == configured ]] || tfail "dry-run must not mark ready"
-"$L" backends add --id sb --kind modal-sandbox --gpu L4 --timeout-hours 2 >/dev/null || tfail "sandbox add"
-out=$("$L" --dry-run backends start sb 2>&1); grep -q "vllm_sandbox.py::start" <<<"$out" && grep -q "OAL_TIMEOUT_SECONDS=7200" <<<"$out" || tfail "sandbox start dry-run"
-[[ $(jq -r .sb.model "$XDG_CONFIG_HOME/omarchy-agent-launcher/backends.json") == "Qwen/Qwen3-8B" ]] || tfail "model suggestion for L4"
-"$L" backends deploy team 2>/dev/null && tfail "deploying an endpoint must fail"
+"$L" backends add --id gpu --kind dedicated --url https://x/v1 --model m 2>/dev/null && tfail "a non-endpoint kind was accepted"
+"$L" backends add --id nourl --model m 2>/dev/null && tfail "an endpoint without --url was accepted"
+out=$("$L" --dry-run backends test team 2>&1) || { echo "$out"; tfail "backends test dry-run"; }
+grep -q "would GET https://llm.example.com/v1/models with the saved key" <<<"$out" || { echo "$out"; tfail "backends test plan"; }
+grep -q "sk-shared" <<<"$out" && tfail "backend key printed by dry-run"
 printf 'job\n' | "$L" create --json --name onteam --backend team --mode unattended --job-stdin >"$T/c.json" || tfail "create --backend"
 [[ $(jq -r .provider "$T/c.json") == endpoint && $(jq -r .backend "$T/c.json") == team && $(jq -r .base_url "$T/c.json") == https://llm.example.com/v1 && $(jq -r .model "$T/c.json") == my-model ]] || tfail "backend resolution"
 ( source "$ROOT/lib/agents/hermes.sh"; source "$ROOT/lib/backends.sh"; agent_provision onteam )
@@ -263,10 +256,101 @@ HT="$XDG_DATA_HOME/omarchy-agent-launcher/agents/onteam/hermes"
 grep -q "provider: custom" "$HT/config.yaml" && grep -q 'base_url: "https://llm.example.com/v1"' "$HT/config.yaml" || tfail "custom provider config"
 grep -q "^OPENAI_API_KEY=sk-shared$" "$HT/.env" || tfail "backend key in the agent's env"
 grep -q "context_length: 32768" "$HT/config.yaml" || tfail "endpoint context length"
-printf 'job\n' | "$L" create --name onbig --backend big --mode unattended --job-stdin 2>/dev/null && tfail "create on an undeployed Modal backend must fail"
 "$L" backends remove team >/dev/null; grep -q "^BACKEND_TEAM_KEY" "$XDG_CONFIG_HOME/omarchy-agent-launcher/secrets.env" && tfail "key not removed with the backend"
 "$L" remove onteam --yes >/dev/null
+profile_write oldrt hermes gone openrouter api-key m - interactive ""; cp "$(job_path prov)" "$(job_path oldrt)"
+out=$("$L" --dry-run launch oldrt 2>&1) && tfail "a profile with a removed runtime must not launch"
+grep -q "recreate it on local, docker, or cloud" <<<"$out" || { echo "$out"; tfail "removed-runtime message"; }
+rm -f "$(profile_path oldrt)" "$(job_path oldrt)"
 pass "backends"
+
+echo "== cloud runtime: omarchy.fans API (fake), device sign-in, create, console ticket, destroy"
+if command -v python3 >/dev/null && command -v curl >/dev/null; then
+(
+  set -uo pipefail
+  PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+  LOG="$T/cloud-requests.jsonl"; : >"$LOG"
+  python3 "$ROOT/tests/fake_api.py" "$PORT" "$LOG" &
+  API_PID=$!
+  trap 'kill $API_PID 2>/dev/null' EXIT
+  for _ in $(seq 1 50); do curl -s "http://127.0.0.1:$PORT/v1/pricing" >/dev/null 2>&1 && break; sleep 0.1; done
+  export OFC_API_URL="http://127.0.0.1:$PORT/v1" OFC_NO_BROWSER=1 OFC_POLL_INTERVAL=0 OFC_PREPARE_TIMEOUT=20
+  source "$ROOT/lib/backends.sh"
+  source "$ROOT/lib/runtimes/cloud.sh"
+  requests() { jq -c "select(.method == \"$1\" and (.path | test(\"$2\")))" "$LOG"; }
+
+  out=$(rt_check) && tfail "cloud rt_check must fail before sign-in"
+  grep -q "sign-in needed" <<<"$out" || tfail "cloud rt_check hint: $out"
+  jq -e '.agents[] | select(.id=="hermes") | .runtimes.cloud.ok == false' <<<"$("$L" info --json)" >/dev/null || tfail "info --json reports the cloud runtime"
+
+  out=$(cloud_login 2>&1) || { echo "$out"; tfail "cloud login"; }
+  grep -q "FANS-7Q2K" <<<"$out" && grep -q "signed in as milton" <<<"$out" || tfail "device flow output: $out"
+  grep -q "^OFC_TOKEN=ofc_test_token_123$" "$OAL_SECRETS" || tfail "OFC_TOKEN not saved"
+  [[ $(requests POST '/v1/device/token$' | wc -l) == 3 ]] || tfail "device flow polls"
+  out=$(rt_check) || tfail "cloud rt_check after sign-in"; grep -q "signed in · org milton" <<<"$out" || tfail "rt_check line: $out"
+
+  # create: validation, then a real profile on the cloud runtime
+  printf 'job\n' | "$L" create --name cl-bad --agent hermes --runtime cloud --provider local --job-stdin 2>/dev/null && tfail "cloud + local provider must be refused"
+  printf 'job\n' | "$L" create --name cl-bad --agent hermes --runtime cloud --provider anthropic --auth oauth --job-stdin 2>/dev/null && tfail "cloud + browser sign-in must be refused"
+  printf 'job\n' | "$L" create --name cl-bad --agent hermes --runtime cloud --provider openrouter --size xl --job-stdin 2>/dev/null && tfail "bad --size accepted"
+  printf 'job\n' | "$L" create --name cl-bad --agent hermes --runtime local --provider openrouter --size m --job-stdin 2>/dev/null && tfail "--size outside cloud accepted"
+  secret_set OPENROUTER_API_KEY or-test-key
+  printf '# Job\nResearch the last release.\n' | "$L" create --json --name researcher --agent hermes --runtime cloud --provider openrouter --auth api-key \
+    --model anthropic/claude-sonnet-5 --size m --skill research/deep-research --mode interactive --job-stdin >"$T/cl.json" || tfail "create --runtime cloud"
+  [[ $(jq -r .runtime "$T/cl.json") == cloud && $(jq -r .size "$T/cl.json") == m ]] || tfail "cloud profile"
+
+  n_before=$(wc -l <"$LOG")
+  out=$("$L" --dry-run --inline launch researcher 2>&1) || { echo "$out"; tfail "cloud dry-run launch"; }
+  grep -q "would POST .*/agents" <<<"$out" && grep -q '<redacted>' <<<"$out" || { echo "$out"; tfail "cloud dry-run plan"; }
+  grep -q "or-test-key\|ofc_test_token_123" <<<"$out" && tfail "dry-run printed a secret"
+  grep -q "cloud console researcher" <<<"$out" || { echo "$out"; tfail "cloud session command"; }
+  [[ $(wc -l <"$LOG") == "$n_before" ]] || tfail "dry-run hit the API"
+
+  out=$(rt_prepare researcher 2>&1) || { echo "$out"; tfail "cloud rt_prepare"; }
+  grep -q "cloud agent agt_1 created" <<<"$out" && grep -q "agt_1 is sleeping" <<<"$out" || tfail "prepare output: $out"
+  create=$(requests POST '/v1/agents$')
+  jq -e '.body | .name == "researcher" and .provider == "openrouter" and .size == "m" and .secrets == {"OPENROUTER_API_KEY":"or-test-key"}
+    and (.job_md | test("Research the last release")) and (has("home") | not)' <<<"$create" >/dev/null || { echo "$create"; tfail "POST /agents body"; }
+  jq -e '.auth == "Bearer ofc_test_token_123"' <<<"$create" >/dev/null || tfail "bearer token not sent from the curl config pipe"
+  rt_prepare researcher >/dev/null 2>&1 || tfail "second rt_prepare"
+  [[ $(requests POST '/v1/agents$' | wc -l) == 1 ]] || tfail "second prepare must not POST again"
+
+  printf 'Nightly report.\n' | "$L" create --name batch --agent hermes --runtime cloud --provider openrouter --auth api-key --model m --mode unattended --job-stdin >/dev/null || tfail "create unattended cloud agent"
+  rt_prepare batch >/dev/null 2>&1 || tfail "rt_prepare unattended"
+  requests POST '/v1/agents/agt_2/wake$' | jq -e '.body.mode == "unattended"' >/dev/null || tfail "an unattended cloud agent must wake unattended"
+  rt_destroy batch >/dev/null; "$L" remove batch --yes >/dev/null
+  out=$(cloud_wake researcher) && [[ $out == "researcher is awake" ]] || tfail "wake: $out"
+  out=$("$L" cloud status researcher) || tfail "cloud status NAME"; grep -q "secrets: OPENROUTER_API_KEY" <<<"$out" || tfail "status: $out"
+  out=$(cloud_sleep researcher) && [[ $out == "researcher is sleeping" ]] || tfail "sleep: $out"
+  out=$("$L" cloud pricing) || tfail "cloud pricing"; grep -qE 'Plus +\$5/mo' <<<"$out" || tfail "pricing: $out"
+  out=$("$L" cloud gpus) || tfail "cloud gpus"; grep -q "Compact 24 GB" <<<"$out" || tfail "gpus: $out"
+
+  # console: a one-time ticket in the URL, never the token on websocat's argv
+  mkdir -p "$T/fakebin"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$@" >"%s/websocat.argv"\n' "$T" >"$T/fakebin/websocat"; chmod +x "$T/fakebin/websocat"
+  PATH="$T/fakebin:$PATH" rt_console researcher </dev/null >/dev/null 2>&1 || tfail "console with a fake websocat"
+  [[ -n $(requests POST '/v1/agents/agt_1/console-ticket$') ]] || tfail "console ticket not requested"
+  grep -q "ticket=oct_test_ticket" "$T/websocat.argv" || { cat "$T/websocat.argv"; tfail "ticket not in the console URL"; }
+  grep -q "ofc_test_token_123\|Authorization" "$T/websocat.argv" && tfail "token on websocat argv"
+  ! grep -nE 'Bearer \$\(cloud_token\)|--data-binary "\$body"' "$ROOT/lib/runtimes/cloud.sh" || tfail "cloud.sh puts the token or a body on argv"
+
+  out=$(rt_destroy researcher) && [[ $out == "cloud agent agt_1 destroyed" ]] || tfail "destroy: $out"
+  [[ -z $(profile_get researcher cloud_agent_id) ]] || tfail "cloud_agent_id not cleared"
+  "$L" remove researcher --yes >/dev/null
+  cloud_logout >/dev/null
+  grep -q "^OFC_TOKEN=" "$OAL_SECRETS" && tfail "token still saved after logout"
+  [[ -n $(requests DELETE '/v1/tokens/tok_1$') ]] || tfail "token not revoked"
+  exit 0
+) || exit 1
+pass "cloud runtime: sign-in, create validation, prepare, wake/sleep, ticketed console, destroy, logout"
+else
+  echo "  skip (python3 or curl missing): cloud runtime"
+fi
+
+echo "== supplier-neutral: no cloud supplier names ship in the plugin"
+# Spelled with brackets so this file does not match itself.
+if grep -rniwE 's[p]rites?|m[o]dal|f[l]y|f[l]yctl' "$ROOT" --exclude-dir=.git --exclude-dir=.claude; then tfail "supplier names found"; fi
+pass "no supplier names"
 
 echo "== rix migration: a pre-0.9 jarvis chief of staff becomes rix"
 profile_write jarvis hermes local anthropic api-key claude-sonnet-5 - interactive ""
@@ -328,9 +412,8 @@ if command -v hermes >/dev/null; then
   "$L" rix setup anthropic >/dev/null; ( source "$ROOT/lib/agents/hermes.sh"; source "$ROOT/lib/backends.sh"; source "$ROOT/lib/rix.sh"; OAL_ROOT="$ROOT"; agent_provision rix )
   [[ $(jq -r .signed_in "$(profile_path rix)") == true ]] || tfail "rix inherits the sign-in"
   "$L" rix setup anthropic >/dev/null; [[ $(jq -r .signed_in "$(profile_path rix)") == true ]] || tfail "rix setup must keep signed_in for the same provider"
-  secret_set HF_TOKEN hf_secret_123; out=$("$L" --dry-run backends deploy big 2>&1); grep -q "hf_secret_123" <<<"$out" && tfail "HF_TOKEN printed by dry-run"
   "$L" remove heir --yes >/dev/null; "$L" remove donor --yes >/dev/null; "$L" remove rix --yes >/dev/null
-  pass "oauth inheritance, backend readiness, HF_TOKEN redaction"
+  pass "oauth inheritance, backend readiness"
 else
   echo "  skip (hermes not installed): rix"
 fi

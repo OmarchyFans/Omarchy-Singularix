@@ -86,7 +86,7 @@ Standing duties:
    will cost.
 4. Keep the fleet tidy: stop idle sessions, remove finished workers you created.
    Ask before removing anything you did not create.
-5. Never spend money silently: before deploying or starting a Modal backend, or
+5. Never spend money silently: before starting a cloud agent or GPU machine, or
    delegating to a paid model, state the price and wait for a yes.
 JOB
 }

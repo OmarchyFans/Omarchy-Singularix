@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "fans.omarchy.agent-launcher",
   "name": "Agent Launcher",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "author": "omarchy.fans",
   "license": "MIT",
-  "description": "Agent Dashboard for Omarchy with Rix, a chief-of-staff agent on your local GPU that manages every agent you spin up (Hermes Agent, OpenClaw; local, Docker, Fly.io Sprite) and hands work to bigger models: API keys, browser sign-in, or vLLM on Modal GPUs you pick. Shows input and output tokens and USD, in total and per task.",
+  "description": "Agent Dashboard for Omarchy with Rix, a chief-of-staff agent on your local GPU that manages every agent you spin up (Hermes Agent, OpenClaw; local, Docker, or Omarchy.Fans Cloud) and hands work to bigger models: API keys, browser sign-in, or OpenAI-compatible GPU endpoints. Shows input and output tokens and USD, in total and per task.",
   "kinds": [
     "panel",
     "bar-widget"

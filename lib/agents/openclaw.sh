@@ -3,8 +3,8 @@
 #
 # Every launched agent gets its own OpenClaw state dir under
 #   ~/.local/share/omarchy-agent-launcher/agents/<name>/openclaw
-# used as OPENCLAW_STATE_DIR locally, mounted at /home/node/.openclaw in the
-# official image, and uploaded to ~/.openclaw on a Sprite. The job description
+# used as OPENCLAW_STATE_DIR locally and mounted at /home/node/.openclaw in the
+# official image. The job description
 # becomes the workspace AGENTS.md; skills go to <workspace>/skills.
 #
 # STATUS: built from OpenClaw's documented CLI surface; OpenClaw was not
@@ -13,7 +13,6 @@
 AGENT_BIN=openclaw
 AGENT_LABEL="OpenClaw"
 OPENCLAW_IMAGE="${OAL_OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}"
-OPENCLAW_NPM_VERSION="${OAL_OPENCLAW_NPM_VERSION:-latest}"
 
 agent_available_local() { have openclaw; }
 agent_install_hint() {
@@ -115,18 +114,3 @@ agent_docker_image() { printf '%s' "$OPENCLAW_IMAGE"; }
 agent_docker_home()  { printf '/home/node/.openclaw'; }
 agent_docker_flags() { printf '%s\n' --env-file "$(agent_home "$1")/.oal.env"; }
 agent_docker_entry() { printf '%s\n' node openclaw.mjs; }   # image CMD is `node openclaw.mjs gateway`
-
-agent_sprite_home() { printf '$HOME/.openclaw'; }
-agent_sprite_bootstrap() {
-  cat <<BOOT
-set -e
-export PATH="\$HOME/.npm-global/bin:\$HOME/.local/bin:\$PATH"
-if ! command -v openclaw >/dev/null 2>&1; then
-  echo "== installing OpenClaw (npm openclaw@$OPENCLAW_NPM_VERSION)"
-  mkdir -p "\$HOME/.npm-global"
-  npm config set prefix "\$HOME/.npm-global"
-  npm install -g "openclaw@$OPENCLAW_NPM_VERSION" --allow-scripts=openclaw
-fi
-openclaw --version || true
-BOOT
-}

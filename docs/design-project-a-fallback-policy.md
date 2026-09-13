@@ -73,7 +73,7 @@ OpenAI-compatible endpoint at `http://127.0.0.1:8080/v1`).
 
 User confirmed the fallback sequence changes week to week as better
 models replace existing ones, across many vendor accounts (Anthropic,
-OpenAI, xAI, OpenRouter, DeepSeek, z.ai, Modal.com), and must be editable
+OpenAI, xAI, OpenRouter, DeepSeek, z.ai, a cloud GPU account), and must be editable
 by the user AND rix, covering every model in the fleet — not a value
 hardcoded per-agent.
 

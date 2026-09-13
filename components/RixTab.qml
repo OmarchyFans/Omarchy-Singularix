@@ -8,9 +8,9 @@ import qs.Ui
 // Rix page: the chief of staff. Top: Rix's state, Chat, a plain brief,
 // and a one-question box answered by Rix's own model. Then the numbers
 // (prompt / output tokens and USD, total and today), the backends Rix can
-// hand work to (with the Modal GPU picker), and every task with its tokens
+// hand work to (shared endpoints and cloud GPU machines), and every task with its tokens
 // and cost. All data comes from `status --json` (dash.status); actions run
-// the launcher with argv. Long Modal operations open in a terminal (--popup).
+// the launcher with argv. Endpoint tests open in a terminal (--popup).
 Item {
   id: tab
   required property var dash
@@ -19,8 +19,7 @@ Item {
   readonly property var usage: dash.usage
   readonly property var totals: usage ? usage.totals : null
   readonly property var backends: dash.status && dash.status.backends ? dash.status.backends : []
-  readonly property var modal: dash.status && dash.status.modal ? dash.status.modal : null
-  readonly property var info: setupInfo            // `info --json`, for the GPU table
+  readonly property var info: setupInfo            // `info --json`
   property var setupInfo: null
   readonly property var launcher: dash.launcher
 
@@ -288,8 +287,7 @@ Item {
         PanelSectionHeader { text: "BACKENDS  ·  where work can go"; foreground: dash.foreground; fontFamily: dash.fontFamily }
         Dim {
           width: parent.width
-          text: !tab.modal ? "" : (tab.modal.installed ? (tab.modal.authed ? "Modal CLI installed and signed in. " : "Modal CLI installed; sign in with  modal setup  (or the button below). ") : "For Modal backends install the CLI:  pipx install modal   then  modal setup. ")
-                + "Dedicated endpoints scale to zero after the idle window; sandboxes are billed from start to stop. GPU prices from modal.com/pricing" + (tab.info && tab.info.gpus ? " as of " + tab.info.gpus.prices_date : "") + "."
+          text: "Any OpenAI-compatible endpoint: a GPU machine on Omarchy.Fans Cloud (omarchy-agent-launcher cloud gpus lists them with prices), a team server, a gateway. Whoever runs it bills for it."
         }
         Repeater {
           model: tab.customBackends
@@ -298,9 +296,8 @@ Item {
         Row {
           width: parent.width; spacing: Style.spacing.controlGap
           Button { text: addForm.visible ? "Hide form" : "Add backend"; iconText: ""; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: { addForm.visible = !addForm.visible; if (addForm.visible && !tab.setupInfo) tab.loadInfo() } }
-          Button { visible: tab.modal && tab.modal.installed && !tab.modal.authed; text: "Sign in to Modal"; iconText: "󰌾"; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: tab.popup(["modal", "setup"]) }
         }
-        BackendForm { id: addForm; width: parent.width; visible: false; dash: dash; gpus: tab.info && tab.info.gpus ? tab.info.gpus.gpus : []; onAdded: { visible = false; dash.refreshStatus(); tab.loadInfo() } }
+        BackendForm { id: addForm; width: parent.width; visible: false; dash: dash; onAdded: { visible = false; dash.refreshStatus(); tab.loadInfo() } }
 
         Cap { text: "PROVIDERS  ·  API key or browser sign-in" }
         Flow {
@@ -384,7 +381,7 @@ Item {
     }
   }
 
-  // One configured backend (endpoint / Modal) with its state and actions.
+  // One configured endpoint backend with its state and actions.
   component BackendRow: CursorSurface {
     id: brow
     property var backend: null
@@ -407,15 +404,13 @@ Item {
         }
         Dim {
           width: parent.width; elide: Text.ElideRight; wrapMode: Text.NoWrap
-          text: brow.backend ? (brow.backend.kind + " · " + brow.backend.model + (brow.backend.gpu ? " · " + brow.backend.gpu + " ×" + brow.backend.gpu_count + " · $" + (Math.round(brow.backend.gpu_hourly * brow.backend.gpu_count * 100) / 100) + "/h while running" : "") + (brow.backend.model_ctx ? " · " + dash.fmtK(brow.backend.model_ctx) + " ctx" : "") + (brow.backend.url ? "  ·  " + brow.backend.url : "")) : ""
+          text: brow.backend ? (brow.backend.kind + " · " + brow.backend.model + (brow.backend.model_ctx ? " · " + dash.fmtK(brow.backend.model_ctx) + " ctx" : "") + (brow.backend.url ? "  ·  " + brow.backend.url : "")) : ""
         }
       }
       Row {
         id: bactions
         spacing: Style.spacing.sm
         anchors.verticalCenter: parent.verticalCenter
-        Button { visible: brow.backend && brow.backend.kind !== "endpoint" && brow.backend.state !== "ready" && brow.backend.state !== "starting"; text: brow.backend && brow.backend.kind === "modal-sandbox" ? "Start" : "Deploy"; iconText: "󰐊"; selected: true; tooltipText: "Runs in a terminal: image build and model download take minutes; GPU time is billed from here on"; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: tab.popup(["backends", "deploy", brow.backend.id]) }
-        PanelActionButton { iconText: "󰓛"; tooltipText: "Stop (Modal: stop the app / terminate the sandbox)"; visible: brow.backend && brow.backend.kind !== "endpoint" && brow.backend.state === "ready"; hoverColor: dash.urgent; onClicked: tab.popup(["backends", "stop", brow.backend.id]) }
         PanelActionButton { iconText: "󰄬"; tooltipText: "Test: GET /v1/models with the backend's key"; visible: brow.backend && brow.backend.url; onClicked: tab.popup(["backends", "test", brow.backend.id]) }
         PanelActionButton { iconText: "󰚩"; tooltipText: "Run Rix on this backend"; visible: brow.backend && brow.backend.ready; onClicked: dash.act([tab.launcher, "rix", "setup", brow.backend.id]) }
         PanelActionButton { iconText: "󰩺"; tooltipText: "Remove this backend (stop it first)"; hoverColor: dash.urgent; onClicked: { tab.pendingRemove = brow.backend.id; confirm.opened = true } }
@@ -426,7 +421,7 @@ Item {
   ConfirmDialog {
     id: confirm
     anchors.fill: parent
-    message: "Remove backend '" + tab.pendingRemove + "'? Its key is forgotten; a running Modal app or sandbox is NOT stopped by this (use Stop first)."
+    message: "Remove backend '" + tab.pendingRemove + "'? Its key is forgotten; the endpoint itself keeps running wherever it is hosted."
     confirmText: "Remove"
     foreground: dash.foreground; fontFamily: dash.fontFamily
     onConfirmed: { opened = false; dash.act([tab.launcher, "backends", "remove", tab.pendingRemove]); tab.pendingRemove = "" }

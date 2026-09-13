@@ -29,7 +29,7 @@ _No response_
 
 ### Maintainer notes
 
-Bar widget + terminal form that launches Hermes Agent or OpenClaw locally, in Docker, or on a Fly.io Sprite. The widget is a thin launcher; all logic is bash inside the plugin folder (bin/, lib/). `sudo` appears once (`sudo docker` when omarchy-sudo-docker says so). Sprite bootstrap clones Hermes at a pinned 40-char commit; nothing is curl-piped.
+Bar widget + terminal form that launches Hermes Agent or OpenClaw locally, in Docker, or on Omarchy.Fans Cloud. The widget is a thin launcher; all logic is bash inside the plugin folder (bin/, lib/). `sudo` appears once (`sudo docker` when omarchy-sudo-docker says so). The cloud runtime talks only to api.omarchy.fans; nothing is curl-piped.
 
 ### Submission checklist
 

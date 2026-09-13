@@ -105,6 +105,8 @@ Item {
     for (var i = 0; i < info.providers.length; i++) {
       var p = info.providers[i]
       var supported = agentId === "hermes" ? p.hermes !== "-" : p.openclaw !== "-"
+      // A cloud agent cannot reach this machine's local model server or Ollama.
+      if (runtime === "cloud" && (p.id === "local" || p.id === "ollama")) supported = false
       if (supported) out.push({ value: p.id, label: p.label })
     }
     return out
@@ -112,7 +114,8 @@ Item {
   function authOptionsFor(p) {
     if (!p) return []
     var out = []
-    var oauth = agent === "hermes" ? p.hermes_oauth : p.openclaw_oauth
+    // Browser sign-in cannot finish on a cloud machine: the callback would land there.
+    var oauth = runtime !== "cloud" && (agent === "hermes" ? p.hermes_oauth : p.openclaw_oauth)
     if (oauth) out.push({ value: "oauth", label: "Browser sign-in" })
     if (p.env !== "-") {
       if (p.saved_key) out.push({ value: "saved-key", label: "Saved " + p.env })
@@ -149,6 +152,7 @@ Item {
   // selection.
   onAgentChanged: { skills = []; skillFilter = ""; provider = firstValue(providersFor(agent), provider); applyProviderDefaults() }
   onProviderChanged: applyProviderDefaults()
+  onRuntimeChanged: { provider = firstValue(providersFor(agent), provider); auth = firstValue(authOptionsFor(findProvider(provider)), auth) }
   onInfoChanged: {
     provider = firstValue(providersFor(agent), provider)
     applyProviderDefaults()
@@ -194,7 +198,7 @@ Item {
     if (jobText === "") { error = "Write a job description first."; jobEditor.focusEditor(); return }
     if (model.trim() === "") { error = "Pick or type a model id."; return }
     if (!runtimeOk) { error = "Runtime not ready: " + runtimeStatus; return }
-    if (isEndpoint && backend === "") { error = "Add a backend on the Rix page first (a Modal endpoint or a shared URL)."; return }
+    if (isEndpoint && backend === "") { error = "Add a backend on the Rix page first (a cloud GPU machine or a shared URL)."; return }
     var authValue = auth === "saved-key" ? "api-key" : auth
     var argv = [root.launcher, "create", "--json", "--name", n, "--agent", agent, "--runtime", runtime,
                 "--provider", provider, "--auth", authValue, "--model", model.trim(), "--mode", mode,
@@ -316,7 +320,7 @@ Item {
                 width: parent.width; spacing: Style.spacing.labelGap
                 FieldLabel { text: "RUN IN" }
                 ButtonGroup {
-                  options: [ { value: "local", label: "Local" }, { value: "docker", label: "Docker" }, { value: "sprite", label: "Fly.io Sprite" } ]
+                  options: [ { value: "local", label: "Local" }, { value: "docker", label: "Docker" }, { value: "cloud", label: "Omarchy.Fans Cloud" } ]
                   value: root.runtime
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onChanged: function(v) { root.runtime = v }
@@ -326,6 +330,18 @@ Item {
                   text: (root.agentInfo && !root.agentInfo.installed && root.runtime === "local" ? root.agentInfo.label + " is not installed locally. " : "") + root.runtimeStatus
                   color: root.runtimeOk ? root.dim : root.urgent
                 }
+                Hint {
+                  width: parent.width
+                  visible: root.runtime === "cloud"
+                  text: "A hosted machine that sleeps when idle. Paid convenience: see omarchy.fans/pricing. Your agent's provider key travels as an agent secret; this computer's files never do."
+                }
+                Button {
+                  visible: root.runtime === "cloud" && !root.runtimeOk
+                  text: "Sign in to Omarchy.Fans Cloud"
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onClicked: { Quickshell.execDetached([root.launcher, "--popup", "cloud", "login"]); signInReload.restart() }
+                }
+                Timer { id: signInReload; interval: 15000; onTriggered: root.loadInfo() }
               }
               Column {
                 width: parent.width; spacing: Style.spacing.labelGap
@@ -356,7 +372,7 @@ Item {
                 width: parent.width; spacing: Style.spacing.labelGap
                 visible: root.isEndpoint
                 FieldLabel { text: "BACKEND" }
-                Hint { width: parent.width; visible: root.backendOptions.length === 0; color: root.urgent; text: "No endpoint backends yet. Add a Modal endpoint, sandbox, or shared URL on the Rix page." }
+                Hint { width: parent.width; visible: root.backendOptions.length === 0; color: root.urgent; text: "No endpoint backends yet. Add a cloud GPU machine or a shared URL on the Rix page." }
                 PanelDropdown {
                   id: backendDrop
                   width: parent.width

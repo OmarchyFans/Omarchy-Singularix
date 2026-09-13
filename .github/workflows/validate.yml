@@ -17,8 +17,8 @@ jobs:
           jq -e '.schemaVersion == 1 and (.id|startswith("omarchy.")|not) and (.entryPoints.barWidget|length>0)' manifest.json
           test -f "$(jq -r .entryPoints.barWidget manifest.json)"
           ! find . -path ./.git -prune -o -type l -print | grep .
-      - name: modal scripts compile
-        run: python3 -m py_compile modal/*.py
+      - name: fake cloud API compiles
+        run: python3 -m py_compile tests/fake_api.py
       - name: form test (stubbed UI)
         run: |
           sudo apt-get install -y -qq curl sqlite3 >/dev/null

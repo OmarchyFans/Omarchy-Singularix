@@ -41,7 +41,7 @@ duty.
 
 Some jobs deserve a frontier model. Tell Rix, and it hands the task to the
 provider you choose: **Anthropic, OpenAI, Grok, Gemini, DeepSeek, OpenRouter**,
-your own OpenAI-compatible endpoint, or a GPU server you deploy. It shows you
+your own OpenAI-compatible endpoint, or a private GPU machine on omarchy.fans cloud. It shows you
 the model and the price per million tokens first, waits for your yes, and
 brings the result back to your desktop with the cost written next to it.
 
@@ -86,7 +86,7 @@ until the day you want it; the free runtimes never change.
 
 🧭 **Projects with a pulse.** Register a project and see its phase, percent complete, and open blockers.
 
-🐧 **Runs where you say.** Your shell. A Docker container. A Linux VM on a cloud account you hold. Soon, omarchy.fans cloud.
+🐧 **Runs where you say.** Your shell. A Docker container. A hosted machine on omarchy.fans cloud that sleeps when idle.
 
 🎛️ **Looks like Omarchy.** A Quickshell window drawn with the shell's own tokens, so it wears your theme and switches with it.
 
@@ -122,7 +122,7 @@ Then install what your first agent needs:
 | an agent for free, offline | the [Omarchy Help](https://github.com/OmarchyFans/omarchy-fans-help) plugin's local model service, and one `local-server tune` (below) |
 | an agent in your shell | [Hermes Agent](https://github.com/NousResearch/hermes-agent) (`hermes` on PATH) or [OpenClaw](https://openclaw.ai) |
 | an agent in a container | `omarchy install docker` (the launcher uses `sudo docker`, Omarchy's default) |
-| an agent on a cloud VM | that provider's CLI, signed in once; the launcher walks you through it |
+| an agent on omarchy.fans cloud | an omarchy.fans account (`omarchy-agent-launcher cloud login`) and `websocat` for the console (`omarchy pkg add websocat`) |
 | persistent sessions | `tmux` (ships with Omarchy) |
 
 Everything below is the detail. You don't need it to start.
@@ -150,8 +150,8 @@ Enter to open the selected agent's chat, `r` to refresh, Esc to close.
 | Step | Choices |
 |------|---------|
 | **Agent** | Hermes Agent (Nous Research) · OpenClaw |
-| **Runtime** | local shell · Docker container · a Linux VM on your own cloud account · omarchy.fans cloud (coming) |
-| **Model** | **Local GPU (offline)**, Anthropic, OpenAI, OpenAI Codex, Nous Portal, xAI, OpenRouter, Gemini, DeepSeek, Ollama, a **backend endpoint** (a GPU server you deployed from the Rix page, or a shared URL), or any custom model id. Lists are live from the open [models.dev](https://models.dev) catalog, with prices per million tokens |
+| **Runtime** | local shell · Docker container · omarchy.fans cloud |
+| **Model** | **Local GPU (offline)**, Anthropic, OpenAI, OpenAI Codex, Nous Portal, xAI, OpenRouter, Gemini, DeepSeek, Ollama, a **backend endpoint** (a GPU machine on omarchy.fans cloud, or a shared URL), or any custom model id. Lists are live from the open [models.dev](https://models.dev) catalog, with prices per million tokens |
 | **Sign-in** | browser OAuth with your own account (where the agent supports it) or an API key, saved once with mode 600 |
 | **Skills** | checkboxes over your installed skill library, plus hub install for Hermes |
 | **Job** | the instructions, written in `$EDITOR`, typed inline, or taken from a file |
@@ -179,11 +179,11 @@ page or its chat:
 
 **Backends** are where delegated work can go, kept in a registry
 (`backends add|list|remove`): the local GPU, any provider you have a key or
-sign-in for, any OpenAI-compatible endpoint plus key, or a **vLLM server the
-launcher deploys to a GPU cloud account you hold**, as a dedicated endpoint or
-an isolated sandbox, with the GPU chosen on the Rix page and its hourly
-price shown first. The adapters live in `lib/backends/`; read them before you
-rely on them. Keyless providers are refused for delegation.
+sign-in for, or any OpenAI-compatible endpoint plus key, such as a **private
+GPU machine on omarchy.fans cloud** (its relay URL and `ofg_` key;
+`cloud gpus` lists the machines with their hourly prices). The registry lives in
+`lib/backends.sh`; read it before you rely on it. `backends test ID` checks that
+an endpoint answers. Keyless providers are refused for delegation.
 
 **Usage and cost** come from the agents' own session stores, read-only:
 prompt tokens (input plus cache reads), output tokens, and USD, with the cost
@@ -200,11 +200,12 @@ omarchy-agent-launcher chat NAME      # same; reattaches to a running session
 omarchy-agent-launcher list | show NAME | job NAME | sign-in NAME
 omarchy-agent-launcher stop NAME      # end the session (the saved agent stays)
 omarchy-agent-launcher remove NAME    # forget + delete its local home
-omarchy-agent-launcher destroy NAME   # also remove its container or cloud VM
+omarchy-agent-launcher destroy NAME   # also remove its container or cloud agent
 omarchy-agent-launcher switch         # graphical picker: jump to an agent's chat
 omarchy-agent-launcher status --json  # every agent with status, window, blockers, tasks, usage
 omarchy-agent-launcher event NAME KIND "message" [--task T] [--level blocker]   # for hooks and skills
 omarchy-agent-launcher rix | usage | delegate … | result NAME | backends …
+omarchy-agent-launcher cloud login | status | console NAME | wake NAME | sleep NAME | pricing | gpus
 omarchy-agent-launcher local-server status | tune | untune
 omarchy-agent-launcher --dry-run launch NAME   # print every command, run nothing
 ```
@@ -224,13 +225,14 @@ it again. Without tmux everything still runs, just without reattach.
 
 ### How each combination runs
 
-| | local | docker | cloud VM |
+| | local | docker | cloud |
 |---|---|---|---|
-| **Hermes** | `HERMES_HOME=<home> hermes chat -s <skill>… -q <kickoff>` | the official `nousresearch/hermes-agent` image with `<home>` mounted | Hermes cloned at a **pinned commit** on the VM, home uploaded as a tarball, session over the provider's exec |
-| **OpenClaw** | `OPENCLAW_STATE_DIR=<home> openclaw tui --local` | the official `ghcr.io/openclaw/openclaw` image with `<home>` mounted | OpenClaw installed from npm on the VM |
+| **Hermes** | `HERMES_HOME=<home> hermes chat -s <skill>… -q <kickoff>` | the official `nousresearch/hermes-agent` image with `<home>` mounted | an agent created through the omarchy.fans API from the saved profile; the console attaches over a WebSocket |
+| **OpenClaw** | `OPENCLAW_STATE_DIR=<home> openclaw tui --local` | the official `ghcr.io/openclaw/openclaw` image with `<home>` mounted | the same, with `agent_kind: openclaw` |
 
-Browser sign-ins run inside the session (with `--no-browser` in containers and
-VMs, which print a URL to open). A new agent home for a provider some other home
+Browser sign-ins run inside the session (with `--no-browser` in containers,
+which print a URL to open). A cloud agent uses API keys or an endpoint backend
+only: a browser callback would land on the hosted machine, not in your browser. A new agent home for a provider some other home
 is already signed in to inherits that sign-in, so delegated workers never wait
 on a prompt nobody is watching.
 
@@ -310,19 +312,23 @@ available as `omarchy-agent-launcher models --json`.
 |---------|---------------|---------------|
 | **local shell** | nobody | the agent CLI installed |
 | **Docker** | nobody | `omarchy install docker` |
-| **cloud VM** | you pay your provider directly | your own account and its CLI |
-| **omarchy.fans cloud** (coming) | you pay omarchy.fans | an omarchy.fans account |
-| **omarchy.fans GPU endpoints** (coming) | you pay omarchy.fans by the hour | an omarchy.fans account; open-weight frontier models, private to you, tunable on your data |
+| **omarchy.fans cloud** | you pay omarchy.fans | an omarchy.fans account |
+| **omarchy.fans GPU machines** | you pay omarchy.fans by the minute | an omarchy.fans account; open-weight models, private to you |
 
-The hosted runtime is the convenience option: sign in once with your
-omarchy.fans account, pick it on the form next to the others, and the machine
-is provisioned, metered, and billed by omarchy.fans, with the price per hour
-shown before you launch. The chat window and the dashboard work exactly as
-they do for the other runtimes; `destroy` removes the machine and stops the
-meter. What it runs on is omarchy.fans' business; what you get is a machine run
-under omarchy.fans' terms and privacy policy, linked from the form. Its adapter
-will be open in this repository like the others, so you can read exactly what
-leaves your machine. Nothing about the free runtimes changes.
+The hosted runtime is the convenience option. Sign in once with
+`omarchy-agent-launcher cloud login` (a device code you confirm in the
+browser), pick **Omarchy.Fans Cloud** on the form next to the others, and the
+machine is provisioned, metered, and billed by omarchy.fans, with the plan
+prices shown on the form. The chat window and the dashboard work as they do for
+the other runtimes; the machine sleeps when idle, and `destroy` removes it and
+stops the meter.
+
+What leaves your computer: the saved profile (agent, model, provider, skills,
+size), the job text, and the one provider key that agent needs, sent as an
+agent secret. The agent's local home never does. The adapter is
+`lib/runtimes/cloud.sh`; it talks only to `https://api.omarchy.fans`. Your
+omarchy.fans token never appears on a command line: requests read it from a
+pipe, and the console uses a one-time ticket that expires within a minute.
 
 ### What has been tested
 
@@ -335,12 +341,12 @@ Built on Omarchy 4.x with Hermes Agent installed locally.
 - ✅ Rix: setup, brief, ask, delegate (with and without `--wait`), result, workers in `status --json`.
 - ✅ Usage aggregation against a real session store and a fixture; the kanban mirror against a fixture board.
 - ✅ Every agent × runtime combination in `--dry-run`.
-- ⚠️ Docker, the cloud VM runtime, the GPU-server backends, and OpenClaw were written against their official docs and CLIs but **not exercised end to end** on the development machine. Treat them as beta; issues and PRs welcome.
+- ✅ The omarchy.fans cloud runtime against a fake of its API: sign-in, create, wait, wake, sleep, console ticket, destroy, sign-out.
+- ⚠️ Docker, the cloud runtime against the live API, and OpenClaw were written against their official docs and contracts but **not exercised end to end** on the development machine. Treat them as beta; issues and PRs welcome.
 
 ### Security notes
 
-- Nothing is downloaded and executed on your machine by this plugin. Cloud VM
-  bootstraps clone Hermes at a pinned commit and install OpenClaw from npm.
+- Nothing is downloaded and executed on your machine by this plugin.
 - API keys and cloud tokens live in `~/.config/omarchy-agent-launcher/secrets.env`
   (mode 600). Each agent home receives only the single key it needs. Keys never
   appear on a command line; they travel in the child's environment.
@@ -349,9 +355,8 @@ Built on Omarchy 4.x with Hermes Agent installed locally.
   string, and tails the event log with `tail -F`.
 - Task boards and session stores are opened with `sqlite3 -readonly`.
   Notifications go through `omarchy-notification-send`.
-- A GPU server's key is generated locally and reaches the server as a
-  deploy-time secret, never baked into an image. Your cloud tokens stay with
-  their CLIs; the launcher only runs the CLIs.
+- The omarchy.fans token is sent to curl through a pipe and to the console as
+  a one-time ticket, so it never shows up in the process list.
 - Rix has no powers of its own: it runs the same commands you can, inside a
   session that asks before dangerous shell commands unless launched unattended.
 
