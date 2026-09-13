@@ -37,6 +37,9 @@
 #   omarchy-agent-launcher delegate --backend B --name N --task-title T (--job-stdin|--job-env|--job-file F) [--wait] [--model M]
 #                                          hand a job to a worker agent on that backend
 #   omarchy-agent-launcher result <name> [--list]    a worker's latest unattended run output
+#   omarchy-agent-launcher sentinel [advisories [--all] [--json]]   Sentinel's advisories and Rix's handling of them
+#   omarchy-agent-launcher sentinel read ID | assign ID WORKER | decline ID "reason" | verify ID
+#                                          Rix orchestrates what Sentinel advises; verify asks Sentinel to re-scan
 #   omarchy-agent-launcher usage [--json]            tokens and USD: totals, per agent, per task
 #   omarchy-agent-launcher backends list|show|add|remove|test [id]   models to hand work to
 #     add: --id I --kind endpoint --model M --url U [--key-env] [--ctx N] [--input-per-m $ --output-per-m $]
@@ -77,6 +80,7 @@ source "$OAL_LIB/backends.sh"
 source "$OAL_LIB/usage.sh"
 source "$OAL_LIB/fallback.sh"
 source "$OAL_LIB/rix.sh"
+source "$OAL_LIB/sentinel.sh"
 source "$OAL_LIB/vendors.sh"
 # Tests replace the gum wrappers with scripted answers (see tests/run.sh).
 # shellcheck source=/dev/null
@@ -623,8 +627,8 @@ cmd_status_json() {
   local rixj; rixj=$(rix_status_json)
   {
     # "jarvis" duplicates "rix" for one release (pre-0.9 readers).
-    printf '{"version":%s,"blockers":%s,"rix":%s,"jarvis":%s,"usage":%s,"backends":%s,"projects":%s,"agents":[' \
-      "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")" "$rixj" "$rixj" "$(usage_json)" "$(backends_list_json)" "$projects"
+    printf '{"version":%s,"blockers":%s,"rix":%s,"jarvis":%s,"sentinel":%s,"usage":%s,"backends":%s,"projects":%s,"agents":[' \
+      "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")" "$rixj" "$rixj" "$(sentinel_status_json)" "$(usage_json)" "$(backends_list_json)" "$projects"
     local first=1
     while IFS= read -r n; do
       [[ -n $n ]] || continue; (( first )) || printf ','; first=0
@@ -851,6 +855,7 @@ case "${CMD[0]:-menu}" in
   local-server) cmd_local_server ;;
   usage)    cmd_usage ;;
   rix|jarvis) cmd_rix ;;   # "jarvis" is the pre-0.9 name, kept as an alias
+  sentinel) cmd_sentinel ;;
   delegate) cmd_delegate ;;
   result)   cmd_result "${CMD[1]:?result needs a name}" ;;
   backends) cmd_backends ;;

@@ -176,6 +176,7 @@ page or its chat:
 - **Brief**: a plain-language status of every agent, blocker, and today's spend.
 - **Ask**: a one-shot question answered by Rix's model with the current status as context.
 - **Delegate**: `omarchy-agent-launcher delegate --backend NAME --task-title "…" [--wait]` hands a job to a worker agent on a backend; the worker records Rix as its parent, and `result NAME` returns what it produced. Rix proposes the backend and price and waits for your yes before anything that costs money.
+- **Sentinel advisories**: with [Sentinel](https://github.com/OmarchyFans/Omarchy-Rix-Sentinel-mode) installed, Rix reads its security advisories (`sentinel advisories`), decides who handles each one (a worker, or you when only you can act), records it (`sentinel assign ID WORKER`), and asks Sentinel to confirm the fix (`sentinel verify ID`). Sentinel only guards and advises; Rix orchestrates. Pending advisories show in the brief and in `status --json`.
 
 **Backends** are where delegated work can go, kept in a registry
 (`backends add|list|remove`): the local GPU, any provider you have a key or
