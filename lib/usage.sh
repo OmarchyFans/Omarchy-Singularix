@@ -67,7 +67,6 @@ usage_agent_json() {
       elif (price_for($s.model)) != null then (price_for($s.model)) as $p |
         {cost: (($s.input_tokens * $p.input + $s.output_tokens * $p.output
                  + $s.cache_read_tokens * ($p.cache_read // $p.input) + $s.cache_write_tokens * ($p.cache_write // $p.input)) / 1000000), basis: "models.dev"}
-      elif ($backend != null and $backend.kind == "modal-sandbox") then {cost: 0, basis: "sandbox GPU time (on the backend)"}
       elif ($backend != null and gpu_rate > 0) then
         (((($s.ended_at // $s.last_activity_at // $s.started_at) - $s.started_at) | if . < 0 then 0 else . end) as $secs |
          {cost: ($secs / 3600 * gpu_rate), basis: "GPU time (est.)"})

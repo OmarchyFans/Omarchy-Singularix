@@ -40,7 +40,7 @@ in this agent's own config.yaml)
 ### User clarification (2026-09-09)
 User holds multiple vendor accounts with frontier-level models beyond the
 original four (Anthropic, OpenAI, xAI, OpenRouter, DeepSeek, z.ai, plus
-Modal.com for self-hosted GPU backends). The fallback *sequence* is
+a cloud GPU account for self-hosted GPU backends). The fallback *sequence* is
 explicitly volatile — "changes from week to week as new better performing
 models replace the existing ones" — so it must be a **user/rix-editable
 ordered list covering every model in the agent launcher**, not a value

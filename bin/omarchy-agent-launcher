@@ -3,7 +3,7 @@
 # omarchy-agent-launcher — spin up an AI agent from a keybinding.
 #
 # A gum form (in a floating Omarchy terminal) asks for: the agent (Hermes Agent,
-# OpenClaw), where it runs (local shell, Docker, Fly.io Sprite), the model and
+# OpenClaw), where it runs (local shell, Docker, Omarchy.Fans Cloud), the model and
 # how to sign in (browser OAuth or API key), the skills to preload, and the job
 # description. The answers are saved as a named profile, the agent gets its own
 # isolated home directory, and a session opens in a new terminal window.
@@ -17,8 +17,8 @@
 #   omarchy-agent-launcher manage          show / edit job / sign in / remove / destroy
 #   omarchy-agent-launcher list | show <name> | job <name> | sign-in <name>
 #   omarchy-agent-launcher remove <name>   forget a saved agent (and its local home)
-#   omarchy-agent-launcher destroy <name>  also destroy its container / sprite
-#   omarchy-agent-launcher console <name>  shell into the agent's sprite
+#   omarchy-agent-launcher destroy <name>  also destroy its container / cloud agent
+#   omarchy-agent-launcher console <name>  attach to a cloud agent's console
 #   omarchy-agent-launcher stop <name>     end the agent's session (the saved agent stays)
 #   omarchy-agent-launcher switch          graphical picker: jump to an agent's chat
 #   omarchy-agent-launcher status --json   every agent with status, window, blockers, tasks
@@ -38,18 +38,18 @@
 #                                          hand a job to a worker agent on that backend
 #   omarchy-agent-launcher result <name> [--list]    a worker's latest unattended run output
 #   omarchy-agent-launcher usage [--json]            tokens and USD: totals, per agent, per task
-#   omarchy-agent-launcher backends list|show|add|remove|deploy|start|stop|test [id]   models to hand work to
-#     add: --id I --kind endpoint|modal-dedicated|modal-sandbox --model M [--url U --key-env] [--gpu G --gpu-count N]
-#          [--scaledown MIN] [--timeout-hours H] [--ctx N] [--input-per-m $ --output-per-m $]
-#   omarchy-agent-launcher modal status|gpus|setup   the modal CLI, GPU prices, sign-in
+#   omarchy-agent-launcher backends list|show|add|remove|test [id]   models to hand work to
+#     add: --id I --kind endpoint --model M --url U [--key-env] [--ctx N] [--input-per-m $ --output-per-m $]
+#   omarchy-agent-launcher cloud login|logout|status [NAME]|console NAME|wake NAME [MODE]|sleep NAME|events NAME|pricing|gpus
+#                                          Omarchy.Fans Cloud: hosted agents that sleep when idle (runtime: cloud)
 #   omarchy-agent-launcher local-server status|start|tune|untune [--ctx N] [--kv q8_0|q4_0|f16] [--slots N] [--model FILE]
 #                                          the offline llama.cpp server of the Omarchy local agent
 #
 # Non-interactive (used by the Quickshell panel, handy for scripts):
 #   omarchy-agent-launcher info --json     agents, runtimes, providers, models, skills, saved agents
-#   omarchy-agent-launcher create --name N --agent hermes|openclaw --runtime local|docker|sprite \
+#   omarchy-agent-launcher create --name N --agent hermes|openclaw --runtime local|docker|cloud \
 #       --provider P --auth oauth|api-key|none --model M [--base-url U] [--skill S]... \
-#       --mode interactive|unattended (--job-file F | --job-stdin | --job-env) [--api-key-env] [--launch]
+#       --mode interactive|unattended (--job-file F | --job-stdin | --job-env) [--api-key-env] [--size s|m|l] [--launch]
 #     --api-key-env reads the key from $OAL_API_KEY, --job-env the job from $OAL_JOB
 #     (never from argv); --launch then
 #     opens the session in a floating terminal (sign-in happens there if needed).
@@ -74,7 +74,6 @@ source "$OAL_LIB/models.sh"
 source "$OAL_LIB/events.sh"
 source "$OAL_LIB/local.sh"
 source "$OAL_LIB/backends.sh"
-source "$OAL_LIB/modal.sh"
 source "$OAL_LIB/usage.sh"
 source "$OAL_LIB/fallback.sh"
 source "$OAL_LIB/rix.sh"
@@ -93,7 +92,7 @@ while (($#)); do
     -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --version) echo "omarchy-agent-launcher $OAL_VERSION"; exit 0 ;;
     --name|--agent|--runtime|--provider|--auth|--model|--base-url|--mode|--skill|--job-file|--task|--level|--key|--ctx|--kv|--slots|\
-    --backend|--parent|--role|--task-title|--id|--kind|--label|--url|--gpu|--gpu-count|--scaledown|--timeout-hours|--input-per-m|--output-per-m)
+    --backend|--parent|--role|--task-title|--id|--kind|--label|--url|--size|--input-per-m|--output-per-m)
                OPTS+=("$1" "${2:-}"); shift ;;   # valued options (create, delegate, backends add, local-server)
     --*)       OPTS+=("$1") ;;                    # create's flags
     *)         CMD+=("$1") ;;
@@ -123,14 +122,14 @@ opt_value() { local i; for ((i=0; i<${#OPTS[@]}; i++)); do [[ ${OPTS[i]} == "$1"
 
 # ================================================================ helpers ====
 agent_label() { case "$1" in hermes) echo "Hermes Agent";; openclaw) echo "OpenClaw";; *) echo "$1";; esac; }
-runtime_label() { case "$1" in local) echo "local shell";; docker) echo "Docker container";; sprite) echo "Fly.io Sprite";; *) echo "$1";; esac; }
+runtime_label() { case "$1" in local) echo "local shell";; docker) echo "Docker container";; cloud) echo "Omarchy.Fans Cloud";; *) echo "$1";; esac; }
 
 # Load adapters for a profile (sets AGENT_BIN, rt_* functions, ...).
 load_profile_adapters() {
   local agent runtime
   agent=$(profile_get "$1" agent); runtime=$(profile_get "$1" runtime)
   [[ -f $OAL_LIB/agents/$agent.sh ]] || fail "unknown agent '$agent' in profile $1"
-  [[ -f $OAL_LIB/runtimes/$runtime.sh ]] || fail "unknown runtime '$runtime' in profile $1"
+  [[ -f $OAL_LIB/runtimes/$runtime.sh ]] || fail "profile $1 uses runtime '$runtime', which this version does not have: recreate it on local, docker, or cloud"
   load_agent "$agent"; load_runtime "$runtime"
 }
 
@@ -172,20 +171,21 @@ cmd_new() {
   pick=$(choose "Where should it run?" \
     "local    Shell on this machine          [$(runtime_status "$agent" local)]" \
     "docker   Official Docker image          [$(runtime_status "$agent" docker)]" \
-    "sprite   Fly.io Sprite (cloud VM)       [$(runtime_status "$agent" sprite)]")
+    "cloud    Omarchy.Fans Cloud machine     [$(runtime_status "$agent" cloud) · $(load_runtime cloud; cloud_price_line)]")
   [[ -n $pick ]] || exit 130
   runtime=${pick%% *}
   load_agent "$agent"; load_runtime "$runtime"
   if [[ $runtime == local ]] && ! agent_available_local; then agent_install_hint; fail "cannot run $agent locally"; fi
   if [[ $runtime == docker ]] && ! have docker; then fail "docker is not installed (try: omarchy install docker)"; fi
-  if [[ $runtime == sprite ]] && ! have sprite; then fail "$SPRITE_INSTALL_HINT"; fi
+  if [[ $runtime == cloud ]]; then need curl; cloud_ensure_auth; fi
 
   # 4. Provider -------------------------------------------------------------
   local -a rows=(); local id
   while IFS= read -r id; do
     [[ -n $id ]] || continue
     local tag=""
-    { [[ $agent == hermes ]] && provider_hermes_oauth "$id"; } || { [[ $agent == openclaw ]] && provider_openclaw_oauth "$id"; } && tag=" · browser sign-in"
+    [[ $runtime == cloud && ( $id == local || $id == ollama ) ]] && continue   # this machine is not reachable from the cloud
+    [[ $runtime != cloud ]] && { { [[ $agent == hermes ]] && provider_hermes_oauth "$id"; } || { [[ $agent == openclaw ]] && provider_openclaw_oauth "$id"; }; } && tag=" · browser sign-in"
     [[ $(provider_env "$id") != - ]] && tag="$tag · API key"
     rows+=("$(printf '%-13s %s%s' "$id" "$(provider_label "$id")" "$tag")")
   done < <(providers_for_agent "$agent")
@@ -195,7 +195,7 @@ cmd_new() {
   # 5. Auth -----------------------------------------------------------------
   local auth=none var base_url; var=$(provider_env "$provider"); base_url=$(provider_base_url "$provider")
   local -a auths=()
-  if { [[ $agent == hermes ]] && provider_hermes_oauth "$provider"; } || { [[ $agent == openclaw ]] && provider_openclaw_oauth "$provider"; }; then
+  if [[ $runtime != cloud ]] && { { [[ $agent == hermes ]] && provider_hermes_oauth "$provider"; } || { [[ $agent == openclaw ]] && provider_openclaw_oauth "$provider"; }; }; then
     auths+=("oauth      Sign in with your account in the browser")
   fi
   if [[ $var != - ]]; then
@@ -440,7 +440,7 @@ cmd_destroy() {
 cmd_console() {
   local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
   load_profile_adapters "$name"
-  [[ $(profile_get "$name" runtime) == sprite ]] || fail "console is only for sprite agents"
+  [[ $(profile_get "$name" runtime) == cloud ]] || fail "console is only for cloud agents"
   rt_console "$name"
 }
 
@@ -451,7 +451,7 @@ cmd_manage() {
   (( ${#rows[@]} )) || { say "No saved agents yet."; return; }
   local pick; pick=$(choose "Which agent?" "${rows[@]}"); [[ -n $pick ]] || return
   n=${pick%% *}
-  local action; action=$(choose "$n" "launch (open or focus the agent window)" "show" "edit job" "sign in again" "remove (forget + delete local home)" "destroy (also remove container / sprite)" "console (sprite shell)")
+  local action; action=$(choose "$n" "launch (open or focus the agent window)" "show" "edit job" "sign in again" "remove (forget + delete local home)" "destroy (also remove container / cloud agent)" "console (cloud agent)")
   case "${action%% *}" in
     launch) cmd_launch "$n" ;; show) cmd_show "$n" ;; edit) cmd_job "$n" ;; sign) cmd_sign_in "$n" ;;
     remove) cmd_remove "$n" ;; destroy) cmd_destroy "$n" ;; console) cmd_console "$n" ;;
@@ -485,7 +485,7 @@ cmd_info() {
       ( load_agent "$a"
         printf '{"id":"%s","label":%s,"installed":%s,"runtimes":{' "$a" "$(jq -Rn --arg v "$AGENT_LABEL" '$v')" "$(agent_available_local && echo true || echo false)"
         local rf=1
-        for r in local docker sprite; do
+        for r in local docker cloud; do
           (( rf )) || printf ','; rf=0
           local st ok=true; st=$( load_runtime "$r"; rt_check 2>/dev/null ) || ok=false
           printf '"%s":{"ok":%s,"status":%s}' "$r" "$ok" "$(jq -Rn --arg v "$st" '$v')"
@@ -508,7 +508,7 @@ cmd_info() {
     first=1
     while IFS= read -r id; do [[ -n $id ]] || continue; (( first )) || echo ','; first=0; jq -c . "$(profile_path "$id")"; done < <(profile_list)
     echo '],"local":'"$(local_status_json)"
-    echo ',"backends":'"$(backends_list_json)"',"gpus":'"$(modal_gpus_json)"',"modal":'"$(modal_status_json quick)"',"rix":'"$(rix_status_json)"',"jarvis":'"$(rix_status_json)"
+    echo ',"backends":'"$(backends_list_json)"',"rix":'"$(rix_status_json)"',"jarvis":'"$(rix_status_json)"
     echo ',"catalog":{"source":"'"$(models_catalog_available && echo models.dev || echo static)"'","updated":'"$(jq -Rn --arg v "$(models_catalog_updated || true)" '$v')"',"url":"https://models.dev"}'
     echo ',"paths":{"config":'"$(jq -Rn --arg v "$OAL_CONF" '$v')"',"data":'"$(jq -Rn --arg v "$OAL_DATA" '$v')"'}}'
   } | jq .
@@ -517,7 +517,7 @@ cmd_info() {
 # Save (and optionally launch) an agent from flags: no prompts at all.
 cmd_create() {
   local name='' agent='' runtime='' provider='' auth=none model='' base_url=- mode=interactive job_file='' job_stdin=0 job_env=0 key_env=0 launch=0
-  local backend='' parent='' role='' task_title=''
+  local backend='' parent='' role='' task_title='' size=''
   local -a skills=()
   local i=0 n=${#OPTS[@]} o v
   while (( i < n )); do
@@ -530,6 +530,7 @@ cmd_create() {
       --skill) skills+=("$v"); ((i+=2)) ;; --job-file) job_file=$v; ((i+=2)) ;;
       --backend) backend=$v; ((i+=2)) ;; --parent) parent=$v; ((i+=2)) ;;
       --role) role=$v; ((i+=2)) ;;       --task-title) task_title=$v; ((i+=2)) ;;
+      --size) size=$v; ((i+=2)) ;;
       --job-stdin) job_stdin=1; ((i+=1)) ;; --job-env) job_env=1; ((i+=1)) ;;
       --api-key-env) key_env=1; ((i+=1)) ;;
       --launch) launch=1; ((i+=1)) ;;
@@ -545,7 +546,12 @@ cmd_create() {
   fi
   [[ $provider == endpoint && $agent != hermes ]] && fail "create: endpoint backends are Hermes-only"
   [[ -f $OAL_LIB/agents/$agent.sh ]] || fail "create: --agent must be hermes or openclaw"
-  [[ -f $OAL_LIB/runtimes/$runtime.sh ]] || fail "create: --runtime must be local, docker, or sprite"
+  [[ -f $OAL_LIB/runtimes/$runtime.sh ]] || fail "create: --runtime must be local, docker, or cloud"
+  if [[ $runtime == cloud ]]; then
+    [[ $provider == local || $provider == ollama ]] && fail "create: $provider runs on this machine and is not reachable from a cloud agent"
+    [[ $auth == oauth ]] && fail "create: browser sign-in cannot finish on a cloud machine; use --auth api-key or a backend"
+    [[ -z $size || $size == s || $size == m || $size == l ]] || fail "create: --size must be s, m, or l"
+  elif [[ -n $size ]]; then fail "create: --size is only for --runtime cloud"; fi
   provider_label "$provider" >/dev/null 2>&1 || fail "create: unknown --provider '$provider'"
   [[ $auth == oauth || $auth == api-key || $auth == none ]] || fail "create: --auth must be oauth, api-key, or none"
   [[ $mode == interactive || $mode == unattended ]] || fail "create: --mode must be interactive or unattended"
@@ -569,6 +575,7 @@ cmd_create() {
   [[ -n $parent ]] && profile_set "$name" parent "$(jq -Rn --arg v "$parent" '$v')"
   [[ -n $role ]] && profile_set "$name" role "$(jq -Rn --arg v "$role" '$v')"
   [[ -n $task_title ]] && profile_set "$name" task_title "$(jq -Rn --arg v "$task_title" '$v')"
+  [[ -n $size ]] && profile_set "$name" size "$(jq -Rn --arg v "$size" '$v')"
   event_emit "$name" created "Agent created: $agent on $runtime, ${backend:-$provider}/$model ($mode)${parent:+ · for $parent}" --task "${task_title:-$(job_title "$name")}"
   (( JSON )) && jq -c . "$(profile_path "$name")" || say "saved $name"
   if (( launch )); then
@@ -616,8 +623,8 @@ cmd_status_json() {
   local rixj; rixj=$(rix_status_json)
   {
     # "jarvis" duplicates "rix" for one release (pre-0.9 readers).
-    printf '{"version":%s,"blockers":%s,"rix":%s,"jarvis":%s,"usage":%s,"backends":%s,"modal":%s,"projects":%s,"agents":[' \
-      "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")" "$rixj" "$rixj" "$(usage_json)" "$(backends_list_json)" "$(modal_status_json quick)" "$projects"
+    printf '{"version":%s,"blockers":%s,"rix":%s,"jarvis":%s,"usage":%s,"backends":%s,"projects":%s,"agents":[' \
+      "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")" "$rixj" "$rixj" "$(usage_json)" "$(backends_list_json)" "$projects"
     local first=1
     while IFS= read -r n; do
       [[ -n $n ]] || continue; (( first )) || printf ','; first=0
@@ -716,10 +723,8 @@ cmd_backends() {
     show)   backend_get "${id:?backends show needs an id}" | jq . ;;
     add)    backend_add_from_opts | jq . ;;
     remove) backend_exists "${id:?backends remove needs an id}" || fail "no such backend: $id"; backend_delete "$id"; say "removed backend $id" ;;
-    deploy|start) modal_backend_up "${id:?backends ${CMD[1]} needs an id}"; popup_hold ;;
-    stop)   modal_backend_down "${id:?backends stop needs an id}"; popup_hold ;;
-    test)   modal_backend_test "${id:?backends test needs an id}"; popup_hold ;;
-    *) fail "usage: omarchy-agent-launcher backends list|show ID|add --id ID --kind K …|remove ID|deploy ID|start ID|stop ID|test ID" ;;
+    test)   backend_test "${id:?backends test needs an id}"; popup_hold ;;
+    *) fail "usage: omarchy-agent-launcher backends list|show ID|add --id ID --kind endpoint …|remove ID|test ID" ;;
   esac
 }
 
@@ -754,15 +759,6 @@ cmd_providers() {
       fi
       say "cleared $var" ;;
     *) fail "usage: omarchy-agent-launcher providers list|set-key ID|clear-key ID   (set-key reads \$OAL_API_KEY, never argv)" ;;
-  esac
-}
-
-cmd_modal() {
-  case "${CMD[1]:-status}" in
-    status) modal_status_json | jq . ;;
-    gpus)   if (( JSON )); then modal_gpus_json | jq .; else modal_gpus_json | jq -r '"Modal GPUs (USD per GPU-hour, modal.com/pricing as of \(.prices_date)):", (.gpus[] | "  \(.id)\t\(.vram_gb) GB\t$\(.hourly_usd)/h\tsuggested: \(.suggested_model)")' | column -t -s $'\t'; fi ;;
-    setup)  modal_installed || fail "install the modal CLI first: pipx install modal  (or: uv tool install modal)"; run modal setup; popup_hold ;;
-    *) fail "usage: omarchy-agent-launcher modal status|gpus|setup" ;;
   esac
 }
 
@@ -860,7 +856,7 @@ case "${CMD[0]:-menu}" in
   backends) cmd_backends ;;
   providers) cmd_providers ;;
   fallback) cmd_fallback "${CMD[@]:1}" ;;
-  modal)    cmd_modal ;;
+  cloud)    load_runtime cloud; cloud_dispatch "${CMD[@]:1}" ;;
   focus-window) cmd_focus_window "${CMD[1]:?focus-window needs a window title}" ;;
   models)   [[ ${OAL_OFFLINE:-0} == 1 ]] || models_catalog_refresh >/dev/null 2>&1 || true
             if (( JSON )); then models_tree_json | jq .; else models_tree_print; fi ;;

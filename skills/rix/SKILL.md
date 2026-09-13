@@ -1,6 +1,6 @@
 ---
 name: rix
-description: "Chief of staff on an Omarchy desktop: see every agent, its tokens and cost, delegate work to bigger models (API, OAuth, Modal GPU endpoints), read results, stop or remove agents."
+description: "Chief of staff on an Omarchy desktop: see every agent, its tokens and cost, delegate work to bigger models (API, OAuth, GPU endpoints), read results, stop or remove agents."
 version: 0.7.0
 author: omarchy.fans
 license: MIT
@@ -20,8 +20,8 @@ All commands print JSON with `--json`. Your own name is in `$OAL_AGENT`. Run `om
   status is `running | blocked | done | idle`. `open_blockers[].message` is what a worker needs from the user.
 - `omarchy-agent-launcher usage --json` → `{totals:{prompt,output,cost_usd,today_cost_usd}, agents:[…], tasks:[{agent,title,model,prompt,output,cost_usd,cost_basis}]}`
   prompt = input + cache read + cache write. `cost_basis` says where the USD came from (hermes estimate, models.dev, backend price, GPU time, local GPU · $0).
-- `omarchy-agent-launcher backends list --json` → every model you can hand work to: `{id,kind,label,model,ready,state,gpu,gpu_hourly}`
-  kinds: `provider` (API key / browser sign-in), `endpoint` (a URL someone shares), `modal-dedicated` (vLLM on Modal, scales to zero), `modal-sandbox` (isolated, billed until stopped).
+- `omarchy-agent-launcher backends list --json` → every model you can hand work to: `{id,kind,label,model,ready,state,url}`
+  kinds: `provider` (API key / browser sign-in), `endpoint` (an OpenAI-compatible URL: a GPU machine on Omarchy.Fans Cloud, or a server someone shares).
 - `omarchy-agent-launcher rix brief` → a plain-text status brief (no model call).
 
 ## Delegate
@@ -34,8 +34,8 @@ Workers you create carry `parent: rix`; remove them when done.
 
 ## Act
 - `omarchy-agent-launcher stop <name>` · `remove --yes <name>` (ask first unless you created it) · `chat <name>` opens its window.
-- `omarchy-agent-launcher backends deploy <id>` / `start <id>` / `stop <id>` / `test <id>` — Modal backends cost GPU time; quote `gpu_hourly × gpu_count` and get a yes first.
-- `omarchy-agent-launcher backends add --id <id> --kind modal-dedicated --gpu H100 --gpu-count 1 --model <hf id>` (see `modal gpus` for prices).
+- `omarchy-agent-launcher backends test <id>` checks that an endpoint answers.
+- `omarchy-agent-launcher cloud gpus` lists Omarchy.Fans Cloud GPU machines with hourly prices; they cost money, so quote the price and get a yes before suggesting one.
 - `omarchy-agent-launcher event "$OAL_AGENT" note "<progress>" [--task T]` · `… blocker "<need>" --level blocker` notifies the user.
 
 ## Rules
