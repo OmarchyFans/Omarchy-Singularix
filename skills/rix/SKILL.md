@@ -1,7 +1,7 @@
 ---
 name: rix
 description: "Chief of staff on an Omarchy desktop: see every agent, its tokens and cost, delegate work to bigger models (API, OAuth, GPU endpoints), read results, stop or remove agents."
-version: 0.11.0
+version: 0.13.0
 author: omarchy.fans
 license: MIT
 platforms: [linux]
