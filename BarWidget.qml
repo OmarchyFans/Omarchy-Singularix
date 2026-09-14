@@ -16,6 +16,11 @@ BarWidget {
   readonly property string launcher: Qt.resolvedUrl("bin/omarchy-agent-launcher").toString().replace(/^file:\/\//, "")
   readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")) + "/omarchy-agent-launcher"
   property int blockerCount: 0
+  // A harness cost approval is a blocker like any other (counted above), but
+  // it gets its own glyph/colour so a pending spend is never mistaken for an
+  // ordinary agent blocker. Matches Dashboard.qml's warnColor.
+  property bool hasApproval: false
+  readonly property color approvalColor: "#e0af68"
 
   // updates: a dot when a newer version is published (docs/update-alerts.md).
   // The dashboard shows the details; this only runs the cached check on load
@@ -69,8 +74,15 @@ BarWidget {
     watchChanges: true
     printErrors: false
     onFileChanged: reload()
-    onLoaded: { try { root.blockerCount = Object.keys(JSON.parse(text() || "{}")).length } catch (e) { root.blockerCount = 0 } }
-    onLoadFailed: root.blockerCount = 0
+    onLoaded: {
+      try {
+        var o = JSON.parse(text() || "{}")
+        var keys = Object.keys(o)
+        root.blockerCount = keys.length
+        root.hasApproval = keys.some(function(k) { return o[k] && typeof o[k].key === "string" && o[k].key.indexOf("approval-") === 0 })
+      } catch (e) { root.blockerCount = 0; root.hasApproval = false }
+    }
+    onLoadFailed: { root.blockerCount = 0; root.hasApproval = false }
   }
 
   BarIconButton {
@@ -99,10 +111,10 @@ BarWidget {
       anchors.top: parent.top; anchors.right: parent.right
       anchors.topMargin: 1; anchors.rightMargin: 0
       width: Style.space(9); height: Style.space(9); radius: height / 2
-      color: root.bar ? root.bar.urgent : Color.urgent
+      color: root.hasApproval ? root.approvalColor : (root.bar ? root.bar.urgent : Color.urgent)
       Text {
         anchors.centerIn: parent
-        text: root.blockerCount > 9 ? "9" : root.blockerCount
+        text: root.hasApproval ? "$" : (root.blockerCount > 9 ? "9" : root.blockerCount)
         color: Color.background
         font.family: Style.font.family; font.pixelSize: Style.space(7); font.bold: true
       }

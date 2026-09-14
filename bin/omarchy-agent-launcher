@@ -89,6 +89,7 @@ source "$OAL_LIB/harness.sh"
 source "$OAL_LIB/fallback.sh"
 source "$OAL_LIB/rix.sh"
 source "$OAL_LIB/sentinel.sh"
+source "$OAL_LIB/harness_bridge.sh"
 source "$OAL_LIB/vendors.sh"
 # Tests replace the gum wrappers with scripted answers (see tests/run.sh).
 # shellcheck source=/dev/null
@@ -633,10 +634,11 @@ cmd_status_json() {
   local served=""
   if declare -F local_online >/dev/null && local_online; then served=$(local_models_json | jq -r '.[0].id // ""' 2>/dev/null || true); fi
   local rixj; rixj=$(rix_status_json)
+  local harnessj; harnessj=$(harness_status_json | jq -c --argjson pa "$(harness_pending_approvals_json)" '.pending_approvals = $pa')
   {
     # "jarvis" duplicates "rix" for one release (pre-0.9 readers).
     printf '{"version":%s,"blockers":%s,"rix":%s,"jarvis":%s,"sentinel":%s,"harness":%s,"usage":%s,"backends":%s,"projects":%s,"agents":[' \
-      "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")" "$rixj" "$rixj" "$(sentinel_status_json)" "$(harness_status_json)" "$(usage_json)" "$(backends_list_json)" "$projects"
+      "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")" "$rixj" "$rixj" "$(sentinel_status_json)" "$harnessj" "$(usage_json)" "$(backends_list_json)" "$projects"
     local first=1
     while IFS= read -r n; do
       [[ -n $n ]] || continue; (( first )) || printf ','; first=0
@@ -779,7 +781,11 @@ cmd_harness() {
   local sub=${CMD[1]:-status}
   case "$sub" in
     status)
-      if (( JSON )); then harness_status_json | jq .; return 0; fi
+      harness_notify_sync || true
+      if (( JSON )); then
+        harness_status_json | jq -c --argjson pa "$(harness_pending_approvals_json)" '.pending_approvals = $pa' | jq .
+        return 0
+      fi
       local s; s=$(harness_status_json)
       jq -r '"harness: " + (if .alive then "running" else "not running" end) + " · " + .url
              + (if .bin == "" then " · CLI not found" else "" end) + " · " + (.projects|tostring) + " project(s)"' <<<"$s"

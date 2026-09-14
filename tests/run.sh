@@ -706,6 +706,49 @@ JSON
     [[ $before == "$after" ]] || tfail "status --json must never call curl"
   )
   pass "harness status --json is network-free with no harness installed"
+
+  # ---- harness_notify_sync: one blocker per pending approval, cleared when it's
+  #      gone; one throttled note per retry_at; idempotent; never calls curl -----------
+  jq -n --arg t "$(date -Is)" '{
+    projects: [
+      {id:"p-sub",  repo_path:"/tmp/proj-sub"},
+      {id:"p-poor", repo_path:"/tmp/proj-poor"},
+      {id:"p-rich", repo_path:"/tmp/proj-rich", pending_approval:{estimate_usd:0.5, model:"test-model", vendor:"testvendor", reason:"test", at:"2026-01-01T00:00:00Z"}}
+    ],
+    sessions: [
+      {id:"s-sub",  project:"p-sub",  worker:"rix", label:"hns-sub"},
+      {id:"s-poor", project:"p-poor", worker:"rix", label:"hns-est"},
+      {id:"s-rich", project:"p-rich", worker:"rix", label:"hns-est", state:"throttled", retry_at:"2026-01-01T00:05:00Z"}
+    ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+
+  curl_before=$(wc -l <"$CURLLOG")
+  harness_notify_sync
+  [[ $(blockers_json | jq '[.[] | select(.key=="approval-p-rich")] | length') == 1 ]] || tfail "notify_sync: expected exactly one approval blocker for p-rich"
+  [[ $(blockers_json | jq -r '.[] | select(.key=="approval-p-rich") | .agent') == hns-est ]] || tfail "notify_sync: approval blocker agent must be the project's rix session label"
+  n_appr1=$(grep -c '"key":"approval-p-rich"' "$OAL_EVENTS" || true)
+  [[ $n_appr1 == 1 ]] || tfail "notify_sync: expected exactly one approval event, got $n_appr1"
+  n_throttle1=$(grep -c "throttled, retrying at 2026-01-01T00:05:00Z" "$OAL_EVENTS" || true)
+  [[ $n_throttle1 == 1 ]] || tfail "notify_sync: expected exactly one throttled note, got $n_throttle1"
+
+  harness_notify_sync
+  harness_notify_sync
+  [[ $(blockers_json | jq '[.[] | select(.key=="approval-p-rich")] | length') == 1 ]] || tfail "notify_sync: rerun must stay idempotent (still exactly one blocker)"
+  n_appr2=$(grep -c '"key":"approval-p-rich"' "$OAL_EVENTS" || true)
+  [[ $n_appr2 == "$n_appr1" ]] || tfail "notify_sync: rerun with an unchanged approval must not re-emit the blocker event"
+  n_throttle2=$(grep -c "throttled, retrying at 2026-01-01T00:05:00Z" "$OAL_EVENTS" || true)
+  [[ $n_throttle2 == 1 ]] || tfail "notify_sync: rerun must not re-emit the same throttled note"
+  curl_after=$(wc -l <"$CURLLOG")
+  [[ $curl_before == "$curl_after" ]] || tfail "notify_sync must never call curl"
+  pass "harness_notify_sync: one approval blocker + one throttled note, idempotent on rerun, no network"
+
+  jq '(.projects[] | select(.id=="p-rich")) |= del(.pending_approval)' "$HARNESS_DATA_DIR/overview.json" >"$HD/overview-cleared.json"
+  mv -f "$HD/overview-cleared.json" "$HARNESS_DATA_DIR/overview.json"
+  harness_notify_sync
+  [[ $(blockers_json | jq '[.[] | select(.key=="approval-p-rich")] | length') == 0 ]] || tfail "notify_sync must resolve the blocker once the approval disappears"
+  grep -q '"kind":"blocker_cleared".*"key":"approval-p-rich"' "$OAL_EVENTS" || tfail "notify_sync must log blocker_cleared for the resolved approval"
+  pass "harness_notify_sync: clears the blocker when the approval disappears"
   exit 0
 ) || exit 1
 
