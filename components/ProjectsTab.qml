@@ -71,6 +71,33 @@ Item {
     return best
   }
 
+  // Short orchestrator label for a harness project row (§17.5-17.7): a named
+  // session, or a router hop. "" when the project payload has no
+  // `orchestrator` yet (older harness).
+  function shortOrchestrator(o) {
+    if (!o) return ""
+    if (o.kind === "session") return "session " + (o.id || "?")
+    if (o.kind === "router") return "router→" + (o.hop || o.model || "?")
+    return ""
+  }
+  function concurrencyText(c) {
+    if (!c || c.eligible_idle === undefined || c.wave0 === undefined) return ""
+    return Number(c.eligible_idle || 0) + "/" + Number(c.wave0 || 0)
+  }
+  // Second line under a row's name: kanban phase (either source) plus, for a
+  // harness row, its orchestrator and concurrency X/Y -- each part omitted
+  // when the row doesn't have it, "" (no second line at all) when none do.
+  function secondaryLineFor(row) {
+    if (!row) return ""
+    var parts = []
+    if (row.kanbanPhase) parts.push("kanban: " + row.kanbanPhase)
+    if (row.source === "harness") {
+      if (row.orchestratorShort) parts.push("orchestrator: " + row.orchestratorShort)
+      if (row.concurrencyShort) parts.push("concurrency " + row.concurrencyShort)
+    }
+    return parts.join("  ·  ")
+  }
+
   function harnessStatusFor(p, next) {
     if (p.pending_approval) return "pending approval"
     if (Number(p.residual || 0) <= 0) return "done"
@@ -105,7 +132,9 @@ Item {
         pendingCount: hp.pending_approval ? 1 : 0,
         kanbanPhase: kb ? (kb.phase || "") : "",
         openBlockers: 0,
-        agent: kb ? kb.agent : ""
+        agent: kb ? kb.agent : "",
+        orchestratorShort: tab.shortOrchestrator(hp.orchestrator),
+        concurrencyShort: tab.concurrencyText(hp.concurrency)
       })
     }
     for (var k = 0; k < kanbanProjects.length; k++) {
@@ -224,7 +253,7 @@ Item {
     property int rowIndex: 0
     hasCursor: dash.cursorActive && dash.tab === "projects" && dash.selectedIndex === rowIndex
     foreground: dash.foreground
-    implicitHeight: prow.row && prow.row.kanbanPhase ? Style.space(46) : Style.space(34)
+    implicitHeight: prow.row && tab.secondaryLineFor(prow.row) !== "" ? Style.space(46) : Style.space(34)
     MouseArea {
       anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
       onContainsMouseChanged: if (containsMouse) { dash.cursorActive = true; dash.selectedIndex = prow.rowIndex }
@@ -243,11 +272,11 @@ Item {
           color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true
         }
         Text {
-          visible: !!(prow.row && prow.row.kanbanPhase)
+          visible: !!(prow.row && tab.secondaryLineFor(prow.row) !== "")
           width: parent.width
           leftPadding: Style.spacing.md; rightPadding: Style.spacing.md
           elide: Text.ElideRight
-          text: prow.row ? "kanban: " + prow.row.kanbanPhase : ""
+          text: prow.row ? tab.secondaryLineFor(prow.row) : ""
           color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
         }
       }

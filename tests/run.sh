@@ -582,12 +582,14 @@ case "$1" in
     p=$(cat "__HD__/pending-$proj.json" 2>/dev/null || echo '[]')
     printf '{"remaining_usd": %s, "pending": %s}\n' "$b" "$p" ;;
   receipt)
-    node="" status="" usd="" tin="" tout=""
+    node="" status="" usd="" tin="" tout="" command="" patch="" summary=""
     while (( $# )); do case "$1" in
       --node) node=$2; shift 2 ;; --status) status=$2; shift 2 ;;
       --usd) usd=$2; shift 2 ;; --tokens-in) tin=$2; shift 2 ;; --tokens-out) tout=$2; shift 2 ;;
+      --command) command=$2; shift 2 ;; --patch-file) patch=$2; shift 2 ;; --summary) summary=$2; shift 2 ;;
       *) shift ;; esac; done
-    printf 'node=%s status=%s usd=%s tin=%s tout=%s\n' "$node" "$status" "$usd" "$tin" "$tout" >>"__RECEIPTS__"
+    printf 'node=%s status=%s usd=%s tin=%s tout=%s command=%s patch=%s summary=%s\n' \
+      "$node" "$status" "$usd" "$tin" "$tout" "$command" "$patch" "$summary" >>"__RECEIPTS__"
     echo ok ;;
   approve|decline)
     printf '%s\n' "$*" >>"__APPROVELOG__"
@@ -643,6 +645,15 @@ FAKE2
     if grep -q RATE_LIMIT_MARKER <<<"$job"; then body="429 too many requests, please slow down"; code=1
     elif grep -q FAIL_MARKER <<<"$job"; then body="boom: something broke"; code=1
     elif grep -q FALSE_POSITIVE_MARKER <<<"$job"; then body="mentions a usage limit in passing but the run actually succeeded"; code=0
+    elif grep -q SPLIT_REPLY_MARKER <<<"$job"; then
+      # An orchestration delegate's reply: prose, then a BROKEN object that never
+      # closes (tests that a broken candidate before the good one doesn't win or
+      # corrupt the scan), then the real patch (nested braces via `children`, a
+      # brace-looking substring inside a quoted string), then trailing prose.
+      body=$'Thinking about the decomposition...\n{"action": "SPLIT", "broken": true\nmore reasoning here, this object never closes\n{"action":"SPLIT","node":"P0","children":[{"id":"P0.1","title":"a } b { c"},{"id":"P0.2"}]}\nDone.'
+      code=0
+    elif grep -q SPLIT_NO_JSON_MARKER <<<"$job"; then
+      body="just prose, no JSON object anywhere in this reply"; code=0
     else body="done: ok"; code=0
     fi
     printf '%s\n__oal_rc=%s\n' "$body" "$code" >"$rundir/$(date +%Y%m%d-%H%M%S)-$RANDOM.log"
@@ -1051,6 +1062,194 @@ JSON
   grep -q "node=P0.2.2 status=done" "$RECEIPTS" || { cat "$RECEIPTS"; tfail "reap must derive slugify(name) when the job file has no slug field"; }
   [[ ! -f $JF4 ]] || tfail "job file must be removed after reap"
   pass "harness_dispatch_reap: a job file with no slug field still finds the run log via slugify(name)"
+
+  # ==== W5a: roles/policy (harness_role, --role/--model/--vendor, orchestration
+  #      packets, harness_extract_last_json, status --json roles/orchestrator) =====
+
+  # ---- register: --role defaults to coding, then to the profile's harness_role,
+  #      then an explicit ROLE argument wins; --model/--vendor always passed -------
+  : >"$SESSADD"
+  harness_register_rix hns-sub /tmp/proj-sub 1 p-role-default >/dev/null || tfail "register (role default) failed"
+  grep -q -- "--role coding" "$SESSADD" || { cat "$SESSADD"; tfail "register must default --role to coding when the profile has no harness_role"; }
+  grep -q -- "--model claude-sonnet-5" "$SESSADD" || { cat "$SESSADD"; tfail "register must pass --model"; }
+  grep -q -- "--vendor anthropic" "$SESSADD" || { cat "$SESSADD"; tfail "register must pass --vendor (the profile's provider id for a kind=provider backend)"; }
+
+  profile_write hns-role-test2 hermes local anthropic none claude-opus-5 - interactive ""
+  profile_set hns-role-test2 harness_role '"orchestrator"'
+  : >"$SESSADD"
+  harness_register_rix hns-role-test2 /tmp/proj-rt2 1 p-role-fromprofile >/dev/null || tfail "register (role from profile) failed"
+  grep -q -- "--role orchestrator" "$SESSADD" || { cat "$SESSADD"; tfail "register must default --role from the profile's harness_role"; }
+
+  : >"$SESSADD"
+  harness_register_rix hns-free /tmp/proj-free 1 p-role-explicit orchestrator >/dev/null || tfail "register (explicit role) failed"
+  grep -q -- "--role orchestrator" "$SESSADD" || { cat "$SESSADD"; tfail "register: an explicit ROLE argument must override the profile's harness_role"; }
+  grep -q -- "--vendor local" "$SESSADD" || { cat "$SESSADD"; tfail "register: a local-backend profile's vendor must be local"; }
+  pass "harness register: --role coding default -> profile harness_role -> explicit ROLE argument (highest precedence); --model/--vendor always passed"
+
+  # ---- register: the harness CLI's own refusal (e.g. an IP-unsafe vendor asking
+  #      for orchestrator) is surfaced verbatim via stderr, never pre-judged here --
+  (
+    cat >"$HD/fakebin/harness-refuse" <<'FAKE3'
+#!/bin/bash
+while [[ ${1:-} == --json ]]; do shift; done
+case "$1" in
+  session)
+    if [[ "$*" == *"--role orchestrator"* ]]; then
+      echo "refused: vendor is not IP-safe for role orchestrator" >&2
+      exit 1
+    fi
+    echo ok ;;
+  *) echo '{}' ;;
+esac
+FAKE3
+    chmod +x "$HD/fakebin/harness-refuse"
+    settings_set harness_bin "$HD/fakebin/harness-refuse"
+    err=$(harness_register_rix hns-free /tmp/proj-free 1 p-refuse orchestrator 2>&1) && tfail "register must fail when the harness CLI refuses"
+    grep -q "refused: vendor is not IP-safe" <<<"$err" || { echo "$err"; tfail "register must surface the harness CLI's stderr verbatim"; }
+    settings_set harness_bin "$HD/fakebin/harness"
+  )
+  pass "harness register: a harness CLI refusal (e.g. IP-unsafe orchestrator) is surfaced via stderr, not pre-judged in bash"
+
+  # ---- harness role: persists the profile field and pushes --role to every live
+  #      session (incl. a --slots label) whose label resolves back to this profile,
+  #      never to another profile's session; refuses an unknown role -------------
+  : >"$SESSADD"
+  profile_write hns-role hermes local local none model-x - interactive ""
+  jq -n --arg t "$(date -Is)" '{
+    projects: [ {id:"p-role", repo_path:"/tmp/proj-role"} ],
+    sessions: [
+      {id:"s-role-1", project:"p-role", worker:"rix", label:"hns-role"},
+      {id:"s-role-2", project:"p-role", worker:"rix", label:"hns-role-1"},
+      {id:"s-role-other", project:"p-role", worker:"rix", label:"hns-free"}
+    ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+  harness_set_role hns-role orchestrator >/dev/null || tfail "harness_set_role failed"
+  [[ $(profile_get hns-role harness_role) == orchestrator ]] || tfail "harness_set_role must persist the profile's harness_role field"
+  grep -q -- "--session s-role-1 --role orchestrator" "$SESSADD" || { cat "$SESSADD"; tfail "harness_set_role must push session set --role to a plain-labelled live session"; }
+  grep -q -- "--session s-role-2 --role orchestrator" "$SESSADD" || { cat "$SESSADD"; tfail "harness_set_role must push session set --role to a --slots N session (label PROFILE-N)"; }
+  ! grep -q -- "--session s-role-other" "$SESSADD" || { cat "$SESSADD"; tfail "harness_set_role must never touch a session belonging to a different profile"; }
+  ( harness_set_role hns-role bogus-role ) >/dev/null 2>&1 && tfail "harness_set_role must refuse an unknown role"
+  pass "harness_set_role: persists the profile field, pushes session set --role to every matching live session only, refuses an unknown role"
+
+  # ---- sequence: harness role sets the field, then a later register (no explicit
+  #      ROLE) picks it straight up -- --vendor local --role orchestrator together --
+  : >"$SESSADD"
+  harness_register_rix hns-role /tmp/proj-role 1 p-role-seq >/dev/null || tfail "register after harness role failed"
+  grep -q -- "--role orchestrator" "$SESSADD" || { cat "$SESSADD"; tfail "register after 'harness role' must pick up --role orchestrator from the profile"; }
+  grep -q -- "--vendor local" "$SESSADD" || { cat "$SESSADD"; tfail "register after 'harness role' must still carry --vendor local (a local-backend profile)"; }
+  pass "harness role then register: a local-backend profile set to orchestrator via harness_set_role later registers --role orchestrator --vendor local"
+
+  # ---- harness_extract_last_json: the LAST balanced top-level JSON object wins
+  #      over nested braces, braces inside strings, and a broken object before it --
+  EJF="$HD/extract-test.txt"
+  printf 'noise\n{"action": "SPLIT", "broken": true\nmore prose, this object never closes\n{"action":"SPLIT","node":"P0","children":[{"id":"P0.1","title":"a } b { c"},{"id":"P0.2"}]}\ntrailing prose' >"$EJF"
+  got=$(harness_extract_last_json "$EJF") || tfail "harness_extract_last_json must find the good top-level object past a broken one"
+  [[ $(jq -r '.action' <<<"$got") == SPLIT ]] || { echo "$got"; tfail "extracted JSON must be a full object with .action"; }
+  [[ $(jq -r '.node' <<<"$got") == P0 ]] || { echo "$got"; tfail "extracted JSON must be the OUTER object, not the inner nested {\"id\":\"P0.1\"}"; }
+  [[ $(jq '.children | length' <<<"$got") == 2 ]] || { echo "$got"; tfail "extracted JSON must include both children (nested braces preserved, not truncated)"; }
+
+  EJF2="$HD/extract-empty.txt"; printf 'no json anywhere in this text\n' >"$EJF2"
+  harness_extract_last_json "$EJF2" >/dev/null 2>&1 && tfail "harness_extract_last_json must fail (nonzero exit, nothing printed) when nothing parses"
+
+  EJF3="$HD/extract-multi.txt"; printf '{"first": true} some text in between {"second": true, "picked": "last"}' >"$EJF3"
+  got3=$(harness_extract_last_json "$EJF3") || tfail "harness_extract_last_json must find a top-level object when there are two complete candidates"
+  [[ $(jq -r '.picked // empty' <<<"$got3") == last ]] || { echo "$got3"; tfail "harness_extract_last_json must return the LAST top-level object, not the first"; }
+  pass "harness_extract_last_json: last top-level object wins over nested braces, in-string braces, a broken object before it, and an earlier complete one"
+
+  # ---- harness_extract_last_json: stays fast on a realistic (~100KiB) run log,
+  #      brace-heavy prefix included (a code snippet's `function() {`, unclosed) --
+  EJF4="$HD/extract-big.txt"
+  { yes 'tool output line, includes a stray brace from a code snippet: function() {' | head -n 1500; printf '{"action":"SPLIT","node":"Pbig"}'; } >"$EJF4"
+  t0=$(date +%s%N)
+  got4=$(harness_extract_last_json "$EJF4") || tfail "harness_extract_last_json must still find the object behind a large brace-heavy prefix"
+  t1=$(date +%s%N)
+  [[ $(jq -r '.node' <<<"$got4") == Pbig ]] || { echo "$got4"; tfail "harness_extract_last_json must return the real object, not get lost in the prefix"; }
+  ms=$(( (t1 - t0) / 1000000 ))
+  (( ms < 5000 )) || tfail "harness_extract_last_json took ${ms}ms on a ~100KiB brace-heavy log (must stay well under a dispatch sweep)"
+  pass "harness_extract_last_json: correct and fast (${ms}ms) on a large brace-heavy log"
+
+  # ---- orchestration packet dispatch (SPLIT): only an orchestrator session/profile
+  #      claims it (here: overview session role, defensive-checked independently of
+  #      the profile field); the reaper extracts the last balanced JSON object from
+  #      the delegate's reply and writes a --command receipt with --patch-file -----
+  : >"$DELEGATE_LOG"; : >"$RECEIPTS"
+  profile_write hns-orch hermes local local none model-x - interactive ""
+  PKT_SPLIT="$HD/pkt-split.md"; printf 'SPLIT_REPLY_MARKER Decompose P0 into two children.\n' >"$PKT_SPLIT"
+  printf '[{"node":"P0","path":"%s","command":"SPLIT"}]' "$PKT_SPLIT" >"$HD/inbox/p-split.json"
+  jq -n --arg t "$(date -Is)" '{
+    projects: [ {id:"p-split", repo_path:"/tmp/proj-split"} ],
+    sessions: [ {id:"s-split", project:"p-split", worker:"rix", label:"hns-orch", role:"orchestrator", tier:"orchestrator", model:"model-x", vendor:"local", ip_safe:true} ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+  harness_dispatch_once || true
+  grep -q "name=hns-P0" "$DELEGATE_LOG" || { cat "$DELEGATE_LOG"; tfail "an orchestrator session must claim and delegate the SPLIT packet"; }
+  [[ -f ${PKT_SPLIT}.claimed ]] || tfail "the SPLIT packet must be claimed"
+  harness_dispatch_reap
+  splitline=$(grep "node=P0 " "$RECEIPTS" | tail -n1)
+  [[ -n $splitline ]] || { cat "$RECEIPTS"; tfail "a SPLIT receipt is expected"; }
+  grep -q "command=SPLIT" <<<"$splitline" || { echo "$splitline"; tfail "the SPLIT receipt must carry --command SPLIT"; }
+  grep -q "status=done" <<<"$splitline" || { echo "$splitline"; tfail "the SPLIT receipt must be status=done once a JSON patch was extracted"; }
+  splitpatch=$(sed -E 's/.*patch=([^ ]*).*/\1/' <<<"$splitline")
+  [[ -s $splitpatch ]] || { echo "$splitline"; tfail "the SPLIT patch file must exist and be non-empty"; }
+  [[ $(jq -r '.action' "$splitpatch") == SPLIT ]] || { cat "$splitpatch"; tfail "the SPLIT patch file must parse as JSON with .action == SPLIT"; }
+  [[ $(jq -r '.node' "$splitpatch") == P0 ]] || { cat "$splitpatch"; tfail "the SPLIT patch must be the LAST balanced object (P0), not the broken/earlier one"; }
+  pass "harness dispatch: an orchestration packet (SPLIT) is claimed by an orchestrator session; the reaper writes a --command receipt whose --patch-file is the last balanced JSON object"
+
+  # ---- orchestration packet dispatch: a non-orchestrator profile/session must
+  #      never claim one, even when detected by path suffix alone (no `command`
+  #      field on the inbox row -- tolerate its absence per CONTRACTS.md §17.7) ---
+  : >"$DELEGATE_LOG"
+  PKT_SPLIT2="$HD/pkt-split2.PM.md"; printf 'PM_REPLY_MARKER Plan the next wave.\n' >"$PKT_SPLIT2"
+  printf '[{"node":"P1","path":"%s"}]' "$PKT_SPLIT2" >"$HD/inbox/p-split2.json"
+  jq -n --arg t "$(date -Is)" '{
+    projects: [ {id:"p-split2", repo_path:"/tmp/proj-split2"} ],
+    sessions: [ {id:"s-split2", project:"p-split2", worker:"rix", label:"hns-free"} ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+  harness_dispatch_once || true
+  [[ $(wc -l <"$DELEGATE_LOG") == 0 ]] || { cat "$DELEGATE_LOG"; tfail "a non-orchestrator profile/session must not claim an orchestration packet (path-suffix .PM.md, no command field)"; }
+  [[ -f $PKT_SPLIT2 ]] || tfail "the orchestration packet must remain unclaimed when skipped defensively"
+  grep -q "not registered as orchestrator" "$OAL_EVENTS" || tfail "the defensive skip must emit an explanatory event"
+  pass "harness dispatch: a non-orchestrator profile/session never claims an orchestration packet, detected by path suffix alone when the inbox row carries no command field"
+
+  # ---- orchestration packet: the delegate's reply has no JSON object at all ->
+  #      --status failed --summary, no --patch-file; status --json roles/orchestrator/
+  #      overview_path are populated from overview.json (file-only, never null) -----
+  : >"$DELEGATE_LOG"; : >"$RECEIPTS"
+  PKT_NOJSON="$HD/pkt-nojson.md"; printf 'SPLIT_NO_JSON_MARKER just prose, no JSON anywhere in this reply.\n' >"$PKT_NOJSON"
+  printf '[{"node":"P2","path":"%s","command":"SPLIT"}]' "$PKT_NOJSON" >"$HD/inbox/p-nojson.json"
+  jq -n --arg t "$(date -Is)" '{
+    projects: [ {id:"p-nojson", repo_path:"/tmp/proj-nojson", orchestrator:{"session":"s-nojson","model":"model-x"}} ],
+    sessions: [ {id:"s-nojson", project:"p-nojson", worker:"rix", label:"hns-orch", role:"orchestrator", tier:"orchestrator", model:"model-x", vendor:"local", ip_safe:true} ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+  harness_dispatch_once || true
+  harness_dispatch_reap
+  nojsonline=$(grep "node=P2 " "$RECEIPTS" | tail -n1)
+  [[ -n $nojsonline ]] || { cat "$RECEIPTS"; tfail "a P2 receipt is expected"; }
+  grep -q "status=failed" <<<"$nojsonline" || { echo "$nojsonline"; tfail "no JSON in the reply -> the receipt status must be failed"; }
+  grep -q "command=SPLIT" <<<"$nojsonline" || { echo "$nojsonline"; tfail "the failed receipt must still carry --command SPLIT"; }
+  nojsonpatch=$(sed -E 's/.*patch=([^ ]*).*/\1/' <<<"$nojsonline")
+  [[ -z $nojsonpatch ]] || { echo "$nojsonline"; tfail "a failed (no-JSON) receipt must not carry --patch-file"; }
+  nojsonsummary=$(sed -E 's/.*summary=(.*)$/\1/' <<<"$nojsonline")
+  [[ -n $nojsonsummary ]] || { echo "$nojsonline"; tfail "a failed (no-JSON) receipt must carry --summary"; }
+  pass "harness dispatch: no JSON object in the delegate's reply -> --command receipt with --status failed --summary, no --patch-file"
+
+  statusj=$(harness_status_json)
+  op=$(jq -r '.overview_path' <<<"$statusj")
+  [[ -n $op && $op != null ]] || { echo "$statusj"; tfail "harness_status_json.overview_path must always be the real path, never null"; }
+  [[ $op == "$HARNESS_DATA_DIR/overview.json" ]] || { echo "$statusj"; tfail "harness_status_json.overview_path must be harness_data_dir/overview.json"; }
+  [[ $(jq -r '.roles[] | select(.session=="s-nojson") | .role' <<<"$statusj") == orchestrator ]] || { echo "$statusj"; tfail "harness_status_json.roles must carry each registered rix session's role"; }
+  [[ $(jq -r '.roles[] | select(.session=="s-nojson") | .model' <<<"$statusj") == model-x ]] || { echo "$statusj"; tfail "harness_status_json.roles must carry model/vendor/tier/ip_safe from overview.json"; }
+  [[ $(jq -r '.orchestrator["p-nojson"].session' <<<"$statusj") == s-nojson ]] || { echo "$statusj"; tfail "harness_status_json.orchestrator must map project id -> overview.json's projects[].orchestrator"; }
+  pass "harness_status_json: overview_path always non-null; roles/orchestrator surfaced from overview.json"
+
+  lst=$("$L" status --json)
+  lop=$(jq -r '.harness.overview_path' <<<"$lst")
+  [[ -n $lop && $lop != null ]] || { echo "$lst" | head -c 2000; tfail "'omarchy-agent-launcher status --json'.harness.overview_path must be non-null (wired through cmd_status_json)"; }
+  pass "status --json: .harness.overview_path is non-null through the real CLI, not just the bash function"
+
   exit 0
 ) || exit 1
 

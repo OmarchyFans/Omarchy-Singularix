@@ -3,6 +3,41 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.14.0 — Roles and model policy (2026-09-14)
+
+- **Profile field `harness_role`** (`orchestrator|reasoning|coding|local`, default `coding`):
+  `harness_register_rix PROFILE [REPO] [SLOTS] [PROJECT_ID] [ROLE]` now passes `--role`
+  (`ROLE`, else the profile's `harness_role`, else `coding`), `--model` (the profile's own
+  model, else its backend's), and `--vendor` (the profile's provider id for a `kind=provider`
+  backend, or the registry backend's own id for a `kind=endpoint` one) on `harness session
+  add`, so the harness can derive `tier`/`ip_safe` itself. `omarchy-agent-launcher harness
+  register PROFILE [--project ID] [--slots N] [--role R]` and a new `omarchy-agent-launcher
+  harness role PROFILE ROLE` (persists the field, pushes `session set --role` to every
+  already-registered live session for that profile). A harness refusal — an IP-unsafe vendor
+  asking for `orchestrator`, which the harness (not this launcher) decides — surfaces its
+  stderr verbatim rather than being pre-judged in bash.
+- **Orchestration packets**: `harness_dispatch_packet` detects `<node>.SPLIT.md`/`.PM.md`/
+  `.COMPOSE.md` (or an inbox row carrying `command`, tolerating its absence), claims/delegates
+  them exactly like a work packet but asks for exactly one JSON patch in reply, and skips
+  (defensively — the harness only ever assigns these to an `orchestrator`-tier session) one
+  for a profile/session that isn't registered orchestrator. `harness_dispatch_reap` extracts
+  the LAST balanced top-level JSON object from the delegate's reply
+  (`harness_extract_last_json`, string- and nesting-aware, immune to a broken/unterminated
+  object earlier in the text) and calls `harness receipt --command SPLIT|PM|COMPOSE
+  --patch-file F --status done`, or `--status failed --summary "…"` when no JSON parsed.
+- **`harness_status_json`**: gains `roles` (every registered Rix session's
+  `{session, project, role, tier, model, vendor, ip_safe}` from `overview.json`) and
+  `orchestrator` (`overview.json`'s `projects[].orchestrator`, keyed by project id); fixes
+  `overview_path` to always be the real `harness_data_dir/overview.json` path, never `null`.
+- **Rix skill** (`skills/rix/SKILL.md`, → 0.14.0): new "Harness — pick up any task fresh"
+  section — `harness brief`/`harness show --node` as the first command on any packet, roles
+  and IP-safety rules in plain words, how to answer an orchestration packet (one JSON patch,
+  nothing else — the launcher writes the receipt), `harness policy show`, `harness project
+  set --role/--ip-class`.
+- **`docs/HARNESS.md`**: new "Roles and model policy" section (the two axes, the three
+  default chains, how to override per profile/project/node, IP classes, the orchestration
+  packet flow, `harness brief`).
+
 ## 0.13.0 — Rix × session-harness (2026-09-13)
 
 - **Plan tab** (`components/PlanTab.qml`): renders every served project's task queue from the

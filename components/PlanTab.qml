@@ -44,6 +44,98 @@ Item {
   readonly property var sessions: overview && overview.sessions ? overview.sessions : []
   readonly property var queueAll: overview && overview.queue ? overview.queue : []
 
+  // ---- roles/model policy lookups (Wave 6, CONTRACTS.md §17.5-17.7) ---------
+  // Short model label: strip a "vendor:" hop prefix, a folded-in "claude-"
+  // vendor prefix, and a trailing date suffix. Everything else (gpt-5.4-codex,
+  // deepseek-v4-flash) is a model family name, not a vendor prefix -- leave it.
+  function shortModel(m) {
+    var s = String(m || "").trim()
+    if (s === "") return ""
+    var colon = s.indexOf(":")
+    if (colon >= 0) s = s.slice(colon + 1)
+    s = s.replace(/^claude-/, "")
+    s = s.replace(/-\d{4}-?\d{2}-?\d{2}$/, "")
+    return s
+  }
+
+  // sid -> session, built once per overview change (not per-row).
+  function sessionByIdMap() {
+    var m = {}
+    for (var i = 0; i < sessions.length; i++) { var s = sessions[i]; if (s && s.id !== undefined) m[String(s.id)] = s }
+    return m
+  }
+  readonly property var sessionById: sessionByIdMap()
+
+  // {project: {node: waveIndex}}, from projects[].waves (optional, older
+  // harness omits it -- every lookup below falls back to -1/"not in a wave").
+  function waveIndexMap() {
+    var m = {}
+    for (var i = 0; i < projects.length; i++) {
+      var p = projects[i]
+      var waves = (p && p.waves) || []
+      var pm = {}
+      for (var w = 0; w < waves.length; w++) {
+        var arr = waves[w] || []
+        for (var j = 0; j < arr.length; j++) pm[String(arr[j])] = w
+      }
+      m[p.id] = pm
+    }
+    return m
+  }
+  readonly property var waveIndexByProject: waveIndexMap()
+  function waveOf(row) {
+    if (!row) return -1
+    var pm = tab.waveIndexByProject[row.project]
+    if (!pm) return -1
+    var w = pm[String(row.node)]
+    return w === undefined ? -1 : w
+  }
+
+  // sid of the session named by any project's `orchestrator.kind === "session"`.
+  function orchestratorSessionIdSet() {
+    var s = {}
+    for (var i = 0; i < projects.length; i++) {
+      var o = projects[i] && projects[i].orchestrator
+      if (o && o.kind === "session" && o.id !== undefined) s[String(o.id)] = true
+    }
+    return s
+  }
+  readonly property var orchestratorSessionIds: orchestratorSessionIdSet()
+
+  // Model for a queue row: the row's own field (future-proofing), else the
+  // closing attempt's model (`performed_by`, done rows a harness may still
+  // list briefly), else the assignee session's registered model. Never
+  // invented -- "" when none of those exist.
+  function rowModel(row) {
+    if (!row) return ""
+    if (row.model) return String(row.model)
+    if (row.performed_by && row.performed_by.model) return String(row.performed_by.model)
+    if (row.assignee) {
+      var s = tab.sessionById[String(row.assignee)]
+      if (s && s.model) return String(s.model)
+    }
+    return ""
+  }
+  function rowVendor(row) {
+    if (!row) return ""
+    if (row.vendor) return String(row.vendor)
+    if (row.performed_by && row.performed_by.vendor) return String(row.performed_by.vendor)
+    if (row.assignee) {
+      var s = tab.sessionById[String(row.assignee)]
+      if (s && s.vendor) return String(s.vendor)
+    }
+    return ""
+  }
+  function rowCostClass(row) {
+    if (!row) return ""
+    if (row.cost_class) return String(row.cost_class)
+    if (row.assignee) {
+      var s = tab.sessionById[String(row.assignee)]
+      if (s && s.cost_class) return String(s.cost_class)
+    }
+    return ""
+  }
+
   // Every open approval request across every project, plus a synthetic row
   // for a budget overrun (which has no request id of its own). Always a
   // list of rows -- never a single-slot banner, since a project can have
@@ -80,10 +172,15 @@ Item {
   readonly property var flatRows: computeFlatRows()
   readonly property int rowCount: flatRows.length
   readonly property bool editing: false
-  readonly property bool popupOpen: projectDrop.popupOpen || agentDrop.popupOpen
+  readonly property bool popupOpen: projectDrop.popupOpen || agentDrop.popupOpen || roleDrop.popupOpen || modelDrop.popupOpen
   function activate(i) { var n = flatRows[i]; if (n) selectRow(n) }
 
   // ---- keyboard shortcuts (routed from Dashboard.qml while dash.tab === "plan") --
+  // NOTE: `cycleRoleFilter`/`cycleModelFilter` are wired up the same way as
+  // `cycleProjectFilter`/`toggleCriticalOnly` (dash.planTabRef.<fn>() from
+  // Dashboard.qml's PanelKeyCatcher.onTextKey) but Dashboard.qml is outside
+  // this wave's file ownership -- see the wave report for the two lines the
+  // lead needs to add (and why plain "r" collides with the global refresh key).
   function assignSelected() { if (tab.selectedRow) dash.act([dash.launcher, "harness", "assign", tab.selectedRow.project, tab.selectedRow.node]) }
   function cycleProjectFilter() {
     var opts = tab.projectOptionsList
@@ -92,11 +189,27 @@ Item {
     for (var i = 0; i < opts.length; i++) if (opts[i].value === tab.projectFilter) { idx = i; break }
     tab.projectFilter = opts[(idx + 1) % opts.length].value
   }
+  function cycleRoleFilter() {
+    var opts = tab.roleOptionsList
+    if (!opts.length) return
+    var idx = 0
+    for (var i = 0; i < opts.length; i++) if (opts[i].value === tab.roleFilter) { idx = i; break }
+    tab.roleFilter = opts[(idx + 1) % opts.length].value
+  }
+  function cycleModelFilter() {
+    var opts = tab.modelOptionsList
+    if (!opts.length) return
+    var idx = 0
+    for (var i = 0; i < opts.length; i++) if (opts[i].value === tab.modelFilter) { idx = i; break }
+    tab.modelFilter = opts[(idx + 1) % opts.length].value
+  }
   function toggleCriticalOnly() { tab.criticalOnly = !tab.criticalOnly }
 
   // ---- filters --------------------------------------------------------------
   property string projectFilter: ""
   property string agentFilter: ""
+  property string roleFilter: ""
+  property string modelFilter: ""
   property bool criticalOnly: false
   property var activeStates: ({ ready: true, running: true, blocked: true, done: true, failed: true })
   function toggleState(s) { var m = {}; for (var k in activeStates) m[k] = activeStates[k]; m[s] = !m[s]; activeStates = m }
@@ -131,6 +244,28 @@ Item {
   }
   readonly property var agentOptionsList: agentOptionsFn()
 
+  // Role/model options are pooled from whatever data is on hand: queue rows'
+  // own `role` field (when the harness sends it), and every session's
+  // `role`/`model` -- so the dropdowns are never empty just because the
+  // filtered project's rows don't carry the field themselves.
+  function roleOptionsFn() {
+    var seen = {}, out = [{ value: "", label: "All roles" }]
+    function add(v) { v = String(v || ""); if (v !== "" && !seen[v]) { seen[v] = true; out.push({ value: v, label: v }) } }
+    for (var i = 0; i < queueAll.length; i++) add(queueAll[i].role)
+    for (var j = 0; j < sessions.length; j++) add(sessions[j].role)
+    return out
+  }
+  readonly property var roleOptionsList: roleOptionsFn()
+
+  function modelOptionsFn() {
+    var seen = {}, out = [{ value: "", label: "All models" }]
+    function add(v) { v = String(v || ""); if (v !== "" && !seen[v]) { seen[v] = true; out.push({ value: v, label: tab.shortModel(v) }) } }
+    for (var i = 0; i < queueAll.length; i++) add(tab.rowModel(queueAll[i]))
+    for (var j = 0; j < sessions.length; j++) add(sessions[j].model)
+    return out
+  }
+  readonly property var modelOptionsList: modelOptionsFn()
+
   function projectMaxEf(pid) {
     var m = 1
     for (var i = 0; i < queueAll.length; i++) if (queueAll[i].project === pid) { var v = Number(queueAll[i].ef || 0); if (v > m) m = v }
@@ -146,6 +281,8 @@ Item {
         if (agentFilter !== "" && q.assignee !== agentFilter) return false
         if (!stateOk(q.state)) return false
         if (tab.criticalOnly && !q.critical) return false
+        if (tab.roleFilter !== "" && String(q.role || "") !== tab.roleFilter) return false
+        if (tab.modelFilter !== "" && tab.rowModel(q) !== tab.modelFilter) return false
         return true
       })
       rows.sort(function(a, b) { if (!!a.critical !== !!b.critical) return a.critical ? -1 : 1; return (a.es || 0) - (b.es || 0) })
@@ -159,6 +296,7 @@ Item {
   function aggregate() {
     var list = projectFilter === "" ? projects : projects.filter(function(p) { return p.id === projectFilter })
     var residual = 0, blocked = 0, spent = 0, approved = 0, remaining = 0, reserved = 0, overrun = 0, dailySpent = 0, dailyCap = 0
+    var wave0 = 0, nextWave = 0, eligibleIdle = 0, concurrencyWave0 = 0, hasWaves = false, hasConcurrency = false
     for (var i = 0; i < list.length; i++) {
       var p = list[i]
       residual += Number(p.residual || 0)
@@ -172,8 +310,19 @@ Item {
         dailySpent += Number(p.cost.daily_spent_usd || 0)
         dailyCap += Number(p.cost.daily_cap_usd || 0)
       }
+      if (p.waves) {
+        hasWaves = true
+        wave0 += ((p.waves[0]) || []).length
+        nextWave += ((p.waves[1]) || []).length
+      }
+      if (p.concurrency) {
+        hasConcurrency = true
+        eligibleIdle += Number(p.concurrency.eligible_idle || 0)
+        concurrencyWave0 += Number(p.concurrency.wave0 || 0)
+      }
     }
-    return { residual: residual, blocked: blocked, spent: spent, approved: approved, remaining: remaining, reserved: reserved, overrun: overrun, dailySpent: dailySpent, dailyCap: dailyCap }
+    return { residual: residual, blocked: blocked, spent: spent, approved: approved, remaining: remaining, reserved: reserved, overrun: overrun, dailySpent: dailySpent, dailyCap: dailyCap,
+             wave0: wave0, nextWave: nextWave, eligibleIdle: eligibleIdle, concurrencyWave0: concurrencyWave0, hasWaves: hasWaves, hasConcurrency: hasConcurrency }
   }
   readonly property var agg: aggregate()
 
@@ -204,6 +353,24 @@ Item {
     if (kind === "merged_pr") return "closed by merged PR"
     if (node.evidence_missing) return "no evidence on file"
     return ""
+  }
+  // Detail line for the inspector: role, ip_class (always shown -- unlabelled
+  // means protected, §17.1), model, vendor, cost_class. Model/vendor/cost_class
+  // are omitted entirely when nothing on hand names them (no invented data).
+  function selectedRowPolicyLine() {
+    var r = tab.selectedRow
+    if (!r) return ""
+    var m = tab.rowModel(r), v = tab.rowVendor(r), c = tab.rowCostClass(r)
+    // Nothing on hand at all (older harness, no role/ip_class/model/vendor/
+    // cost_class anywhere) -- render exactly like before this wave: no line.
+    if (!r.role && !r.ip_class && m === "" && v === "" && c === "") return ""
+    var parts = []
+    if (r.role) parts.push("role: " + String(r.role))
+    parts.push("ip: " + (r.ip_class === "open" ? "open" : "protected"))
+    if (m !== "") parts.push("model: " + tab.shortModel(m))
+    if (v !== "") parts.push("vendor: " + v)
+    if (c !== "") parts.push("cost: " + c)
+    return parts.join("  ·  ")
   }
 
   // ---- sessions grouped by profile (slots "rix-1"/"rix-2" -> "rix" x2) ------
@@ -263,6 +430,22 @@ Item {
     if (c === "subscription") return "sub"
     if (c === "metered") return "$"
     return String(c || "—")
+  }
+  // "role · tier · shortModel" for a session group's first member, omitting
+  // whatever the session doesn't carry (older harness registers with none).
+  function sessionPolicyTag(members) {
+    if (!members || !members.length) return ""
+    var s = members[0]
+    var parts = []
+    if (s.role) parts.push(String(s.role))
+    if (s.tier) parts.push(String(s.tier))
+    var m = tab.shortModel(s.model); if (m !== "") parts.push(m)
+    return parts.join(" · ")
+  }
+  function groupIsOrchestrator(members) {
+    if (!members) return false
+    for (var i = 0; i < members.length; i++) if (tab.orchestratorSessionIds[String(members[i].id)]) return true
+    return false
   }
 
   // ---- row selection + event-driven flash -----------------------------------
@@ -397,6 +580,13 @@ Item {
     readonly property color rowStateColor: node ? tab.stateColor(node.state) : dash.dim
     readonly property string rowKey: node ? (String(node.project || "") + "::" + String(node.node || "")) : ""
 
+    // ---- roles/model policy (Wave 6): wave membership, model label, IP lock --
+    readonly property int wave: tab.waveOf(qrow.node)
+    readonly property bool wavesLive: tab.harnessAlive && !tab.stale
+    readonly property string rowShortModel: qrow.node ? tab.shortModel(tab.rowModel(qrow.node)) : ""
+    // Unlabelled means protected (contract §17.1: the graph fails closed).
+    readonly property bool ipOpen: !!(qrow.node && qrow.node.ip_class === "open")
+
     property real flashOpacity: 0
     SequentialAnimation {
       id: flashAnim
@@ -427,11 +617,15 @@ Item {
         width: qrow.trackLeft; height: parent.height
         leftPadding: Style.spacing.md; rightPadding: Style.spacing.sm
         verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
-        text: qrow.node ? (qrow.node.title || qrow.node.node || "") : ""
+        opacity: qrow.wave === 1 ? 0.7 : 1
+        // Lock glyph before the title (§17.1/§17.6): unlabelled == protected,
+        // so absent ip_class shows locked too -- the graph fails closed.
+        text: (qrow.ipOpen ? "🔓 " : "🔒 ") + (qrow.node ? (qrow.node.title || qrow.node.node || "") : "")
         color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.bodySmall
       }
       Item {
         width: qrow.trackWidth; height: parent.height
+        opacity: qrow.wave === 1 ? 0.7 : 1
         Rectangle {
           id: bar
           y: (parent.height - height) / 2
@@ -451,7 +645,7 @@ Item {
             anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
             anchors.leftMargin: Style.spacing.xs; anchors.rightMargin: Style.spacing.xs
             textFormat: Text.PlainText; elide: Text.ElideRight
-            text: qrow.node ? (qrow.node.assignee || "") : ""
+            text: qrow.node ? ((qrow.node.assignee || "") + (qrow.rowShortModel !== "" ? "  ·  " + qrow.rowShortModel : "")) : ""
             color: "#f5f5f5"; font.family: dash.fontFamily; font.pixelSize: Style.font.caption; font.bold: true
           }
           Text {
@@ -473,13 +667,33 @@ Item {
               NumberAnimation { to: 0.25; duration: 500 }
             }
           }
+          // Wave-0 outline pulse (§17.5): a subtle border-opacity breathe,
+          // ~1.2s period, only while the harness snapshot is live and fresh.
+          Rectangle {
+            id: wavePulseBorder
+            visible: qrow.wave === 0 && qrow.wavesLive
+            anchors.fill: parent
+            anchors.margins: -2
+            radius: parent.radius + 2
+            color: "transparent"
+            border.width: 2
+            border.color: dash.accent
+            opacity: 0.85
+            SequentialAnimation on opacity {
+              running: wavePulseBorder.visible
+              loops: Animation.Infinite
+              NumberAnimation { to: 0.2; duration: 600 }
+              NumberAnimation { to: 0.85; duration: 600 }
+            }
+          }
         }
       }
       Text {
         width: Style.space(90); height: parent.height
         leftPadding: Style.spacing.md
         verticalAlignment: Text.AlignVCenter
-        text: qrow.node ? String(qrow.node.state || "") : ""
+        opacity: qrow.wave === 1 ? 0.7 : 1
+        text: qrow.node ? (String(qrow.node.state || "") + (qrow.wave === 1 ? "  ·  next" : "")) : ""
         color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
       }
     }
@@ -536,6 +750,17 @@ Item {
         text: (grp.p && grp.p.critical_path ? grp.p.critical_path.length : 0) + " critical"
         color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
       }
+    }
+
+    // Router orchestrator (§17.5-17.6): a session orchestrator is marked on
+    // its chip in the sessions lane instead (★ orchestrator); this line only
+    // fires for the router-hop case, which has no session row to mark.
+    Text {
+      width: parent.width
+      visible: !!(grp.p && grp.p.orchestrator && grp.p.orchestrator.kind === "router")
+      textFormat: Text.PlainText; elide: Text.ElideRight
+      text: "orchestrator: router → " + (grp.p && grp.p.orchestrator ? (grp.p.orchestrator.hop || grp.p.orchestrator.model || "?") : "?")
+      color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
     }
 
     Flow {
@@ -599,11 +824,24 @@ Item {
           color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
           elide: Text.ElideRight; width: Style.space(100)
         }
+        // Orchestrator marker (§17.5-17.6): this profile owns the session
+        // named by some project's orchestrator.kind === "session".
+        Text {
+          visible: tab.groupIsOrchestrator(chip.members)
+          text: "★ orchestrator"
+          color: dash.accent; font.family: dash.fontFamily; font.pixelSize: Style.font.caption; font.bold: true
+        }
       }
       Row {
         spacing: Style.spacing.xs
         Rectangle { width: Style.space(6); height: Style.space(6); radius: width / 2; color: chip.summary.color; anchors.verticalCenter: parent.verticalCenter }
         Text { text: chip.summary.text; color: chip.summary.color; font.family: dash.fontFamily; font.pixelSize: Style.font.caption }
+        Text {
+          readonly property string tag: tab.sessionPolicyTag(chip.members)
+          visible: tag !== ""
+          text: "· " + tag
+          color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+        }
         Text {
           visible: chip.members.length > 0
           text: "· " + tab.costClassTag(chip.members.length ? chip.members[0].cost_class : "")
@@ -639,6 +877,8 @@ Item {
       width: parent.width; spacing: Style.spacing.controlGap
       PanelDropdown { id: projectDrop; width: Style.space(190); showLabel: false; options: tab.projectOptionsList; value: tab.projectFilter; popupParent: tab; ownerOpen: dash.opened && dash.tab === "plan"; foreground: dash.foreground; fontFamily: dash.fontFamily; onChanged: function(v) { tab.projectFilter = v } }
       PanelDropdown { id: agentDrop; width: Style.space(190); showLabel: false; options: tab.agentOptionsList; value: tab.agentFilter; popupParent: tab; ownerOpen: dash.opened && dash.tab === "plan"; foreground: dash.foreground; fontFamily: dash.fontFamily; onChanged: function(v) { tab.agentFilter = v } }
+      PanelDropdown { id: roleDrop; width: Style.space(150); showLabel: false; options: tab.roleOptionsList; value: tab.roleFilter; popupParent: tab; ownerOpen: dash.opened && dash.tab === "plan"; foreground: dash.foreground; fontFamily: dash.fontFamily; onChanged: function(v) { tab.roleFilter = v } }
+      PanelDropdown { id: modelDrop; width: Style.space(190); showLabel: false; options: tab.modelOptionsList; value: tab.modelFilter; popupParent: tab; ownerOpen: dash.opened && dash.tab === "plan"; foreground: dash.foreground; fontFamily: dash.fontFamily; onChanged: function(v) { tab.modelFilter = v } }
       Repeater {
         model: [
           { key: "ready", label: "Ready" },
@@ -666,6 +906,26 @@ Item {
               + (tab.agg.dailyCap > 0 ? "  ·  Today " + dash.fmtUsd(tab.agg.dailySpent) + " / " + dash.fmtUsd(tab.agg.dailyCap) : "")
               + (tab.agg.overrun > 0 ? "  ·  Overrun " + dash.fmtUsd(tab.agg.overrun) : "")
         color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+      }
+      // Wave/concurrency pill (§17.5-17.6): absent on an older harness with
+      // no `waves`/`concurrency` on any filtered project -- renders nothing.
+      BorderSurface {
+        id: wavePill
+        visible: tab.agg.hasWaves || tab.agg.hasConcurrency
+        radius: Style.cornerRadius
+        implicitWidth: wavePillText.implicitWidth + Style.space(12)
+        implicitHeight: wavePillText.implicitHeight + Style.space(6)
+        color: Qt.rgba(dash.accent.r, dash.accent.g, dash.accent.b, 0.10)
+        borderSpec: Border.flat(dash.accent, 1)
+        Text {
+          id: wavePillText
+          anchors.centerIn: parent
+          textFormat: Text.PlainText
+          text: (tab.agg.hasWaves ? "wave 0: " + tab.agg.wave0 + "  ·  next: " + tab.agg.nextWave : "")
+                + (tab.agg.hasWaves && tab.agg.hasConcurrency ? "  ·  " : "")
+                + (tab.agg.hasConcurrency ? "concurrency " + tab.agg.eligibleIdle + "/" + tab.agg.concurrencyWave0 : "")
+          color: dash.accent; font.family: dash.fontFamily; font.pixelSize: Style.font.caption; font.bold: true
+        }
       }
       Button { text: "Open full Gantt"; bordered: true; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: Qt.openUrlExternally(tab.harnessUrl) }
       Button { text: "Start harness"; bordered: true; visible: !tab.harnessAlive; foreground: dash.okColor; fontFamily: dash.fontFamily; onClicked: dash.act([dash.launcher, "harness", "serve"]) }
@@ -702,7 +962,7 @@ Item {
   Rectangle {
     id: inspector
     anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: sessionsLane.top
-    height: tab.selectedRow ? Style.space(96) : 0
+    height: tab.selectedRow ? (tab.selectedRowPolicyLine() !== "" ? Style.space(112) : Style.space(96)) : 0
     visible: height > 1
     clip: true
     color: Qt.rgba(dash.foreground.r, dash.foreground.g, dash.foreground.b, 0.05)
@@ -723,6 +983,12 @@ Item {
         Text {
           textFormat: Text.PlainText; elide: Text.ElideRight; width: parent.width
           text: tab.selectedRow ? "oracle: " + (tab.selectedRow.oracle_type || "—") + "  ·  blockers-first: " + (tab.selectedRow.blockers_first ? "yes" : "no") + "  ·  assignee: " + (tab.selectedRow.assignee || "unassigned") : ""
+          color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+        }
+        Text {
+          visible: text !== ""
+          textFormat: Text.PlainText; elide: Text.ElideRight; width: parent.width
+          text: tab.selectedRow ? tab.selectedRowPolicyLine() : ""
           color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
         }
         Text {
