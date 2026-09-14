@@ -442,6 +442,18 @@ Item {
     var m = tab.shortModel(s.model); if (m !== "") parts.push(m)
     return parts.join(" · ")
   }
+  // "SPLIT P0.6" when a group member is mid-orchestration: the harness's
+  // session row carries `orchestration: {node, command} | null` while a
+  // dispatch is outstanding for it (landing alongside this wave's roles/
+  // model policy work). "" when no member of the group has one.
+  function sessionOrchestrationTag(members) {
+    if (!members) return ""
+    for (var i = 0; i < members.length; i++) {
+      var o = members[i].orchestration
+      if (o && o.command) return String(o.command) + (o.node ? " " + String(o.node) : "")
+    }
+    return ""
+  }
   function groupIsOrchestrator(members) {
     if (!members) return false
     for (var i = 0; i < members.length; i++) if (tab.orchestratorSessionIds[String(members[i].id)]) return true
@@ -586,6 +598,18 @@ Item {
     readonly property string rowShortModel: qrow.node ? tab.shortModel(tab.rowModel(qrow.node)) : ""
     // Unlabelled means protected (contract §17.1: the graph fails closed).
     readonly property bool ipOpen: !!(qrow.node && qrow.node.ip_class === "open")
+    // Dim by wave distance: this wave full, next wave 0.7, anything further
+    // out (wave >= 2, or -1 for "not ready / not in a wave") 0.55 -- except
+    // a finished row keeps full opacity regardless, since waveOf() also
+    // answers -1 once a node leaves the live queue and that must not read
+    // as "far future" for a done/failed/cancelled row.
+    readonly property real waveOpacity: {
+      var st = qrow.node ? qrow.node.state : ""
+      if (st === "done" || st === "failed" || st === "cancelled") return 1
+      if (qrow.wave === 0) return 1
+      if (qrow.wave === 1) return 0.7
+      return 0.55
+    }
 
     property real flashOpacity: 0
     SequentialAnimation {
@@ -617,7 +641,7 @@ Item {
         width: qrow.trackLeft; height: parent.height
         leftPadding: Style.spacing.md; rightPadding: Style.spacing.sm
         verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
-        opacity: qrow.wave === 1 ? 0.7 : 1
+        opacity: qrow.waveOpacity
         // Lock glyph before the title (§17.1/§17.6): unlabelled == protected,
         // so absent ip_class shows locked too -- the graph fails closed.
         text: (qrow.ipOpen ? "🔓 " : "🔒 ") + (qrow.node ? (qrow.node.title || qrow.node.node || "") : "")
@@ -625,7 +649,7 @@ Item {
       }
       Item {
         width: qrow.trackWidth; height: parent.height
-        opacity: qrow.wave === 1 ? 0.7 : 1
+        opacity: qrow.waveOpacity
         Rectangle {
           id: bar
           y: (parent.height - height) / 2
@@ -655,7 +679,10 @@ Item {
           }
           Rectangle {
             id: pulseCap
-            visible: !!(qrow.node && qrow.node.state === "running")
+            // Gated on panel visibility too (matches wavePulseBorder below):
+            // an Infinite SequentialAnimation must not keep ticking, burning
+            // CPU, while the Plan tab isn't even the one on screen.
+            visible: !!(qrow.node && qrow.node.state === "running") && dash.opened && dash.tab === "plan"
             width: Style.space(4); height: parent.height
             anchors.right: parent.right
             radius: width / 2
@@ -668,10 +695,12 @@ Item {
             }
           }
           // Wave-0 outline pulse (§17.5): a subtle border-opacity breathe,
-          // ~1.2s period, only while the harness snapshot is live and fresh.
+          // ~1.2s period, only while the harness snapshot is live and fresh
+          // and the Plan tab is actually the visible panel -- otherwise this
+          // Infinite SequentialAnimation runs forever off-screen for nothing.
           Rectangle {
             id: wavePulseBorder
-            visible: qrow.wave === 0 && qrow.wavesLive
+            visible: qrow.wave === 0 && qrow.wavesLive && dash.opened && dash.tab === "plan"
             anchors.fill: parent
             anchors.margins: -2
             radius: parent.radius + 2
@@ -692,7 +721,7 @@ Item {
         width: Style.space(90); height: parent.height
         leftPadding: Style.spacing.md
         verticalAlignment: Text.AlignVCenter
-        opacity: qrow.wave === 1 ? 0.7 : 1
+        opacity: qrow.waveOpacity
         text: qrow.node ? (String(qrow.node.state || "") + (qrow.wave === 1 ? "  ·  next" : "")) : ""
         color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
       }
@@ -845,6 +874,12 @@ Item {
         Text {
           visible: chip.members.length > 0
           text: "· " + tab.costClassTag(chip.members.length ? chip.members[0].cost_class : "")
+          color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+        }
+        Text {
+          readonly property string orchTag: tab.sessionOrchestrationTag(chip.members)
+          visible: orchTag !== ""
+          text: "· " + orchTag
           color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
         }
       }

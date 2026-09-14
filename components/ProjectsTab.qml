@@ -28,6 +28,7 @@ Item {
   property var overview: null
   property bool overviewLoaded: false
   readonly property var harnessProjects: overview && overview.projects ? overview.projects : []
+  readonly property var harnessSessions: overview && overview.sessions ? overview.sessions : []
   readonly property var queueAll: overview && overview.queue ? overview.queue : []
   readonly property var kanbanProjects: dash.status && dash.status.projects ? dash.status.projects : []
 
@@ -73,10 +74,26 @@ Item {
 
   // Short orchestrator label for a harness project row (§17.5-17.7): a named
   // session, or a router hop. "" when the project payload has no
-  // `orchestrator` yet (older harness).
-  function shortOrchestrator(o) {
+  // `orchestrator` yet (older harness). A session id is resolved to that
+  // session's label; matched by project + id (overview.sessions is a
+  // cross-project aggregate, so a profile like "rix-1" can register the
+  // same session id in more than one project -- id alone can resolve to the
+  // wrong project's session). A session whose row omits `project`
+  // (older harness) still matches on id alone. Falls back to the raw id
+  // when no session matches (stale/gone by the time this renders).
+  function shortOrchestrator(o, pid) {
     if (!o) return ""
-    if (o.kind === "session") return "session " + (o.id || "?")
+    if (o.kind === "session") {
+      var sid = String(o.id || "")
+      var s = null
+      for (var i = 0; i < tab.harnessSessions.length; i++) {
+        var cand = tab.harnessSessions[i]
+        if (String(cand.id) !== sid) continue
+        if (cand.project !== undefined && String(cand.project) !== String(pid)) continue
+        s = cand; break
+      }
+      return "session " + (s ? (s.label || s.id) : sid)
+    }
     if (o.kind === "router") return "router→" + (o.hop || o.model || "?")
     return ""
   }
@@ -133,7 +150,7 @@ Item {
         kanbanPhase: kb ? (kb.phase || "") : "",
         openBlockers: 0,
         agent: kb ? kb.agent : "",
-        orchestratorShort: tab.shortOrchestrator(hp.orchestrator),
+        orchestratorShort: tab.shortOrchestrator(hp.orchestrator, hp.id),
         concurrencyShort: tab.concurrencyText(hp.concurrency)
       })
     }

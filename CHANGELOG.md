@@ -21,10 +21,10 @@ when an update is available. Keep one short line per bullet.
   them exactly like a work packet but asks for exactly one JSON patch in reply, and skips
   (defensively — the harness only ever assigns these to an `orchestrator`-tier session) one
   for a profile/session that isn't registered orchestrator. `harness_dispatch_reap` extracts
-  the LAST balanced top-level JSON object from the delegate's reply
-  (`harness_extract_last_json`, string- and nesting-aware, immune to a broken/unterminated
-  object earlier in the text) and calls `harness receipt --command SPLIT|PM|COMPOSE
-  --patch-file F --status done`, or `--status failed --summary "…"` when no JSON parsed.
+  the LAST top-level JSON object from the delegate's reply (`harness_extract_last_json` —
+  see the Wave L1 bullet below for how it actually finds it) and calls `harness receipt
+  --command SPLIT|PM|COMPOSE --patch-file F --status done`, or `--status failed --summary
+  "…"` when no JSON parsed.
 - **`harness_status_json`**: gains `roles` (every registered Rix session's
   `{session, project, role, tier, model, vendor, ip_safe}` from `overview.json`) and
   `orchestrator` (`overview.json`'s `projects[].orchestrator`, keyed by project id); fixes
@@ -37,6 +37,53 @@ when an update is available. Keep one short line per bullet.
 - **`docs/HARNESS.md`**: new "Roles and model policy" section (the two axes, the three
   default chains, how to override per profile/project/node, IP classes, the orchestration
   packet flow, `harness brief`).
+- **Wave L1 fixes (adversarial review)** — BLOCKER: a real-shaped inbox row (`node` carrying the
+  `.SPLIT`/`.PM`/`.COMPOSE` suffix, no `command` field of its own) now dispatches and receipts
+  against the bare node id; `harness receipt --node P0.SPLIT` ("unknown node", never recorded,
+  re-dispatched forever) can no longer happen.
+- A throttled orchestration delegate now reaps to `--status throttled --retry-after-sec`, never
+  `--status failed`; if the harness CLI refuses that receipt, the launcher un-claims the packet
+  and backs the session off (a new per-session backoff file, honoured by the dispatch loop) so it
+  isn't immediately re-dispatched onto the same 429'd backend.
+- `cost --json`'s real shape — `pending_approvals` (list or map) and `pending_approval` — is read
+  correctly everywhere this file reads pending requests (it used to read only a legacy `pending`
+  key, silently wiping the requested-budget dedup and breaking `harness approve` without
+  `--request`).
+- `harness decline` now calls the harness CLI's own `decline` subcommand first, falling back to
+  the `POST /cost/decline` endpoint only when the CLI says the subcommand doesn't exist yet
+  (argparse's "invalid choice") — a genuine refusal from the CLI is surfaced as-is, never papered
+  over with a curl POST.
+- The dispatch cost gate now subtracts `reserved_usd` from `remaining_usd` (money already reserved
+  for an in-flight call isn't free to spend twice) and refuses — without ever POSTing
+  `cost/request`, since a cap can't be approved away — a node that would push a project's metered
+  spend over a positive `daily_cap_usd`.
+- `harness role`/`harness_set_role` now send `--role`/`--tier` PAIRED on every `harness session
+  set` (a new `harness_session_sync` helper, also used by a new best-effort `harness_resync_profile`
+  called from `harness register` and wherever a profile's backend changes): sending `--role` alone
+  used to get refused by the harness's `validate_role` whenever a session's previously-recorded
+  tier disagreed, silently no-op'ing the role change. The orchestration dispatch guard now trusts
+  only the harness's own session record (`tier`/`role` from `overview.json`), never a profile's
+  local (possibly stale) `harness_role` field.
+- `harness_extract_last_json` is rewritten on python3's own JSON tokenizer (falling back to the
+  original bracket-counting bash algorithm only when python3 is missing): immune to a stray
+  unmatched brace in prose later closed by an unrelated one (used to swallow the real object) and
+  to an odd number of stray quote characters before it (used to desync manual in-string tracking);
+  a reply that is only a top-level JSON array is now rejected outright instead of silently
+  returning one of its elements.
+- Minor: a failed orchestration receipt now says whether the delegate itself died (`"delegate
+  exited …"`) or just replied with no JSON, instead of one message for both; dispatch resolves an
+  explicit-model-less profile's model the same way everywhere (`harness_profile_model`);
+  `harness_dispatch_heartbeat` now refreshes a still-claimed packet's mtime every sweep so the
+  harness's claim-timeout safety net can't reclaim a delegate running longer than that; a project
+  entry with `orchestrator` set but no `id` no longer corrupts `harness_status_json`'s orchestrator
+  map; a dispatched delegate's environment now carries `$HARNESS_SESSION`/`$HARNESS_PROJECT`, and
+  its packet trailer names `harness brief` or `harness show` as the first command to run.
+- New `omarchy-agent-launcher harness assign PROJECT NODE [--session SID]` (PlanTab's "Assign to
+  Rix" and the Rix skill both already called this; the CLI had no case for it): `--session`
+  defaults to the first idle `rix` session on the project when omitted.
+- `skills/rix/SKILL.md`: fixed `harness ack`/`harness fail` to their real signatures (`--project
+  ID --node N [--evidence E]` / `--project ID --node N --reason "…"`), and listed `harness assign`
+  under Rix's own CLI.
 
 ## 0.13.0 — Rix × session-harness (2026-09-13)
 

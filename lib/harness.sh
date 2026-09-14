@@ -285,6 +285,13 @@ harness_register_rix() {
       fi
     done
   done
+  # Best-effort resync (#7): if a session for this profile was already
+  # registered (a `session add` above failed because it exists, or the
+  # harness treated it as a no-op update), make sure its model/vendor/
+  # cost-class still reflect the profile's CURRENT backend -- register is the
+  # natural point to catch a profile whose backend changed since it first
+  # became a harness worker.
+  (( OAL_DRY_RUN )) || harness_resync_profile "$profile" || true
   return "$rc"
 }
 
@@ -299,17 +306,74 @@ harness_profile_for_label() {
   return 1
 }
 
+# harness_session_sync PROFILE PROJECT SESSION [ROLE] -- one `harness session
+# set` call carrying --model/--vendor/--cost-class (always) and, when ROLE is
+# given, --role ROLE --tier ROLE TOGETHER (never --role alone: the harness's
+# `validate_role` refuses a session whose (possibly stale, previously
+# recorded) tier ends up below or above the role it's being set to unless the
+# tier is given explicitly in the same call -- #7/#8 in the adversarial
+# review). Shared by `harness_set_role`, `harness_resync_profile`, and
+# `harness_register_rix` (resyncing a session that already exists).
+harness_session_sync() {
+  local profile=$1 proj=$2 sid=$3 role=${4:-}
+  local bin; bin=$(harness_bin 2>/dev/null) || return 1
+  local model vendor class
+  model=$(harness_profile_model "$profile"); vendor=$(harness_profile_vendor "$profile")
+  class=$(harness_cost_class "$profile" 2>/dev/null)
+  if (( OAL_DRY_RUN )); then
+    say "[dry-run] would: $bin session set --project $proj --session $sid${role:+ --role $role --tier $role} --model $model --vendor $vendor --cost-class $class"
+    return 0
+  fi
+  local -a args=(session set --project "$proj" --session "$sid")
+  [[ -n $role ]] && args+=(--role "$role" --tier "$role")
+  args+=(--model "$model" --vendor "$vendor")
+  [[ -n $class ]] && args+=(--cost-class "$class")
+  local sess_err
+  if ! sess_err=$("$bin" "${args[@]}" 2>&1 >/dev/null); then
+    warn "harness session set failed for $profile (session $sid, project $proj): ${sess_err:-no output}"
+    return 1
+  fi
+  return 0
+}
+
+# harness_resync_profile PROFILE -- best-effort: for every already-registered
+# live harness session resolving back to PROFILE, re-push its model/vendor/
+# cost-class (no role change) via `harness_session_sync`. Call this wherever a
+# profile's backend/provider/model changes after it may already be a
+# registered harness worker, so the harness's own record of what it's talking
+# to never goes stale (#7 in the adversarial review). Never fails the caller.
+harness_resync_profile() {
+  local profile=$1
+  profile_exists "$profile" || return 0
+  declare -F harness_bin >/dev/null || return 0
+  local bin; bin=$(harness_bin 2>/dev/null) || return 0
+  local sess
+  while IFS= read -r sess; do
+    [[ -n $sess ]] || continue
+    local proj sid label resolved
+    proj=$(jq -r '.project // empty' <<<"$sess"); sid=$(jq -r '.id // empty' <<<"$sess"); label=$(jq -r '.label // empty' <<<"$sess")
+    [[ -n $proj && -n $sid && -n $label ]] || continue
+    resolved=$(harness_profile_for_label "$label") || continue
+    [[ $resolved == "$profile" ]] || continue
+    harness_session_sync "$profile" "$proj" "$sid" || true
+  done < <(jq -c '.sessions[]? | select(.worker == "rix")' <<<"$(harness_overview_json)")
+  return 0
+}
+
 # harness_set_role PROFILE ROLE -- sets the profile's `harness_role` field
 # and, for every already-registered harness session whose label resolves
 # back to this profile (overview.json, worker=rix), runs `harness session
-# set --role` so a live registration picks the new role up immediately
-# (rather than only the next `harness register`).
+# set --role ROLE --tier ROLE` (paired, see harness_session_sync) so a live
+# registration picks the new role up immediately (rather than only the next
+# `harness register`). The profile field is persisted only once every live
+# session accepted the new role (or there were none to update) -- on a
+# partial failure the profile keeps its old `harness_role` rather than
+# claiming a role the harness never actually applied to a live session.
 harness_set_role() {
   local profile=$1 role=$2
   profile_exists "$profile" || fail "harness role: no saved agent named '$profile'"
   case "$role" in orchestrator|reasoning|coding|local) ;; *) fail "harness role: must be orchestrator, reasoning, coding, or local" ;; esac
-  profile_set "$profile" harness_role "$(jq -Rn --arg v "$role" '$v')"
-  local bin; bin=$(harness_bin 2>/dev/null) || { say "set $profile's harness role to $role (no harness CLI found to update live sessions)"; return 0; }
+  local bin; bin=$(harness_bin 2>/dev/null) || { profile_set "$profile" harness_role "$(jq -Rn --arg v "$role" '$v')"; say "set $profile's harness role to $role (no harness CLI found to update live sessions)"; return 0; }
   local rc=0 sess
   while IFS= read -r sess; do
     [[ -n $sess ]] || continue
@@ -318,17 +382,14 @@ harness_set_role() {
     [[ -n $proj && -n $sid && -n $label ]] || continue
     resolved=$(harness_profile_for_label "$label") || continue
     [[ $resolved == "$profile" ]] || continue
-    if (( OAL_DRY_RUN )); then
-      say "[dry-run] would: $bin session set --project $proj --session $sid --role $role"
-      continue
-    fi
-    local sess_err
-    if ! sess_err=$("$bin" session set --project "$proj" --session "$sid" --role "$role" 2>&1 >/dev/null); then
-      warn "harness session set --role failed for $label (project $proj): ${sess_err:-no output}"
-      rc=1
-    fi
+    harness_session_sync "$profile" "$proj" "$sid" "$role" || rc=1
   done < <(jq -c '.sessions[]? | select(.worker == "rix")' <<<"$(harness_overview_json)")
-  say "set $profile's harness role to $role"
+  if (( rc == 0 )); then
+    profile_set "$profile" harness_role "$(jq -Rn --arg v "$role" '$v')"
+    say "set $profile's harness role to $role"
+  else
+    warn "harness role: not every live session for $profile accepted role $role; profile's harness_role left unchanged"
+  fi
   return "$rc"
 }
 
@@ -452,7 +513,13 @@ harness_prune_requested_stale() {
   while IFS=: read -r proj node; do
     [[ -n $proj && -n $node ]] || continue
     if [[ -z ${pending_cache[$proj]+x} ]]; then
-      pending_cache[$proj]=,$("$bin" cost --project "$proj" --json 2>/dev/null | jq -r '[.pending[]?.node // empty] | join(",")' 2>/dev/null),
+      # #3: the real harness's `cost --json` carries the open-requests list
+      # under `pending_approvals` (an object keyed by request id, or -- some
+      # builds -- already a list) and a single `pending_approval`, never the
+      # made-up `pending` this used to read exclusively; handle every shape
+      # (map, list, or the legacy `pending` key) rather than betting on one.
+      pending_cache[$proj]=,$("$bin" cost --project "$proj" --json 2>/dev/null | jq -r \
+        '(((.pending_approvals // {}) | if type=="object" then [.[]] else . end) + (if .pending_approval then [.pending_approval] else [] end) + (.pending // [])) | map(.node // empty) | join(",")' 2>/dev/null),
     fi
     [[ ${pending_cache[$proj]} == *",$node,"* ]] && printf '%s:%s\n' "$proj" "$node" >>"$tmp"
   done <"$reqf"
@@ -460,12 +527,14 @@ harness_prune_requested_stale() {
 }
 
 # The oldest open request on PROJECT (optionally matching USD) via
-# `harness cost --project ID --json`'s "pending" list -- the dashboard's
-# Approve button does not know the request id either.
+# `harness cost --project ID --json`'s `pending_approvals` (object or list)
+# plus `pending_approval` and the legacy `pending` -- the dashboard's Approve
+# button does not know the request id either.
 harness_resolve_request_id() { # PROJECT [USD]
   local project=$1 usd=${2:-} bin
   bin=$(harness_bin 2>/dev/null) || { printf ''; return 0; }
-  local pending; pending=$("$bin" cost --project "$project" --json 2>/dev/null | jq -c '.pending // []' 2>/dev/null)
+  local pending; pending=$("$bin" cost --project "$project" --json 2>/dev/null | jq -c \
+    '((.pending_approvals // {}) | if type=="object" then [.[]] else . end) + (if .pending_approval then [.pending_approval] else [] end) + (.pending // [])' 2>/dev/null)
   [[ -n $pending ]] || pending='[]'
   if [[ -n $usd ]]; then
     jq -r --argjson usd "$usd" '[.[] | select((.estimate_usd // .usd // -1) == $usd)] | sort_by(.at // .requested_at // "") | .[0].id // empty' <<<"$pending" 2>/dev/null
@@ -503,18 +572,42 @@ harness_approve() {
 }
 
 # harness_decline PROJECT [REQUEST_ID] -- same human-only rule and CLI-first,
-# curl-fallback shape as harness_approve.
+# curl-fallback shape as harness_approve. `harness decline` is landing on the
+# harness CLI (mirroring `approve`); until it does, the CLI call fails with
+# argparse's "invalid choice" (the subcommand doesn't exist yet) -- that
+# specific shape of failure falls back to the curl endpoint (unchanged since
+# before `decline` existed); any OTHER CLI failure (a real refusal: no such
+# request, etc.) is surfaced as-is, never silently retried over curl.
 harness_decline() {
   local project=$1 request=${2:-}
   [[ -n $project ]] || fail "harness decline: needs PROJECT"
   [[ -z ${OAL_AGENT:-} ]] || fail "harness decline: agents cannot decline spending; ask the user to run this"
   [[ -n $request ]] || request=$(harness_resolve_request_id "$project")
   local bin; bin=$(harness_bin 2>/dev/null) || bin=""
-  local rc=0 out=""
+  local rc=0 out="" use_curl=0
   if [[ -n $bin ]]; then
     if (( OAL_DRY_RUN )); then say "[dry-run] would: $bin decline --project $project --request ${request:-<none>}"; return 0; fi
-    out=$("$bin" decline --project "$project" --request "${request:-}") || rc=$?
+    mkdir -p "$HARNESS_STATE_DIR"
+    local errf; errf=$(mktemp "$HARNESS_STATE_DIR/.decline-err.XXXXXX" 2>/dev/null) || errf=""
+    if out=$("$bin" decline --project "$project" --request "${request:-}" 2>"${errf:-/dev/null}"); then
+      :   # CLI decline exists and succeeded
+    else
+      rc=$?
+      local cli_err=""; [[ -n $errf ]] && cli_err=$(cat "$errf" 2>/dev/null)
+      [[ -n $errf ]] && rm -f "$errf"
+      if grep -qiE 'invalid choice|unrecognized arguments|usage: ' <<<"$cli_err"; then
+        use_curl=1
+      else
+        harness_prune_requested_project "$project"
+        printf '%s' "${cli_err:-$out}"
+        return "$rc"
+      fi
+    fi
   else
+    use_curl=1
+  fi
+  if (( use_curl )); then
+    rc=0
     local body; body=$(jq -nc --arg rid "${request:-}" '{request_id:$rid, by:"human"}')
     if (( OAL_DRY_RUN )); then say "[dry-run] would POST $(harness_url)/api/project/$project/cost/decline $body"; return 0; fi
     out=$(curl -sS -m 5 -H 'X-Harness: 1' -H 'X-Harness-Approver: human' -H 'Content-Type: application/json' \
@@ -525,21 +618,82 @@ harness_decline() {
   return "$rc"
 }
 
-# harness_extract_last_json FILE -> the LAST balanced top-level JSON object
-# found in FILE, printed to stdout (exit 1, nothing printed, when none
-# parses). A single forward scan tracks string state (with backslash-escape,
-# so a brace inside a quoted string is never mistaken for structure); a `{`
-# seen while not already inside a candidate opens one, and depth-tracking
-# (still string-aware) finds its matching top-level `}` -- nested braces
-# inside a successfully-closed candidate are never separately tried, so
-# `{"action":"SPLIT","children":[{"id":"P0.1"}]}` yields the whole object,
-# not the inner `{"id":"P0.1"}`. When a candidate never closes (or fails to
-# parse as a JSON object) the scan resumes one character past its opening
-# `{` rather than skipping its whole span, so a broken/unterminated object
-# earlier in the text cannot swallow a good one that follows it. Used to
-# pull an orchestration delegate's patch out of a reply that may carry prose
-# before and after the one JSON object it was asked for.
+# harness_extract_last_json FILE -> the LAST top-level JSON OBJECT found in
+# FILE, printed to stdout (exit 1, nothing printed, when none parses). Prefers
+# python3's real JSON tokenizer (json.JSONDecoder.raw_decode) over hand-rolled
+# bracket counting: scanning left to right, every `{`/`[` position is tried as
+# a raw_decode start; a successful parse is recorded as a TOP-LEVEL candidate
+# and the scan resumes PAST its end (so nothing nested inside it -- e.g. a
+# `children` array's own objects -- is ever considered separately); a failed
+# attempt (a stray `{` in prose, a `function() {`) advances by one character
+# and is never "closed" by some unrelated `}` later in the text the way naive
+# bracket-pair matching could be tricked into doing (bug (a) in the adversarial
+# review: a stray brace swallowing the real object). Real JSON string parsing
+# also means prose with an odd number of quote characters before the object
+# (bug (b)) can never desync a hand-rolled in-string flag -- there isn't one.
+# The LAST candidate (scanning the collected list from the end) that is a
+# JSON OBJECT wins; a candidate that is a JSON ARRAY is never unwrapped into
+# one of its elements -- it is skipped (and a reply that is nothing but a
+# top-level array fails outright, printing nothing, rather than returning a
+# guessed element of it). Falls back to a pure-bash approximation (the
+# original bracket-counting algorithm, with its known limitations) only when
+# python3 is not on PATH. Used to pull an orchestration delegate's patch out
+# of a reply that may carry prose before and after the one JSON object asked for.
 harness_extract_last_json() {
+  local file=$1
+  [[ -f $file ]] || return 1
+  if have python3; then
+    python3 - "$file" <<'PYEOF'
+import json
+import sys
+
+
+def main() -> int:
+    path = sys.argv[1]
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return 1
+    dec = json.JSONDecoder()
+    n = len(text)
+    candidates = []  # (end, value) -- start is never needed again once found
+    i = 0
+    while i < n:
+        ch = text[i]
+        if ch != "{" and ch != "[":
+            i += 1
+            continue
+        try:
+            value, end = dec.raw_decode(text, i)
+        except ValueError:
+            i += 1  # not valid JSON starting here (a stray brace, prose) -- move on
+            continue
+        candidates.append((end, value))
+        i = end  # skip past this top-level span: nested { }/[ ] inside it are
+        #          never re-tried as separate (falsely "top-level") candidates
+    for _end, value in reversed(candidates):
+        if isinstance(value, dict):
+            sys.stdout.write(json.dumps(value))
+            return 0
+    return 1  # only arrays found (or nothing) -- never guess an array's element
+
+
+sys.exit(main())
+PYEOF
+    return $?
+  fi
+  _harness_extract_last_json_bash_fallback "$file"
+}
+
+# Pure-bash fallback for harness_extract_last_json when python3 is missing.
+# Known limitations vs. the python path (kept only as a last resort): naive
+# LIFO bracket pairing can occasionally let a stray unmatched `{` in prose,
+# later closed by an unrelated `}`, swallow a real object that sits between
+# them (bug (a) in the adversarial review), and manual backslash-run counting
+# for string state can desync on an odd number of stray quote characters
+# before the real object (bug (b)) -- both are why python3 is preferred.
+_harness_extract_last_json_bash_fallback() {
   local file=$1
   [[ -f $file ]] || return 1
   # LC_ALL=C: bash indexes ${text:i:1} by CHARACTER under a multibyte locale
@@ -548,17 +702,6 @@ harness_extract_last_json() {
   # under a single-byte (C) locale in the first place.
   local LC_ALL=C
   local text; text=$(cat "$file" 2>/dev/null)
-  # Pass 1 (LIFO bracket matching, exactly like matching parentheses --
-  # string-aware, backslash-escaped quotes, so a brace inside a JSON string
-  # value is never mistaken for structure). A stray/broken `{` (prose, a
-  # code snippet's `function() {`) just sits on the stack forever unmatched;
-  # it can never block a LATER, properly balanced object from matching
-  # ITSELF via LIFO -- unlike a "restart the whole scan after every failed
-  # candidate" approach, which is O(n^2) on such input. `grep -abo` finds
-  # every `{`/`}`/`"` byte offset in one compiled-code pass, so the bash
-  # loop below visits only STRUCTURAL characters (the ones that matter) and
-  # not every byte of a run log that is mostly prose/code -- character-by-
-  # character bash arithmetic on tens of KB is itself slow enough to matter.
   local -a stack=()
   local pairs="" in_str=0 pos ch
   while IFS=: read -r pos ch; do
@@ -582,11 +725,6 @@ harness_extract_last_json() {
     fi
   done < <(grep -abo '[{}"]' <<<"$text")
   [[ -n $pairs ]] || return 1
-  # Pass 2: sort matched pairs by start position, then keep only the
-  # TOP-LEVEL ones (not nested inside another matched pair). Properly
-  # matched pairs never partially overlap, so "does this pair start after
-  # the previous top-level pair's end" finds every one of them in one O(k)
-  # sweep (k = number of matched pairs, generally tiny).
   local -a top_ps=() top_pe=()
   local cursor=-1 ps pe
   while IFS=$'\t' read -r ps pe; do
@@ -594,9 +732,6 @@ harness_extract_last_json() {
     (( ps > cursor )) || continue
     top_ps+=("$ps"); top_pe+=("$pe"); cursor=$pe
   done < <(sort -t $'\t' -k1,1n <<<"$pairs")
-  # Pass 3: the LAST top-level candidate that actually parses as a JSON
-  # object wins -- checked newest-first, so the expected case (the reply
-  # ends with the one requested patch) costs exactly one jq call.
   local k
   for (( k = ${#top_ps[@]} - 1; k >= 0; k-- )); do
     local candidate=${text:top_ps[k]:top_pe[k]-top_ps[k]+1}
@@ -606,6 +741,33 @@ harness_extract_last_json() {
     fi
   done
   return 1
+}
+
+# harness_record_backoff SESSION RETRY_AFTER_SEC -- belt-and-braces for #2: a
+# throttled orchestration receipt the harness CLI refused (an older build
+# with no `--status throttled`/`--retry-after-sec` for command receipts, say)
+# must not still cause the very next sweep to re-dispatch onto the same
+# 429'd session. Remembered under the harness state dir, honoured by
+# harness_backoff_active (called from harness_dispatch_packet); self-expiring.
+harness_record_backoff() {
+  local sid=$1 retry_after=${2:-300}
+  [[ -n $sid ]] || return 0
+  [[ $retry_after =~ ^[0-9]+$ ]] || retry_after=300
+  mkdir -p "$HARNESS_STATE_DIR"
+  printf '%s\n' "$(( $(date +%s) + retry_after ))" >"$HARNESS_STATE_DIR/backoff.$sid"
+}
+
+# 0 (true) while a harness_record_backoff for SESSION has not yet expired;
+# self-clears (and returns 1) once it has, so a stale file never lingers.
+harness_backoff_active() {
+  local sid=$1 f
+  [[ -n $sid ]] || return 1
+  f="$HARNESS_STATE_DIR/backoff.$sid"
+  [[ -f $f ]] || return 1
+  local until; until=$(cat "$f" 2>/dev/null)
+  [[ $until =~ ^[0-9]+$ ]] || { rm -f "$f"; return 1; }
+  if (( $(date +%s) >= until )); then rm -f "$f"; return 1; fi
+  return 0
 }
 
 # --------------------------------------------------------------- dispatch ----
@@ -625,18 +787,32 @@ harness_extract_last_json() {
 # is not registered as orchestrator.
 harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> [<session-role>]
   local bin=$1 proj=$2 sid=$3 profile=$4 pkt=$5 session_role=${6:-}
+  harness_backoff_active "$sid" && return 0   # #2 belt-and-braces: skip a session we recently un-claimed for
   local node path
   node=$(jq -r '.node // .id // empty' <<<"$pkt")
   path=$(jq -r '.path // empty' <<<"$pkt")
   [[ -n $node && -n $path ]] || return 0
   [[ $path == *.claimed ]] && return 0
   [[ -f $path ]] || return 0
-  local ref="harness:$proj:$node"
   local command; command=$(jq -r '.command // empty' <<<"$pkt")
   if [[ -z $command && $path =~ \.(SPLIT|PM|COMPOSE)\.md$ ]]; then command=${BASH_REMATCH[1]}; fi
+  # #21 BLOCKER: the harness may hand back the inbox row's `node` WITH the
+  # orchestration command suffix (`P0.SPLIT`, matching the packet filename
+  # `P0.SPLIT.md`) and no `command` field of its own -- `harness receipt`
+  # only knows the bare node id (`P0`); sending it the suffixed one is
+  # "unknown node", the receipt is never written, and the packet gets
+  # re-dispatched every claim_timeout forever. Strip the suffix once the
+  # command is known (from either source above) -- a no-op when the row
+  # already carries the bare node id.
+  [[ -n $command && $node == *".$command" ]] && node=${node%.$command}
+  local ref="harness:$proj:$node"
   if [[ -n $command ]]; then
-    local prof_role; prof_role=$(profile_get "$profile" harness_role 2>/dev/null)
-    if [[ $prof_role != orchestrator && $session_role != orchestrator ]]; then
+    # #7/#8: the profile's own `harness_role` field is never trusted for this
+    # gate -- only the harness's own session record (overview.json's `tier`,
+    # falling back to `role`) says what a session is actually eligible for
+    # right now; the profile field can be stale or simply wrong relative to
+    # what `harness session set` last accepted.
+    if [[ $session_role != orchestrator ]]; then
       # Dispatch sweeps every 3s (harness_dispatch_loop); without a dedup key an
       # unclaimed orchestration packet would re-emit this note every sweep for as
       # long as it sits there. Same one-line-per-key shape as requested.txt.
@@ -644,7 +820,7 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
       local skipf="$HARNESS_STATE_DIR/orch_skipped.txt" skipkey="$proj:$node"
       touch "$skipf"
       if ! grep -qxF "$skipkey" "$skipf"; then
-        event_emit "$profile" note "harness: $node is an orchestration packet ($command) but $profile is not registered as orchestrator; skipping" \
+        event_emit "$profile" note "harness: $node is an orchestration packet ($command) but $profile's harness session is not registered as orchestrator; skipping" \
           --source harness --level warn --ref "$ref:skipped"
         printf '%s\n' "$skipkey" >>"$skipf"
       fi
@@ -653,7 +829,7 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
   fi
   local backend model vendor
   backend=$(profile_get "$profile" backend 2>/dev/null); [[ -n $backend ]] || backend=$(profile_get "$profile" provider 2>/dev/null)
-  model=$(profile_get "$profile" model 2>/dev/null)
+  model=$(harness_profile_model "$profile")   # #12: same fallback (profile model, else its backend's) used everywhere else
   vendor=$(harness_profile_vendor "$profile")
   if [[ -z $backend ]]; then
     event_emit "$profile" note "harness: profile $profile has no backend; cannot dispatch $node" --source harness --level warn --ref "$ref:failed"
@@ -670,17 +846,36 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
       event_emit "$profile" note "harness: no known price for $model; refusing $node (metered, unknown cost)" --source harness --level warn --ref "$ref:failed"
       return 0
     fi
-    local remaining
-    remaining=$("$bin" cost --project "$proj" --json 2>/dev/null | jq -r '.remaining_usd // 0' 2>/dev/null)
-    [[ $remaining =~ ^-?[0-9.]+$ ]] || remaining=0
-    if awk -v r="$remaining" -v e="$estimate" 'BEGIN{exit !(r < e)}'; then
+    # #5: `cost --json`'s remaining_usd alone overstates what is actually free
+    # to spend -- money already reserved for an in-flight call (reserved_usd)
+    # is not available twice, and a positive daily_cap_usd is a hard ceiling
+    # no approval can lift (unlike a plain shortfall).
+    local cost_view; cost_view=$("$bin" cost --project "$proj" --json 2>/dev/null)
+    local remaining reserved cap dspent
+    remaining=$(jq -r '.remaining_usd // 0' <<<"$cost_view" 2>/dev/null); [[ $remaining =~ ^-?[0-9.]+$ ]] || remaining=0
+    reserved=$(jq -r '.reserved_usd // 0' <<<"$cost_view" 2>/dev/null); [[ $reserved =~ ^-?[0-9.]+$ ]] || reserved=0
+    cap=$(jq -r '.daily_cap_usd // 0' <<<"$cost_view" 2>/dev/null); [[ $cap =~ ^-?[0-9.]+$ ]] || cap=0
+    dspent=$(jq -r '.daily_spent_usd // 0' <<<"$cost_view" 2>/dev/null); [[ $dspent =~ ^-?[0-9.]+$ ]] || dspent=0
+    if awk -v c="$cap" -v s="$dspent" -v e="$estimate" 'BEGIN{exit !(c > 0 && (s + e) > c)}'; then
+      mkdir -p "$HARNESS_STATE_DIR"
+      local capf="$HARNESS_STATE_DIR/orch_skipped.txt" capkey="$proj:$node:dailycap"
+      touch "$capf"
+      if ! grep -qxF "$capkey" "$capf"; then
+        event_emit "$profile" note "harness: $node would push project $proj over its daily cap (\$$cap; already spent \$$dspent today) -- refusing, not requesting (a cap can't be approved away)" \
+          --source harness --level warn --ref "$ref:dailycap"
+        printf '%s\n' "$capkey" >>"$capf"
+      fi
+      return 0
+    fi
+    local avail; avail=$(awk -v r="$remaining" -v rv="$reserved" 'BEGIN{printf "%.6f", r - rv}')
+    if awk -v a="$avail" -v e="$estimate" 'BEGIN{exit !(a < e)}'; then
       mkdir -p "$HARNESS_STATE_DIR"
       local reqf="$HARNESS_STATE_DIR/requested.txt" key="$proj:$node"
       touch "$reqf"
       if ! grep -qxF "$key" "$reqf"; then
         harness_cost_request "$proj" "$node" "$model" "$backend" "$estimate" "harness dispatch: $node needs \$$estimate" "$profile"
         printf '%s\n' "$key" >>"$reqf"
-        event_emit "$profile" note "harness: requested \$$estimate for $node (project $proj, \$$remaining remaining)" --source harness --ref "$ref:requested"
+        event_emit "$profile" note "harness: requested \$$estimate for $node (project $proj, \$$avail remaining after reservations)" --source harness --ref "$ref:requested"
       fi
       return 0
     fi
@@ -696,10 +891,14 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
   local name="hns-$node"
   local content trailer
   content=$(cat "$claimed" 2>/dev/null)
+  # #27: the packet trailer names the first command the (stateless-between-
+  # packets) delegate must run so it can orient itself before doing anything
+  # else -- `harness brief` for an orchestration packet, `harness show` for a
+  # plain work packet (see skills/rix/SKILL.md "pick up any task fresh").
   if [[ -n $command ]]; then
-    trailer=$'\n\nDo not write the outbox receipt file yourself; reply with exactly one JSON object (the patch) and nothing else after it -- the launcher writes the receipt.'
+    trailer=$'\n\nFirst run: harness brief --project '"$proj"' --session '"$sid"$'\nDo not write the outbox receipt file yourself; reply with exactly one JSON object (the patch) and nothing else after it -- the launcher writes the receipt.'
   else
-    trailer=$'\n\nWhen finished, print the oracle command output; do not edit files outside touches.'
+    trailer=$'\n\nFirst run: harness show --project '"$proj"' --node '"$node"$'\nWhen finished, print the oracle command output; do not edit files outside touches.'
   fi
   local -a saved_opts=("${OPTS[@]}")
   OPTS=(--backend "$backend" --name "$name" --task-title "$node" --model "$model" --job-stdin)
@@ -709,7 +908,14 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
   # whose run log was written inside cmd_delegate's own second land before
   # `started`, which would misclassify a freshly-started job as already done.
   local started; started=$(date +%s)
-  printf '%s%s\n' "$content" "$trailer" | cmd_delegate >/dev/null 2>&1
+  # #26: $HARNESS_SESSION/$HARNESS_PROJECT are exported for exactly this one
+  # cmd_delegate call (temp assignment on a function call, restored after --
+  # never leaked into a later packet's dispatch in the same sweep) so a
+  # delegate that inherits them (this process's forks: the detached tmux
+  # session, then the agent itself) can run `harness brief --session
+  # "$HARNESS_SESSION"` as the skill instructs, without the launcher having
+  # to pass `--session` through cmd_delegate's own CLI surface.
+  printf '%s%s\n' "$content" "$trailer" | HARNESS_SESSION="$sid" HARNESS_PROJECT="$proj" cmd_delegate >/dev/null 2>&1
   local drc=$?
   OPTS=("${saved_opts[@]}")
   if (( drc != 0 )); then
@@ -773,6 +979,11 @@ harness_dispatch_heartbeat() {
       continue
     fi
     "$bin" heartbeat --project "$proj" --session "$sid" >/dev/null 2>&1 || true
+    # #13: the harness's own claim-timeout safety net (workers.claim_timeout_sec,
+    # 1800s) treats a `.md.claimed` younger than that as still-alive when no pid
+    # was recorded -- keep its mtime fresh every sweep so a delegate running
+    # longer than that never gets its node reclaimed out from under it.
+    [[ -n $claimed && -f $claimed ]] && touch "$claimed" 2>/dev/null
   done < <(find "$HARNESS_JOBS_DIR" -mindepth 2 -maxdepth 2 -name '*.json' -print0 2>/dev/null)
 }
 
@@ -790,7 +1001,7 @@ harness_dispatch_reap() {
   [[ -d $HARNESS_JOBS_DIR ]] || return 0
   local jf
   while IFS= read -r -d '' jf; do
-    local job proj node sid profile name backend model bin started slug command vendor
+    local job proj node sid profile name backend model bin started slug command vendor claimed
     job=$(cat "$jf" 2>/dev/null) || { rm -f "$jf"; continue; }
     slug=$(jq -r '.slug // empty' <<<"$job")
     proj=$(jq -r '.project // empty' <<<"$job"); node=$(jq -r '.node // empty' <<<"$job")
@@ -799,6 +1010,7 @@ harness_dispatch_reap() {
     model=$(jq -r '.model // empty' <<<"$job"); bin=$(jq -r '.bin // empty' <<<"$job")
     started=$(jq -r '.started_at // 0' <<<"$job")
     command=$(jq -r '.command // empty' <<<"$job"); vendor=$(jq -r '.vendor // empty' <<<"$job")
+    claimed=$(jq -r '.claimed // empty' <<<"$job")
     [[ -n $vendor ]] || vendor=$backend
     [[ -n $proj && -n $node && -n $name && -n $bin ]] || { rm -f "$jf"; continue; }
     local dir latest
@@ -852,21 +1064,23 @@ harness_dispatch_reap() {
     tok_out=$(jq -r '.output // empty' <<<"$usage_row" 2>/dev/null)
     if [[ -n $command ]]; then
       # Orchestration packet: the CLI verb is --command SPLIT|PM|COMPOSE
-      # --patch-file F --status done|failed (no throttled, no --evidence) --
-      # pull the LAST balanced JSON object out of the delegate's reply and
-      # hand the harness that file; a delegate that never produced one (or
-      # did not finish successfully) fails the receipt with a --summary
-      # instead of guessing at a patch.
-      local rstatus="failed" summary="" patch_file=""
+      # --patch-file F --status done|failed|throttled -- pull the LAST
+      # balanced JSON object out of the delegate's reply and hand the harness
+      # that file; a delegate that never produced one, was itself throttled,
+      # or did not finish successfully gets a --summary instead of a guessed
+      # patch (#11: "delegate exited …" for a dead process vs. "no JSON…" for
+      # one that finished but replied with none -- two different failures,
+      # two different messages).
+      local rstatus="failed" summary="" patch_file="" retry_after=""
       if [[ $status == done ]]; then
         local rawlog; rawlog=$(mktemp "$HARNESS_JOBS_DIR/.extract.XXXXXX")
         # The trailer told the delegate to reply with nothing after the patch, so
-        # the patch is near the end -- cap what we scan to the last 64KiB. A full
-        # unattended run log can be hundreds of KB, and harness_extract_last_json's
+        # the patch is near the end -- cap what we scan to the last 2000 lines. A
+        # full unattended run log can be hundreds of KB, and harness_extract_last_json's
         # per-candidate scan (needed to skip a broken/unterminated object) would
         # otherwise cost real seconds here, holding up the whole reap sweep (and
         # with it harness_dispatch_heartbeat, right after the 45s-stale bug 0.13 fixed).
-        printf '%s' "$out" | tail -c 65536 >"$rawlog"
+        printf '%s' "$out" | tail -n 2000 >"$rawlog"
         local json
         if json=$(harness_extract_last_json "$rawlog"); then
           mkdir -p "$HARNESS_STATE_DIR/patches/$proj"
@@ -877,16 +1091,33 @@ harness_dispatch_reap() {
           summary="no JSON object found in the delegate's reply"
         fi
         rm -f "$rawlog"
+      elif [[ $status == throttled ]]; then
+        rstatus="throttled"; retry_after=300
+        summary="delegate throttled (rate limited); will retry"
       else
-        summary="delegate did not finish successfully ($status)"
+        summary="delegate exited $status/$code: $(tail -c 200 <<<"$out" | tr '\n' ' ')"
       fi
       local -a cargs=(receipt --project "$proj" --session "$sid" --node "$node" --command "$command" --status "$rstatus" --model "$model" --vendor "$vendor")
       [[ -n $patch_file ]] && cargs+=(--patch-file "$patch_file")
       [[ -n $summary ]] && cargs+=(--summary "$summary")
+      [[ $rstatus == throttled && -n $retry_after ]] && cargs+=(--retry-after-sec "$retry_after")
       [[ -n $usd_actual && $usd_actual != null ]] && cargs+=(--usd "$usd_actual")
       [[ -n $tok_in && $tok_in != null ]] && cargs+=(--tokens-in "$tok_in")
       [[ -n $tok_out && $tok_out != null ]] && cargs+=(--tokens-out "$tok_out")
-      "$bin" "${cargs[@]}" >/dev/null 2>&1 || warn "harness receipt (command) failed for $node ($rstatus)"
+      if ! "$bin" "${cargs[@]}" >/dev/null 2>&1; then
+        warn "harness receipt (command) failed for $node ($rstatus)"
+        # #2 belt and braces: a throttled receipt the harness didn't accept
+        # (e.g. an older CLI with no --status throttled/--retry-after-sec for
+        # command receipts yet) must not still get re-dispatched onto the
+        # same 429'd backend next sweep -- un-claim the packet so the harness
+        # can re-solve or timeout-reclaim it, and record a per-session
+        # backoff so THIS dispatcher skips it until retry_at even though the
+        # harness itself never learned about the throttle.
+        if [[ $rstatus == throttled && -n $claimed && -f $claimed ]]; then
+          mv -f "$claimed" "${claimed%.claimed}" 2>/dev/null || true
+          harness_record_backoff "$sid" "$retry_after"
+        fi
+      fi
     else
       local -a rargs=(receipt --project "$proj" --session "$sid" --node "$node" --status "$status" --evidence "$evidence" --model "$model" --vendor "$backend")
       [[ -n $usd_actual && $usd_actual != null ]] && rargs+=(--usd "$usd_actual")
@@ -926,7 +1157,7 @@ harness_dispatch_once() {
     proj=$(jq -r '.project // empty' <<<"$sess")
     sid=$(jq -r '.id // empty' <<<"$sess")
     label=$(jq -r '.label // empty' <<<"$sess")
-    sess_role=$(jq -r '.role // empty' <<<"$sess")
+    sess_role=$(jq -r '(.tier // .role) // empty' <<<"$sess")   # tier wins (#7/#8: it's the harness's own eligibility ceiling)
     [[ -n $proj && -n $sid && -n $label ]] || continue
     profile=$(harness_profile_for_label "$label") || continue
     # --json is a GLOBAL flag on the harness CLI, before the subcommand (older
@@ -988,7 +1219,7 @@ harness_status_json() {
     model: (.model // null), vendor: (.vendor // null), ip_safe: (.ip_safe // null)
   }]' <<<"$overview" 2>/dev/null)
   [[ $roles == \[* ]] || roles='[]'
-  local orchestrator; orchestrator=$(jq -c '[.projects[]? | select(.orchestrator != null) | {key: .id, value: .orchestrator}] | from_entries' <<<"$overview" 2>/dev/null)
+  local orchestrator; orchestrator=$(jq -c '[.projects[]? | select(.orchestrator != null and .id != null) | {key: .id, value: .orchestrator}] | from_entries' <<<"$overview" 2>/dev/null)
   [[ $orchestrator == \{* ]] || orchestrator='{}'
   jq -nc --argjson alive "$alive" --arg url "$url" --arg data_dir "$ddir" --arg bin "$bin" --arg overview_path "$ov" \
     --argjson serving_pid "${serving_pid:-null}" --argjson dispatch_pid "${dispatch_pid:-null}" \

@@ -74,10 +74,15 @@ Item {
     return parts.join("  ·  ")
   }
   readonly property string harnessOrchestratorLine: harnessOrchestratorText()
-  // Any registered session missing a role means it was registered before
-  // this wave (or by a caller that skipped --role) -- point at the fix.
+  // Any registered rix session missing a role means it was registered
+  // before this wave (or by a caller that skipped --role) -- point at the
+  // fix. Scoped to worker === "rix": local_qwen/human sessions never carry
+  // a role at all, so scanning every session meant this hint never cleared.
   function harnessAnySessionMissingRole() {
-    for (var i = 0; i < tab.harnessSessions.length; i++) if (!tab.harnessSessions[i].role) return true
+    for (var i = 0; i < tab.harnessSessions.length; i++) {
+      var s = tab.harnessSessions[i]
+      if (s.worker === "rix" && !s.role) return true
+    }
     return false
   }
   readonly property bool harnessRoleHintNeeded: harnessAnySessionMissingRole()
@@ -109,6 +114,10 @@ Item {
       var m = tab.shortModel(s.model); if (m !== "") bits.push(m)
       bits.push(tab.harnessCostClassTag(s.cost_class))
       if (s.state) bits.push(String(s.state))
+      // "SPLIT P0.6" while this session carries an outstanding orchestration
+      // dispatch: `orchestration: {node, command} | null` (harness side
+      // landing alongside this wave's roles/model policy work).
+      if (s.orchestration && s.orchestration.command) bits.push(String(s.orchestration.command) + (s.orchestration.node ? " " + String(s.orchestration.node) : ""))
       parts.push(bits.join(" · "))
     }
     return parts.join("   ·   ")
