@@ -287,6 +287,7 @@ harness_dispatch_loop() {
   trap 'exit 0' TERM INT
   while :; do
     harness_dispatch_once || true
+    harness_notify_sync || true
     sleep 3
   done
 }
@@ -314,4 +315,92 @@ harness_status_json() {
     --argjson projects "$projects" --argjson pending_approvals "$pending" \
     '{alive:$alive, url:$url, data_dir:$data_dir, bin:$bin, serving_pid:$serving_pid, dispatch_pid:$dispatch_pid,
       projects:$projects, pending_approvals:$pending_approvals}'
+}
+
+# harness_pending_approvals_json -> [{project, estimate_usd, model, vendor,
+# reason, at}] from overview.json's per-project pending_approval. File only.
+harness_pending_approvals_json() {
+  jq -c '[.projects[]? | select(.pending_approval != null) | {
+    project: .id,
+    estimate_usd: (.pending_approval.estimate_usd // .pending_approval.usd // null),
+    model: (.pending_approval.model // null),
+    vendor: (.pending_approval.vendor // null),
+    reason: (.pending_approval.reason // ""),
+    at: (.pending_approval.at // .pending_approval.requested_at // null)
+  }]' <<<"$(harness_overview_json)"
+}
+
+# --------------------------------------------------------------- notify ----
+# harness_notify_sync -- read overview.json once and make two things
+# impossible to miss without any network:
+#  * every project with a pending_approval becomes exactly one blocker
+#    (key "approval-<project>", agent = its rix session's profile label, or
+#    "rix"), resolved the moment the approval disappears (or its identity
+#    changes, tracked by `at`/`requested_at`/the estimate itself).
+#  * every session in state "throttled" gets one warn-level note per
+#    retry_at (never re-toasted for the same retry_at).
+# Dedup state lives in $HARNESS_STATE_DIR/notified.txt, not blockers.json --
+# the user can Resolve a blocker from the dashboard at any time, and keying
+# off blockers.json would just re-emit (and re-toast) it on the next sweep.
+# Safe to call every dispatch cycle and from `cmd_harness status`.
+harness_notify_sync() {
+  mkdir -p "$HARNESS_STATE_DIR"
+  local nf="$HARNESS_STATE_DIR/notified.txt"
+  touch "$nf"
+  local tab; tab=$'\t'
+  local overview; overview=$(harness_overview_json)
+  local tmp; tmp=$(mktemp "$HARNESS_STATE_DIR/.notified.XXXXXX")
+
+  local proj
+  while IFS= read -r proj; do
+    [[ -n $proj ]] || continue
+    local id pa line
+    id=$(jq -r '.id // empty' <<<"$proj")
+    [[ -n $id ]] || continue
+    pa=$(jq -c '.pending_approval // empty' <<<"$proj")
+    line=$(grep -F "approval${tab}${id}${tab}" "$nf" 2>/dev/null | head -n1 || true)
+    if [[ -n $pa && $pa != null ]]; then
+      local at
+      at=$(jq -r '.at // .requested_at // .estimate_usd // .usd // empty' <<<"$pa")
+      [[ -n $at ]] || at="pending"
+      if [[ -n $line ]] && [[ $(cut -f3 <<<"$line") == "$at" ]]; then
+        printf '%s\n' "$line" >>"$tmp"
+      else
+        local agent estimate model vendor reason
+        agent=$(jq -r --arg id "$id" '.sessions[]? | select(.project == $id and .worker == "rix") | .label' <<<"$overview" | head -n1)
+        [[ -n $agent ]] || agent=rix
+        estimate=$(jq -r '.estimate_usd // .usd // "?"' <<<"$pa")
+        model=$(jq -r '.model // "?"' <<<"$pa")
+        vendor=$(jq -r '.vendor // "?"' <<<"$pa")
+        reason=$(jq -r '.reason // ""' <<<"$pa")
+        event_emit "$agent" blocker "Approve \$$estimate for $model via $vendor on $id: $reason" \
+          --source harness --level blocker --ref "harness:$id:approval:$at" --key "approval-$id"
+        printf 'approval%s%s%s%s%s%s\n' "$tab" "$id" "$tab" "$at" "$tab" "$agent" >>"$tmp"
+      fi
+    elif [[ -n $line ]]; then
+      local cleared_agent; cleared_agent=$(cut -f4 <<<"$line")
+      [[ -n $cleared_agent ]] || cleared_agent=rix
+      event_emit "$cleared_agent" blocker_cleared "harness: approval on $id resolved" --source harness --key "approval-$id"
+    fi
+  done < <(jq -c '.projects[]?' <<<"$overview")
+
+  local sess
+  while IFS= read -r sess; do
+    [[ -n $sess ]] || continue
+    local sid label retry line
+    sid=$(jq -r '.id // empty' <<<"$sess")
+    [[ -n $sid ]] || continue
+    label=$(jq -r '.label // empty' <<<"$sess"); [[ -n $label ]] || label=rix
+    retry=$(jq -r '.retry_at // empty' <<<"$sess"); [[ -n $retry ]] || retry="unknown"
+    line=$(grep -F "throttled${tab}${sid}${tab}" "$nf" 2>/dev/null | head -n1 || true)
+    if [[ -n $line ]] && [[ $(cut -f3 <<<"$line") == "$retry" ]]; then
+      printf '%s\n' "$line" >>"$tmp"
+    else
+      event_emit "$label" note "harness: $sid throttled, retrying at $retry" --source harness --level warn --ref "harness:$sid:throttled:$retry"
+      printf 'throttled%s%s%s%s\n' "$tab" "$sid" "$tab" "$retry" >>"$tmp"
+    fi
+  done < <(jq -c '.sessions[]? | select(.state == "throttled")' <<<"$overview")
+
+  mv -f "$tmp" "$nf"
+  return 0
 }

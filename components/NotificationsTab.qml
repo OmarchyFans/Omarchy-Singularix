@@ -20,6 +20,22 @@ Item {
 
   function activate(i) { if (blockerList[i]) dash.chat(blockerList[i].agent) }
   function resolve(b) { dash.emitEvent(b.agent, "blocker_cleared", "Resolved from the dashboard", b.key) }
+
+  // A harness cost-approval blocker is keyed "approval-<project>" (see
+  // lib/harness.sh harness_notify_sync). Project comes from the key; the USD
+  // estimate is parsed out of the message text ("Approve $X for ...").
+  function isApproval(b) { return !!(b && typeof b.key === "string" && b.key.indexOf("approval-") === 0) }
+  function approvalProject(b) {
+    if (b && typeof b.key === "string" && b.key.indexOf("approval-") === 0) return b.key.slice("approval-".length)
+    if (b && typeof b.ref === "string") { var parts = b.ref.split(":"); if (parts[0] === "harness" && parts.length > 1) return parts[1] }
+    return ""
+  }
+  function approvalUsd(b) {
+    var m = /\$([0-9]+(?:\.[0-9]+)?)/.exec((b && b.message) || "")
+    return m ? m[1] : "0"
+  }
+  function approve(b) { dash.act([dash.launcher, "harness", "approve", tab.approvalProject(b), tab.approvalUsd(b)]) }
+  function decline(b) { dash.act([dash.launcher, "harness", "decline", tab.approvalProject(b)]) }
   function loadSetting() { if (!settingProc.running) { settingProc.command = [dash.launcher, "settings", "get", "notify_blockers"]; settingProc.running = true } }
   Process {
     id: settingProc
@@ -84,8 +100,10 @@ Item {
                 id: bactions
                 spacing: Style.spacing.sm
                 anchors.verticalCenter: parent.verticalCenter
-                Button { text: "Chat"; iconText: "󰭹"; selected: true; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: dash.chat(modelData.agent) }
-                Button { text: "Resolve"; iconText: "󰄬"; tooltipText: "Clear this blocker"; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: tab.resolve(modelData) }
+                Button { text: "Chat"; iconText: "󰭹"; selected: true; foreground: dash.foreground; fontFamily: dash.fontFamily; visible: !tab.isApproval(modelData); onClicked: dash.chat(modelData.agent) }
+                Button { text: "Resolve"; iconText: "󰄬"; tooltipText: "Clear this blocker"; foreground: dash.foreground; fontFamily: dash.fontFamily; visible: !tab.isApproval(modelData); onClicked: tab.resolve(modelData) }
+                Button { text: "Approve"; iconText: "󰄬"; selected: true; foreground: dash.foreground; fontFamily: dash.fontFamily; visible: tab.isApproval(modelData); onClicked: tab.approve(modelData) }
+                Button { text: "Decline"; iconText: "󰅖"; tooltipText: "Decline this spend"; foreground: dash.urgent; fontFamily: dash.fontFamily; visible: tab.isApproval(modelData); onClicked: tab.decline(modelData) }
               }
             }
           }
