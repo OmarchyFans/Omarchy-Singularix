@@ -107,16 +107,28 @@ already-registered live session for it (by label or `--slots` label suffix).
 `command`) instead of a router call — exactly like a work packet, claimed the same way
 (`.md` → `.md.claimed`). `harness_dispatch_packet` detects one (path suffix, or the inbox
 row's `command` field — tolerate its absence) and, defensively (the harness only ever assigns
-these to an orchestrator session, but we check anyway): skip it unless the dispatching
-profile's `harness_role` or the session's own `role` in `overview.json` is `orchestrator`. A
-claimed one is delegated with the packet text plus "reply with exactly one JSON object (the
-patch) and nothing else after it — the launcher writes the receipt, not you." On reap,
-`harness_extract_last_json` pulls the LAST balanced top-level JSON object out of the
-delegate's full reply (immune to nested braces, braces inside strings, and a broken/
-unterminated object earlier in the text — see the function's own comment in `lib/harness.sh`
-for the algorithm) and `harness receipt --command SPLIT|PM|COMPOSE --patch-file F --status
-done` is called with it; a reply with no parseable JSON, or a delegate that did not finish
-successfully, gets `--status failed --summary "…"` instead — never a guessed/empty patch.
+these to an orchestrator session, but we check anyway): skip it unless the SESSION's own
+`tier` (falling back to `role`) in `overview.json` is `orchestrator` — **never** the profile's
+local `harness_role` field, which can be stale or simply wrong relative to what `harness
+session set` last actually accepted for that session (Wave L1 #6/#7). If the inbox row's
+`node` still carries the `.<COMMAND>` suffix (`P0.SPLIT`, matching the packet filename, with no
+`command` field of its own — the shape the harness hands back today), it is stripped to the
+bare node id before either the skip check or the eventual receipt: `harness receipt --node
+P0.SPLIT` is "unknown node" to the harness, so the claim would otherwise be repeated forever
+(Wave L1 #21). A claimed one is delegated with the packet text plus a trailer naming `harness
+brief --project ID --session SID` as the first command to run (Wave L1 #27) and "reply with
+exactly one JSON object (the patch) and nothing else after it — the launcher writes the
+receipt, not you." On reap, `harness_extract_last_json` pulls the LAST top-level JSON OBJECT
+out of the delegate's full reply (python3's own JSON tokenizer when available, immune to a
+stray unmatched brace or an odd run of quote characters in prose before the real object, and
+never unwrapping a top-level array into one of its elements — see the function's own comment
+in `lib/harness.sh`) and `harness receipt --command SPLIT|PM|COMPOSE --patch-file F --status
+done` is called with it; a delegate that was itself throttled gets `--status throttled
+--retry-after-sec 300` (Wave L1 #2, with a belt-and-braces un-claim + per-session backoff if
+that receipt call itself fails); a reply with no parseable JSON gets `--status failed --summary
+"no JSON object found…"`, and a delegate that did not finish successfully gets `--summary
+"delegate exited …"` (Wave L1 #11: two different messages for two different failures) — never
+a guessed/empty patch.
 
 **Reading it back**: `harness_status_json`'s `roles` array is every registered Rix session's
 `{session, project, role, tier, model, vendor, ip_safe}` straight from `overview.json`
@@ -165,7 +177,9 @@ do (curl to 127.0.0.1 with `X-Harness: 1`) and the harness binary does.
 | `harness_profile_for_label LABEL` | resolves a session label (`PROFILE` or `PROFILE-N`) back to its saved profile name |
 | `harness_profile_vendor PROFILE` | the vendor id to register: the profile's `provider` for a `kind=provider` backend, or the registry backend's own id for a `kind=endpoint` one (never the literal string `"endpoint"` `backend_get` stamps on those) |
 | `harness_profile_model PROFILE` | the profile's own `model` field, else the model its resolved backend actually serves |
-| `harness_set_role PROFILE ROLE` | sets the profile's `harness_role` and, for every already-registered live session (by label or `--slots` suffix) resolving back to it, runs `harness session set --role`; refuses a role outside `orchestrator\|reasoning\|coding\|local` |
+| `harness_session_sync PROFILE PROJECT SESSION [ROLE]` | one `harness session set --project P --session S [--role R --tier R] --model M --vendor V --cost-class C` call — `--role`/`--tier` are ALWAYS sent paired (never `--role` alone: the harness's `validate_role` refuses a session whose previously-recorded tier ends up below or above a role sent without a matching tier, Wave L1 #6/#8) |
+| `harness_resync_profile PROFILE` | best-effort `harness_session_sync` (no role change) for every already-registered live session of PROFILE — call this wherever a profile's backend/provider/model changes after it may already be a harness worker (Wave L1 #7); never fails the caller |
+| `harness_set_role PROFILE ROLE` | sets the profile's `harness_role` and, for every already-registered live session (by label or `--slots` suffix) resolving back to it, runs `harness_session_sync` (`--role`/`--tier` paired); the profile field is persisted only once every live session accepted the change (or there were none), never on a partial failure |
 | `harness_estimate_from_class CLASS MODEL TEXT` | chars/4 input tokens × 4 for output × `settings.json:harness_turn_factor` (default 20, a delegate is a whole agent loop, not one call) × models.dev price; `0` for free/subscription; non-zero exit when a metered model's price is unknown (never guess `$0`) |
 | `harness_estimate_usd PROFILE PACKET` | `harness_estimate_from_class` using `harness_cost_class PROFILE` |
 | `harness_gate BACKEND MODEL TEXT APPROVED_USD` | direct (non-dispatch) entry points' pre-flight: prints the estimate, exit 0 if free/subscription or `APPROVED_USD` covers it, else exit 3 |
@@ -173,24 +187,34 @@ do (curl to 127.0.0.1 with `X-Harness: 1`) and the harness binary does.
 | `harness_cost_request PROJECT NODE MODEL VENDOR ESTIMATE REASON BY` | `POST /api/project/{id}/cost/request` |
 | `harness_prune_requested_key` / `_project` / `_stale` | maintain `$HARNESS_STATE_DIR/requested.txt` (the dedup set of already-asked-for node shortfalls): drop one node's entry once funded, drop a whole project's on approve/decline, drop any entry the harness no longer lists pending |
 | `harness_approve PROJECT USD [REASON] [REQUEST_ID]` | resolves the oldest open `pending_approvals` entry matching `USD` via `harness cost --json` when no request id is given, then `POST /approve`; prunes `requested.txt` for the project |
-| `harness_decline PROJECT` | `POST /cost/decline`; prunes `requested.txt` for the project |
-| `harness_dispatch_packet` | cost-gates one packet (fail-closed class; metered + short → one `cost/request` + skip, deduped via `requested.txt`); an orchestration packet (`<node>.SPLIT\|PM\|COMPOSE.md`, or an inbox row carrying `command`) is skipped defensively unless the dispatching profile's `harness_role` or the session's own `role` (6th arg, from `overview.json`) is `orchestrator`; if slots remain, claims (`.md`→`.md.claimed`) and launches a **detached** `delegate` (`--approved-usd` pre-filled with the harness's own estimate for a metered call; an orchestration packet's trailer asks for exactly one JSON patch instead of oracle output), reads the delegate's tmux server pid and records a job file under `$HARNESS_STATE_DIR/jobs/<project>/<node>.json` (project, node, session, slug, claimed path, pid, started_at, `command`, `vendor`); calls `harness session set --pid N` when a pid was found, else `harness heartbeat` once immediately; never blocks |
-| `harness_dispatch_heartbeat` | one sweep over every job file: if its `.md.claimed` no longer exists as itself (the harness withdrew/cancelled it), `harness_job_forget` the delegate (kill its tmux server, remove staged home/profile/job file) and `session set --clear-pid`; otherwise `harness heartbeat --project --session` to keep it out of `stale` |
+| `harness_decline PROJECT` | CLI `decline` first; on the CLI's own "invalid choice" (the subcommand doesn't exist on an older harness build yet) falls back to `POST /cost/decline`; any OTHER CLI failure (a real refusal) is surfaced as-is, never papered over with curl (Wave L1 #4). Prunes `requested.txt` for the project |
+| `harness_record_backoff SESSION RETRY_AFTER_SEC` / `harness_backoff_active SESSION` | belt-and-braces (Wave L1 #2) for a throttled command receipt the harness CLI refuses: remembers not to redispatch onto SESSION until `retry_at` even though the harness itself never learned about the throttle; self-expiring, honoured by `harness_dispatch_packet` |
+| `harness_dispatch_packet` | skips outright while `harness_backoff_active` for the session; cost-gates one packet (fail-closed class; metered short-of-`remaining_usd − reserved_usd` → one `cost/request` + skip, deduped via `requested.txt`; a positive `daily_cap_usd` that today's spend + estimate would exceed refuses WITHOUT ever requesting — a cap can't be approved away, Wave L1 #5); strips a `.<COMMAND>` suffix the harness may still put on the inbox row's `node` (`P0.SPLIT` → `P0`) before either skipping or dispatching, so the eventual receipt's `--node` is always the bare id the harness recognizes (Wave L1 #21); an orchestration packet (`<node>.SPLIT\|PM\|COMPOSE.md`, or an inbox row carrying `command`) is skipped defensively unless the SESSION's own `tier` (falling back to `role`, from `overview.json` — never the profile's local `harness_role` field, Wave L1 #6/#7) is `orchestrator`; if slots remain, claims (`.md`→`.md.claimed`) and launches a **detached** `delegate` with `$HARNESS_SESSION`/`$HARNESS_PROJECT` in its environment (Wave L1 #26) and a trailer naming `harness brief` (orchestration) or `harness show` (work packet) as the first command to run (Wave L1 #27); `--approved-usd` pre-filled with the harness's own estimate for a metered call; reads the delegate's tmux server pid and records a job file under `$HARNESS_STATE_DIR/jobs/<project>/<node>.json` (project, node, session, slug, claimed path, pid, started_at, `command`, `vendor`); calls `harness session set --pid N` when a pid was found, else `harness heartbeat` once immediately; never blocks |
+| `harness_dispatch_heartbeat` | one sweep over every job file: if its `.md.claimed` no longer exists as itself (the harness withdrew/cancelled it), `harness_job_forget` the delegate (kill its tmux server, remove staged home/profile/job file) and `session set --clear-pid`; otherwise `harness heartbeat --project --session` to keep it out of `stale`, and `touch`es the `.md.claimed` file's mtime (Wave L1 #13: the harness's own claim_timeout safety net trusts that mtime when no pid was recorded) |
 | `harness_job_forget SLUG` | kill an `hns-*` delegate's tmux server, remove its staged home/profile/job file — transient per-job agents must not accumulate in the launcher's own agent list |
-| `harness_extract_last_json FILE` | the LAST balanced top-level JSON object in FILE (a single string-aware forward scan; nested braces stay inside a successfully-closed candidate, braces inside quoted strings are ignored, and a broken/unterminated object earlier in the text cannot swallow a good one that follows it); exit 1 (nothing printed) when none parses |
-| `harness_dispatch_reap` | for each job file whose worker's run log postdates it (or, in tests, carries a `__oal_rc=<n>` sentinel line trusted outright): reads the real exit code + usage (`usage_json`), classifies `done`/`failed`/`throttled` (a nonzero exit *and* a rate-limit marker in the tail). A job whose `command` field is set (an orchestration packet) instead runs `harness_extract_last_json` on the reply once `status == done`, writes the found JSON under `$HARNESS_STATE_DIR/patches/<project>/<node>.<CMD>.patch.json`, and calls `harness receipt --command CMD --patch-file F --status done` (or `--status failed --summary "…"` when no JSON parsed, or the run did not finish successfully — never `--evidence`, never `--status throttled`, matching the CLI verb in `docs/CONTRACTS.md` §17.4). Otherwise (a plain work packet) writes `harness receipt` with `--usd/--tokens-in/--tokens-out/--model/--vendor/--evidence` as before. Either way: `session set --clear-pid`, prune `requested.txt`, `harness_job_forget`, remove the job file |
+| `harness_extract_last_json FILE` | the LAST top-level JSON OBJECT in FILE. Prefers python3's real tokenizer (`json.JSONDecoder.raw_decode`), scanning left to right for a `{`/`[` that decodes, recording each success as a TOP-LEVEL candidate and resuming the scan PAST its end (so nothing nested inside — e.g. a `children` array's own objects — is ever a separate candidate); a candidate that is a JSON ARRAY is skipped, never unwrapped into one of its elements, and the LAST object-typed candidate wins. This is immune to two failure modes a hand-rolled bracket-counter had (Wave L1 #24): a stray unmatched `{` in prose later closed by an unrelated `}` swallowing the real object, and an odd number of stray quote characters in prose desyncing manual in-string tracking. Falls back to the original bracket-counting bash algorithm (same known limitations) only when python3 is missing; exit 1 (nothing printed) when nothing parses |
+| `harness_dispatch_reap` | for each job file whose worker's run log postdates it (or, in tests, carries a `__oal_rc=<n>` sentinel line trusted outright): reads the real exit code + usage (`usage_json`), classifies `done`/`failed`/`throttled` (a nonzero exit *and* a rate-limit marker in the tail). A job whose `command` field is set (an orchestration packet) instead runs `harness_extract_last_json` on the reply (scanning the last 2000 lines, Wave L1 #8) once `status == done`, writes the found JSON under `$HARNESS_STATE_DIR/patches/<project>/<node>.<CMD>.patch.json`, and calls `harness receipt --command CMD --patch-file F --status done` — or `--status throttled --retry-after-sec 300` when the delegate itself was throttled (Wave L1 #2: belt-and-braces un-claim + `harness_record_backoff` if THAT receipt call fails), or `--status failed --summary "delegate exited …"` for a dead delegate vs. `--summary "no JSON object found…"` for one that finished but replied with none (two different messages for two different failures, Wave L1 #11). Otherwise (a plain work packet) writes `harness receipt` with `--usd/--tokens-in/--tokens-out/--model/--vendor/--evidence` as before, resolving the model via `harness_profile_model` (Wave L1 #12). Either way: `session set --clear-pid`, prune `requested.txt`, `harness_job_forget`, remove the job file |
 | `harness_jobs_running` | count of job files (the concurrency accounting for `harness_workers`) |
-| `harness_dispatch_once` | heartbeat running jobs (or stop+clear-pid a withdrawn one), reap finished jobs, prune stale requests, compute `HARNESS_SLOTS_LEFT = settings.json:harness_workers (default 4) − running jobs`, then sweep every `rix` session's unclaimed inbox packets across projects (passing each session's `overview.json` `role` through), dispatching up to the remaining slots |
+| `harness_dispatch_once` | heartbeat running jobs (or stop+clear-pid a withdrawn one), reap finished jobs, prune stale requests, compute `HARNESS_SLOTS_LEFT = settings.json:harness_workers (default 4) − running jobs`, then sweep every `rix` session's unclaimed inbox packets across projects (passing each session's `overview.json` `tier // role` through), dispatching up to the remaining slots |
 | `harness_dispatch_loop` | every 3 s: `harness_dispatch_once` (which itself heartbeats/reaps first) then `harness_notify_sync`, until stopped |
-| `harness_status_json` | `{alive, url, data_dir, bin, overview_path, serving_pid, dispatch_pid, projects: n, pending_approvals: [...], jobs: {running, slots}, roles: [{session, project, role, tier, model, vendor, ip_safe}], orchestrator: {project_id: …}}` — file/pid based, no network beyond one 1 s curl; `overview_path` is always `harness_data_dir/overview.json` (or `$HARNESS_DATA_DIR`), never `null` |
+| `harness_status_json` | `{alive, url, data_dir, bin, overview_path, serving_pid, dispatch_pid, projects: n, pending_approvals: [...], jobs: {running, slots}, roles: [{session, project, role, tier, model, vendor, ip_safe}], orchestrator: {project_id: …}}` — file/pid based, no network beyond one 1 s curl; `overview_path` is always `harness_data_dir/overview.json` (or `$HARNESS_DATA_DIR`), never `null`; a project entry with `orchestrator` set but no `id` is excluded rather than corrupting the map with a literal `"null"` key (Wave L1 #19) |
 | `harness_pending_approvals_json` | `[{project, estimate_usd, model, vendor, reason, at}]` from `overview.json`, file only |
 | `harness_notify_sync` | one blocker per project with a `pending_approval` (resolved when it clears), one warn-level note per throttled session's `retry_at` — deduped in `$HARNESS_STATE_DIR/notified.txt` so nothing re-toasts; safe every dispatch cycle and from `status` |
 
+`harness cost --project ID --json`'s real shape (Wave L1 #3) is `pending_approvals` (a list, or —
+some builds — a map keyed by request id) plus a singular `pending_approval`, `reserved_usd` and a
+`daily_cap_usd`/`daily_spent_usd` pair — never the made-up `pending` list this file's cost-reading
+functions (`harness_prune_requested_stale`, `harness_resolve_request_id`, the dispatch gate) used
+to read exclusively; they now accept every shape (map, list, or the legacy `pending` key).
+
 CLI: `omarchy-agent-launcher harness status|serve|stop|open|projects|register PROFILE [REPO]
 [--slots N] [--project ID] [--role R]|role PROFILE ROLE|dispatch [--once]|approve PROJECT USD
-[REASON] [--request ID]|decline PROJECT|inbox PROFILE` — `approve`/`decline` are refused
-outright when `$OAL_AGENT` is set (an agent's own shell must never fund or reject its own
-spending). `role` accepts `orchestrator|reasoning|coding|local`.
+[REASON] [--request ID]|decline PROJECT|inbox PROFILE|assign PROJECT NODE [--session SID]` —
+`approve`/`decline` are refused outright when `$OAL_AGENT` is set (an agent's own shell must never
+fund or reject its own spending). `role` accepts `orchestrator|reasoning|coding|local`. `assign`
+(the Plan tab's "Assign to Rix" button, and the Rix skill's own `harness assign`) defaults
+`--session` to the first idle `rix` session on the project when omitted — the harness itself
+refuses an ineligible one.
 `harness serve` is also started by `rix chat`/`rix open` when `settings.json:harness_autostart` is true.
 
 ## Worker liveness protocol (assign → claim → pid/heartbeat → receipt → clear)
@@ -329,3 +353,32 @@ to `harness_data_dir/overview.json`; `.roles`/`.orchestrator` are asserted to ca
 `overview.json` says. Version →
 0.14.0 in `manifest.json` and `skills/rix/SKILL.md`; deploy once with the flash warning;
 shell restart (keepLoaded panel).
+
+**Wave L1 additions** (adversarial review of the roles-policy branch; same subshell/fixture
+style): a real-shaped inbox row (`node` carrying the `.SPLIT` suffix, no `command` field)
+dispatches/receipts against the bare node id (#21). A throttled orchestration delegate reaps to
+`--status throttled --retry-after-sec`, never `--status failed`; a harness CLI that refuses that
+receipt is proven to un-claim the packet and back the session off until `retry_at` (#2), the fake
+`harness receipt` accepting a forced-failure toggle for exactly this. `cost --json`'s
+`pending_approvals` (list or map) and `pending_approval` are read correctly, not just the legacy
+`pending` (#3). `harness decline` falls back to curl only on the CLI's "invalid choice", never on
+a genuine refusal (#4, two fakes: one missing the subcommand, one that just refuses). The dispatch
+gate is proven to subtract `reserved_usd` and to refuse — without ever POSTing `cost/request` — a
+node that would exceed a positive `daily_cap_usd` (#5). `harness_set_role`/`harness_session_sync`
+are proven to pair `--role`/`--tier` by seeding the fake's own mirror of `validate_role`'s tier
+rule with a stale lower tier (a plain `--role` there is refused; paired, it isn't) (#6/#8), and the
+dispatch guard is proven to ignore a profile's `harness_role` entirely when the session's own
+record disagrees (#6/#7). `harness_resync_profile` and a register call against an
+already-registered session are asserted to push a `session set` with the profile's current
+model/vendor/cost-class (#7). `harness_extract_last_json` gets two new failing shapes (a stray
+brace closed by an unrelated one; an odd run of quote characters before the real object) plus a
+top-level-array-only reply, which must be rejected outright (#24). A dead delegate's failed
+receipt is asserted to read differently from a no-JSON one (#11); dispatch resolves an
+explicit-model-less profile's model the same way `harness_profile_model` does (#12);
+`harness_dispatch_heartbeat` is asserted to bump a still-claimed packet's mtime (#13); a
+project entry with `orchestrator` set but no `id` is asserted not to corrupt the orchestrator
+map (#19); a dispatched delegate's environment and job-body trailer are asserted to carry
+`$HARNESS_SESSION`/`$HARNESS_PROJECT` and the right "First run: …" line (#26/#27); and
+`omarchy-agent-launcher harness assign PROJECT NODE [--session SID]` is asserted, through the
+real CLI, to pick the first idle `rix` session when `--session` is omitted (#10). Bump nothing
+(still 0.14.0).

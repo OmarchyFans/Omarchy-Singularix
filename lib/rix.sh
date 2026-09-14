@@ -137,6 +137,11 @@ rix_setup() {
   [[ -n $keep_signin ]] && profile_set "$RIX_NAME" signed_in true
   profile_set "$RIX_NAME" role '"chief-of-staff"'
   profile_set "$RIX_NAME" backend "$(jq -Rn --arg v "$backend" '$v')"
+  # #7 (harness.sh adversarial review): `rix setup` on an ALREADY-registered Rix
+  # profile just changed its backend -- if it's already a harness worker session,
+  # keep the harness's model/vendor/cost-class record in sync (best-effort; a
+  # brand-new profile has no live session yet, so this is a cheap no-op).
+  declare -F harness_resync_profile >/dev/null && harness_resync_profile "$RIX_NAME" || true
   [[ -n $existing_job ]] || { rix_job; sentinel_installed && rix_sentinel_duty; } >"$(job_path "$RIX_NAME")"
   event_emit "$RIX_NAME" created "Rix set up on $backend/$m" --task "chief of staff"
   if [[ $provider == local ]] && declare -F local_status_json >/dev/null && ! local_status_json | jq -e '.agent_ready' >/dev/null 2>&1; then

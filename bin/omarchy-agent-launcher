@@ -105,7 +105,7 @@ while (($#)); do
     -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --version) echo "omarchy-agent-launcher $OAL_VERSION"; exit 0 ;;
     --name|--agent|--runtime|--provider|--auth|--model|--base-url|--mode|--skill|--job-file|--task|--level|--key|--ctx|--kv|--slots|\
-    --backend|--parent|--role|--task-title|--id|--kind|--label|--url|--size|--input-per-m|--output-per-m|--approved-usd|--request|--project)
+    --backend|--parent|--role|--task-title|--id|--kind|--label|--url|--size|--input-per-m|--output-per-m|--approved-usd|--request|--project|--session)
                OPTS+=("$1" "${2:-}"); shift ;;   # valued options (create, delegate, backends add, local-server, harness)
     --*)       OPTS+=("$1") ;;                    # create's flags
     *)         CMD+=("$1") ;;
@@ -584,7 +584,14 @@ cmd_create() {
   if (( job_stdin )); then cat >"$(job_path "$name")"; elif (( job_env )); then printf '%s\n' "${OAL_JOB:-}" >"$(job_path "$name")"; elif [[ -n $job_file ]]; then cp -f "$job_file" "$(job_path "$name")"; else fail "create: --job-file, --job-stdin, or --job-env is required"; fi
   [[ -s $(job_path "$name") ]] || fail "create: the job description is empty"
   profile_write "$name" "$agent" "$runtime" "$provider" "$auth" "$model" "$base_url" "$mode" "$(printf '%s\n' "${skills[@]}")"
-  [[ -n $backend ]] && profile_set "$name" backend "$(jq -Rn --arg v "$backend" '$v')"
+  if [[ -n $backend ]]; then
+    profile_set "$name" backend "$(jq -Rn --arg v "$backend" '$v')"
+    # #7: a profile's backend just changed (or was set for the first time) --
+    # if it is already a registered harness worker (recreated under the same
+    # name, say), keep the harness's model/vendor/cost-class record in sync;
+    # a brand-new profile has no live session yet, so this is a cheap no-op.
+    declare -F harness_resync_profile >/dev/null && harness_resync_profile "$name" || true
+  fi
   [[ -n $parent ]] && profile_set "$name" parent "$(jq -Rn --arg v "$parent" '$v')"
   [[ -n $role ]] && profile_set "$name" role "$(jq -Rn --arg v "$role" '$v')"
   [[ -n $task_title ]] && profile_set "$name" task_title "$(jq -Rn --arg v "$task_title" '$v')"
@@ -865,7 +872,21 @@ cmd_harness() {
         [[ -n $proj && -n $sid ]] || continue
         "$bin" --json inbox --project "$proj" --session "$sid"
       done < <(jq -c --arg label "$profile" '.sessions[]? | select(.label == $label)' <<<"$(harness_overview_json)") ;;
-    *) fail "usage: omarchy-agent-launcher harness status|serve|stop|open|projects|register PROFILE [REPO] [--slots N] [--project ID] [--role R]|role PROFILE ROLE|dispatch [--once]|approve PROJECT USD [REASON] [--request ID]|decline PROJECT|inbox PROFILE   (register: --project ID skips the repo_path lookup and registers directly, --role defaults to the profile's harness_role (else coding); role: orchestrator|reasoning|coding|local; approve/decline: human only, refused with OAL_AGENT set)" ;;
+    assign)
+      # PlanTab's "Assign to Rix" button runs exactly this (components/PlanTab.qml
+      # assignSelected(): `act(["harness","assign",project,node])`, no --session).
+      # Without one, pick the first idle rix session on that project -- the harness
+      # itself refuses an ineligible one (wrong tier/IP-class/state), so a wrong
+      # guess here just surfaces as the CLI's own refusal, not a silent misassign.
+      local project=${CMD[2]:?"harness assign needs a project id"} node=${CMD[3]:?"harness assign needs a node id"}
+      local bin; bin=$(harness_bin) || fail "harness CLI not found"
+      local sid; sid=$(opt_value --session || true)
+      if [[ -z $sid ]]; then
+        sid=$(jq -r --arg p "$project" '.sessions[]? | select(.project == $p and .worker == "rix" and .state == "idle") | .id' <<<"$(harness_overview_json)" | head -n1)
+        [[ -n $sid ]] || fail "harness assign: no idle rix session found for project $project (pass --session ID)"
+      fi
+      "$bin" assign --project "$project" --node "$node" --session "$sid" ;;
+    *) fail "usage: omarchy-agent-launcher harness status|serve|stop|open|projects|register PROFILE [REPO] [--slots N] [--project ID] [--role R]|role PROFILE ROLE|dispatch [--once]|approve PROJECT USD [REASON] [--request ID]|decline PROJECT|inbox PROFILE|assign PROJECT NODE [--session SID]   (register: --project ID skips the repo_path lookup and registers directly, --role defaults to the profile's harness_role (else coding); role: orchestrator|reasoning|coding|local; approve/decline: human only, refused with OAL_AGENT set; assign: --session defaults to the first idle rix session on the project)" ;;
   esac
 }
 

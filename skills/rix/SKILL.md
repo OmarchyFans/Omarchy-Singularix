@@ -59,12 +59,14 @@ project's task plan; you orchestrate it, you never fake `done` yourself.
 - `harness tick --project ID` — advance the scheduler.
 - `harness split --project ID --node N` — break a node down further.
 - `harness assign --project ID --node N --session S` — hand a node to a session.
-- `harness ack ID` / `harness fail ID "reason"` — record what happened to an assignment.
+- `harness ack --project ID --node N [--evidence E]` / `harness fail --project ID --node N --reason "reason"`
+  — record what happened to an assignment.
 - `harness cost --project ID` — spent, approved, and remaining USD.
-- `omarchy-agent-launcher harness status|register <profile> [repo] [--role R]|role <profile> <role>|inbox <profile>`
+- `omarchy-agent-launcher harness status|register <profile> [repo] [--role R]|role <profile> <role>|inbox <profile>|assign PROJECT NODE [--session SID]`
   — Rix's own side: check status, register a profile as a harness worker session (`--role` defaults to
-  the profile's `harness_role`, else `coding`), and change a profile's role later (`role`, which also
-  updates any live session already registered for it).
+  the profile's `harness_role`, else `coding`), change a profile's role later (`role`, which also
+  updates any live session already registered for it), and assign a node to a session (`--session`
+  defaults to the first idle rix session on the project).
   **`approve`/`decline` are not in your list** — `omarchy-agent-launcher harness approve/decline` are refused
   outright when run from your session ($OAL_AGENT set); only the user runs them, from the dashboard or a
   terminal.
