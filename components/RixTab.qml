@@ -35,6 +35,52 @@ Item {
   readonly property var harnessProjects: harnessOverview && harnessOverview.projects ? harnessOverview.projects : []
   readonly property var harnessSessions: harnessOverview && harnessOverview.sessions ? harnessOverview.sessions : []
   readonly property var harnessAgg: harnessAggregate()
+
+  // ---- roles/model policy (Wave 6, CONTRACTS.md §17.5-17.7) -----------------
+  // Same rule as PlanTab.shortModel: strip a "vendor:" hop prefix, a folded-in
+  // "claude-" vendor prefix, and a trailing date suffix.
+  function shortModel(m) {
+    var s = String(m || "").trim()
+    if (s === "") return ""
+    var colon = s.indexOf(":")
+    if (colon >= 0) s = s.slice(colon + 1)
+    s = s.replace(/^claude-/, "")
+    s = s.replace(/-\d{4}-?\d{2}-?\d{2}$/, "")
+    return s
+  }
+  // The effective orchestrator right now: a named session (deduped by label
+  // when every project shares one) or a router hop. "" when no project names
+  // one yet (older harness, or nothing computed this tick).
+  function orchestratorLabel(o) {
+    if (!o) return ""
+    if (o.kind === "session") {
+      var sid = String(o.id || "")
+      var s = null
+      for (var i = 0; i < tab.harnessSessions.length; i++) if (String(tab.harnessSessions[i].id) === sid) { s = tab.harnessSessions[i]; break }
+      var label = s ? (s.label || s.id) : sid
+      return "session " + label + (o.model ? " (" + tab.shortModel(o.model) + ")" : "")
+    }
+    if (o.kind === "router") return "router → " + (o.hop || o.model || "?")
+    return ""
+  }
+  function harnessOrchestratorText() {
+    var seen = {}, parts = []
+    for (var i = 0; i < tab.harnessProjects.length; i++) {
+      var lbl = tab.orchestratorLabel(tab.harnessProjects[i].orchestrator)
+      if (lbl === "" || seen[lbl]) continue
+      seen[lbl] = true
+      parts.push(lbl)
+    }
+    return parts.join("  ·  ")
+  }
+  readonly property string harnessOrchestratorLine: harnessOrchestratorText()
+  // Any registered session missing a role means it was registered before
+  // this wave (or by a caller that skipped --role) -- point at the fix.
+  function harnessAnySessionMissingRole() {
+    for (var i = 0; i < tab.harnessSessions.length; i++) if (!tab.harnessSessions[i].role) return true
+    return false
+  }
+  readonly property bool harnessRoleHintNeeded: harnessAnySessionMissingRole()
   function harnessAggregate() {
     var spent = 0, approved = 0
     for (var i = 0; i < harnessProjects.length; i++) {
@@ -49,12 +95,21 @@ Item {
     if (c === "metered") return "$"
     return String(c || "—")
   }
+  // Each session's line: "label · role · tier · shortModel · cost_class ·
+  // state", parts omitted when the session doesn't carry them (an older
+  // harness may register with none of role/tier/model at all).
   readonly property string harnessSessionsText: {
     if (!harnessSessions.length) return "No sessions registered with the harness."
     var parts = []
     for (var i = 0; i < harnessSessions.length; i++) {
       var s = harnessSessions[i]
-      parts.push((s.label || s.worker || s.id || "?") + " " + (s.state || "") + " (" + tab.harnessCostClassTag(s.cost_class) + ")")
+      var bits = [s.label || s.worker || s.id || "?"]
+      if (s.role) bits.push(String(s.role))
+      if (s.tier) bits.push(String(s.tier))
+      var m = tab.shortModel(s.model); if (m !== "") bits.push(m)
+      bits.push(tab.harnessCostClassTag(s.cost_class))
+      if (s.state) bits.push(String(s.state))
+      parts.push(bits.join(" · "))
     }
     return parts.join("   ·   ")
   }
@@ -256,6 +311,21 @@ Item {
           Button { text: "Register this Rix"; bordered: true; visible: !!(tab.rix && tab.rix.name); tooltipText: "Register the current Rix profile as a harness worker session"; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: dash.act([tab.launcher, "harness", "register", tab.rix.name]) }
         }
         Dim { width: parent.width; text: tab.harnessSessionsText; elide: Text.ElideRight; wrapMode: Text.NoWrap }
+        // Effective orchestrator (§17.5-17.7): a named session or a router hop.
+        Dim {
+          width: parent.width
+          visible: tab.harnessOrchestratorLine !== ""
+          text: "orchestrator: " + tab.harnessOrchestratorLine
+          elide: Text.ElideRight; wrapMode: Text.NoWrap
+        }
+        // Points at the fix when a registered session has no role labelled.
+        Text {
+          width: parent.width
+          visible: tab.harnessRoleHintNeeded
+          textFormat: Text.PlainText; wrapMode: Text.Wrap
+          text: "roles: omarchy-agent-launcher harness role <profile> <role>"
+          color: dash.warnColor; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+        }
       }
     }
   }

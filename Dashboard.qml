@@ -282,6 +282,8 @@ Item {
           else if (dash.tab === "plan" && (t === "a" || t === "A")) { if (dash.planTabRef) dash.planTabRef.assignSelected() }
           else if (dash.tab === "plan" && (t === "p" || t === "P")) { if (dash.planTabRef) dash.planTabRef.cycleProjectFilter() }
           else if (dash.tab === "plan" && (t === "f" || t === "F")) { if (dash.planTabRef) dash.planTabRef.toggleCriticalOnly() }
+          else if (dash.tab === "plan" && (t === "o" || t === "O")) { if (dash.planTabRef) dash.planTabRef.cycleRoleFilter() }
+          else if (dash.tab === "plan" && (t === "m" || t === "M")) { if (dash.planTabRef) dash.planTabRef.cycleModelFilter() }
         }
 
         // ---- update banner (docs/update-alerts.md) ------------------------

@@ -175,19 +175,63 @@ harness_cost_class_reason() {
   fi
 }
 
-# harness_register_rix PROFILE [REPO] [SLOTS] [PROJECT_ID] -- one `harness
-# session add` per project whose repo_path resolves (realpath) to REPO
-# (default: $PWD), per slot 1..SLOTS (default 1): SLOTS>1 registers
+# The vendor id the harness should record for a profile (policy.py's
+# `Config.vendor_ip_safe`/router keys clients by (vendor, model)): the
+# profile's own `provider` for a `kind=provider` backend (anthropic, xai,
+# local, ...) or the registry backend's own id for a `kind=endpoint` backend
+# (backend_get stamps provider:"endpoint" on those, which is not a real
+# vendor id -- the backend's own id is). harness_profile_vendor PROFILE
+harness_profile_vendor() {
+  local profile=$1 backend
+  backend=$(profile_get "$profile" backend 2>/dev/null)
+  [[ -n $backend ]] || backend=$(profile_get "$profile" provider 2>/dev/null)
+  [[ -n $backend ]] || { printf ''; return 0; }
+  local b; b=$(backend_get "$backend" 2>/dev/null)
+  if [[ -n $b ]]; then
+    local kind; kind=$(jq -r '.kind // "provider"' <<<"$b")
+    if [[ $kind == provider ]]; then
+      local p; p=$(jq -r '.provider // empty' <<<"$b")
+      printf '%s' "${p:-$backend}"
+      return 0
+    fi
+  fi
+  printf '%s' "$backend"   # endpoint/registry backend: its own id is the vendor
+}
+
+# The model the harness should record for a profile: the profile's own
+# `model` field, else the model its resolved backend actually serves.
+# harness_profile_model PROFILE
+harness_profile_model() {
+  local profile=$1 model
+  model=$(profile_get "$profile" model 2>/dev/null)
+  if [[ -z $model ]]; then
+    local backend; backend=$(profile_get "$profile" backend 2>/dev/null)
+    [[ -n $backend ]] || backend=$(profile_get "$profile" provider 2>/dev/null)
+    local b; b=$(backend_get "$backend" 2>/dev/null)
+    [[ -n $b ]] && model=$(jq -r '.model // empty' <<<"$b")
+  fi
+  printf '%s' "$model"
+}
+
+# harness_register_rix PROFILE [REPO] [SLOTS] [PROJECT_ID] [ROLE] -- one
+# `harness session add` per project whose repo_path resolves (realpath) to
+# REPO (default: $PWD), per slot 1..SLOTS (default 1): SLOTS>1 registers
 # "<profile>-1".."<profile>-N" so one launcher profile can be N parallel
 # harness workers. When PROJECT_ID is given, the repo_path lookup is skipped
 # entirely and that one project id is registered against directly (REPO is
 # still used as --cwd, defaulting to $PWD) -- for harness builds/projects
 # whose overview.json doesn't carry repo_path yet, or a repo living outside
-# any project's declared path.
+# any project's declared path. ROLE (orchestrator|reasoning|coding|local)
+# defaults to the profile's `harness_role` field, else "coding" -- the
+# harness derives tier/ip_safe from --role/--model/--vendor; it refuses (and
+# we surface its stderr) a non-IP-safe vendor registering as orchestrator,
+# since it owns the IP table, not us.
 harness_register_rix() {
-  local profile=$1 repo=${2:-} slots=${3:-1} project_id=${4:-}
+  local profile=$1 repo=${2:-} slots=${3:-1} project_id=${4:-} role=${5:-}
   [[ $slots =~ ^[0-9]+$ && $slots -ge 1 ]] || slots=1
   profile_exists "$profile" || fail "harness register: no saved agent named '$profile'"
+  [[ -n $role ]] || role=$(profile_get "$profile" harness_role 2>/dev/null)
+  [[ -n $role ]] || role=coding
   local bin; bin=$(harness_bin) || return 1
   # With --project and no repo given, the session's cwd is that project's repo (the
   # inbox/outbox live there) -- never the shell's cwd.
@@ -199,6 +243,8 @@ harness_register_rix() {
   local backend; backend=$(profile_get "$profile" backend 2>/dev/null)
   [[ -n $backend ]] || backend=$(profile_get "$profile" provider 2>/dev/null)
   local class; class=$(harness_cost_class "$profile")
+  local vendor; vendor=$(harness_profile_vendor "$profile")
+  local model; model=$(harness_profile_model "$profile")
   local chain; chain=$(profile_get "$profile" fallback_chain 2>/dev/null)
   if [[ -n $chain ]]; then
     local hop; hop=$(harness_chain_metered_hop "$chain")
@@ -225,10 +271,17 @@ harness_register_rix() {
     for (( s = 1; s <= slots; s++ )); do
       label=$profile; (( slots > 1 )) && label="$profile-$s"
       if (( OAL_DRY_RUN )); then
-        say "[dry-run] would: $bin session add --project $p --worker rix --label $label --cwd $repo --cost-class $class --backend $backend"
+        say "[dry-run] would: $bin session add --project $p --worker rix --label $label --cwd $repo --cost-class $class --backend $backend --role $role --model $model --vendor $vendor"
       else
-        "$bin" session add --project "$p" --worker rix --label "$label" --cwd "$repo" --cost-class "$class" --backend "$backend" \
-          || { warn "harness session add failed for project $p ($label)"; rc=1; }
+        local sess_err
+        if ! sess_err=$("$bin" session add --project "$p" --worker rix --label "$label" --cwd "$repo" --cost-class "$class" --backend "$backend" \
+              --role "$role" --model "$model" --vendor "$vendor" 2>&1 >/dev/null); then
+          # The harness owns the IP table (policy.py): it, not this script, refuses an
+          # IP-unsafe vendor registering as orchestrator -- surface its stderr as-is
+          # rather than pre-judging the vendor list here.
+          warn "harness session add failed for project $p ($label): ${sess_err:-no output}"
+          rc=1
+        fi
       fi
     done
   done
@@ -244,6 +297,39 @@ harness_profile_for_label() {
   local base=${label%-*} suffix=${label##*-}
   if [[ $suffix =~ ^[0-9]+$ && $base != "$label" ]] && profile_exists "$base"; then printf '%s' "$base"; return 0; fi
   return 1
+}
+
+# harness_set_role PROFILE ROLE -- sets the profile's `harness_role` field
+# and, for every already-registered harness session whose label resolves
+# back to this profile (overview.json, worker=rix), runs `harness session
+# set --role` so a live registration picks the new role up immediately
+# (rather than only the next `harness register`).
+harness_set_role() {
+  local profile=$1 role=$2
+  profile_exists "$profile" || fail "harness role: no saved agent named '$profile'"
+  case "$role" in orchestrator|reasoning|coding|local) ;; *) fail "harness role: must be orchestrator, reasoning, coding, or local" ;; esac
+  profile_set "$profile" harness_role "$(jq -Rn --arg v "$role" '$v')"
+  local bin; bin=$(harness_bin 2>/dev/null) || { say "set $profile's harness role to $role (no harness CLI found to update live sessions)"; return 0; }
+  local rc=0 sess
+  while IFS= read -r sess; do
+    [[ -n $sess ]] || continue
+    local proj sid label resolved
+    proj=$(jq -r '.project // empty' <<<"$sess"); sid=$(jq -r '.id // empty' <<<"$sess"); label=$(jq -r '.label // empty' <<<"$sess")
+    [[ -n $proj && -n $sid && -n $label ]] || continue
+    resolved=$(harness_profile_for_label "$label") || continue
+    [[ $resolved == "$profile" ]] || continue
+    if (( OAL_DRY_RUN )); then
+      say "[dry-run] would: $bin session set --project $proj --session $sid --role $role"
+      continue
+    fi
+    local sess_err
+    if ! sess_err=$("$bin" session set --project "$proj" --session "$sid" --role "$role" 2>&1 >/dev/null); then
+      warn "harness session set --role failed for $label (project $proj): ${sess_err:-no output}"
+      rc=1
+    fi
+  done < <(jq -c '.sessions[]? | select(.worker == "rix")' <<<"$(harness_overview_json)")
+  say "set $profile's harness role to $role"
+  return "$rc"
 }
 
 # ------------------------------------------------------------------ money ----
@@ -439,14 +525,106 @@ harness_decline() {
   return "$rc"
 }
 
+# harness_extract_last_json FILE -> the LAST balanced top-level JSON object
+# found in FILE, printed to stdout (exit 1, nothing printed, when none
+# parses). A single forward scan tracks string state (with backslash-escape,
+# so a brace inside a quoted string is never mistaken for structure); a `{`
+# seen while not already inside a candidate opens one, and depth-tracking
+# (still string-aware) finds its matching top-level `}` -- nested braces
+# inside a successfully-closed candidate are never separately tried, so
+# `{"action":"SPLIT","children":[{"id":"P0.1"}]}` yields the whole object,
+# not the inner `{"id":"P0.1"}`. When a candidate never closes (or fails to
+# parse as a JSON object) the scan resumes one character past its opening
+# `{` rather than skipping its whole span, so a broken/unterminated object
+# earlier in the text cannot swallow a good one that follows it. Used to
+# pull an orchestration delegate's patch out of a reply that may carry prose
+# before and after the one JSON object it was asked for.
+harness_extract_last_json() {
+  local file=$1
+  [[ -f $file ]] || return 1
+  # LC_ALL=C: bash indexes ${text:i:1} by CHARACTER under a multibyte locale
+  # (real per-access work); the C locale makes it byte indexing, O(1) -- and
+  # grep's `-b` byte offsets only line up with bash's ${text:pos:1} slicing
+  # under a single-byte (C) locale in the first place.
+  local LC_ALL=C
+  local text; text=$(cat "$file" 2>/dev/null)
+  # Pass 1 (LIFO bracket matching, exactly like matching parentheses --
+  # string-aware, backslash-escaped quotes, so a brace inside a JSON string
+  # value is never mistaken for structure). A stray/broken `{` (prose, a
+  # code snippet's `function() {`) just sits on the stack forever unmatched;
+  # it can never block a LATER, properly balanced object from matching
+  # ITSELF via LIFO -- unlike a "restart the whole scan after every failed
+  # candidate" approach, which is O(n^2) on such input. `grep -abo` finds
+  # every `{`/`}`/`"` byte offset in one compiled-code pass, so the bash
+  # loop below visits only STRUCTURAL characters (the ones that matter) and
+  # not every byte of a run log that is mostly prose/code -- character-by-
+  # character bash arithmetic on tens of KB is itself slow enough to matter.
+  local -a stack=()
+  local pairs="" in_str=0 pos ch
+  while IFS=: read -r pos ch; do
+    [[ -n $pos ]] || continue
+    if [[ $ch == '"' ]]; then
+      if (( in_str )); then
+        local bs=0 p=$(( pos - 1 ))
+        while (( p >= 0 )) && [[ ${text:p:1} == '\' ]]; do (( bs++, p-- )); done
+        (( bs % 2 == 0 )) && in_str=0   # an odd run of backslashes escapes this quote
+      else
+        in_str=1
+      fi
+      continue
+    fi
+    (( in_str )) && continue   # a brace inside a string is not structure
+    if [[ $ch == '{' ]]; then
+      stack+=("$pos")
+    elif (( ${#stack[@]} > 0 )); then
+      pairs+="${stack[-1]}"$'\t'"$pos"$'\n'
+      unset 'stack[-1]'
+    fi
+  done < <(grep -abo '[{}"]' <<<"$text")
+  [[ -n $pairs ]] || return 1
+  # Pass 2: sort matched pairs by start position, then keep only the
+  # TOP-LEVEL ones (not nested inside another matched pair). Properly
+  # matched pairs never partially overlap, so "does this pair start after
+  # the previous top-level pair's end" finds every one of them in one O(k)
+  # sweep (k = number of matched pairs, generally tiny).
+  local -a top_ps=() top_pe=()
+  local cursor=-1 ps pe
+  while IFS=$'\t' read -r ps pe; do
+    [[ -n $ps ]] || continue
+    (( ps > cursor )) || continue
+    top_ps+=("$ps"); top_pe+=("$pe"); cursor=$pe
+  done < <(sort -t $'\t' -k1,1n <<<"$pairs")
+  # Pass 3: the LAST top-level candidate that actually parses as a JSON
+  # object wins -- checked newest-first, so the expected case (the reply
+  # ends with the one requested patch) costs exactly one jq call.
+  local k
+  for (( k = ${#top_ps[@]} - 1; k >= 0; k-- )); do
+    local candidate=${text:top_ps[k]:top_pe[k]-top_ps[k]+1}
+    if jq -e 'type == "object"' >/dev/null 2>&1 <<<"$candidate"; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # --------------------------------------------------------------- dispatch ----
 # One packet: cost-gate, claim, launch a DETACHED delegate (no --wait), write
 # a job file for the reaper. Never blocks: harness_dispatch_reap writes the
 # receipt once the worker actually finishes. Respects $HARNESS_SLOTS_LEFT
 # (set by harness_dispatch_once) so at most settings.json:harness_workers run
 # at once across the whole sweep.
-harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json>
-  local bin=$1 proj=$2 sid=$3 profile=$4 pkt=$5
+#
+# Orchestration packets (<node>.SPLIT.md / .PM.md / .COMPOSE.md, or an inbox
+# row carrying `command`) are claimed/dispatched exactly like a work packet
+# but ask the delegate for one patch JSON instead of oracle output, and the
+# reaper writes a `--command` receipt from the LAST balanced JSON object in
+# the reply (harness_extract_last_json) instead of the run's evidence tail.
+# The harness only ever assigns these to a session with tier=orchestrator,
+# but this is defensive: skip (never claim) one for a profile/session that
+# is not registered as orchestrator.
+harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> [<session-role>]
+  local bin=$1 proj=$2 sid=$3 profile=$4 pkt=$5 session_role=${6:-}
   local node path
   node=$(jq -r '.node // .id // empty' <<<"$pkt")
   path=$(jq -r '.path // empty' <<<"$pkt")
@@ -454,9 +632,29 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json>
   [[ $path == *.claimed ]] && return 0
   [[ -f $path ]] || return 0
   local ref="harness:$proj:$node"
-  local backend model
+  local command; command=$(jq -r '.command // empty' <<<"$pkt")
+  if [[ -z $command && $path =~ \.(SPLIT|PM|COMPOSE)\.md$ ]]; then command=${BASH_REMATCH[1]}; fi
+  if [[ -n $command ]]; then
+    local prof_role; prof_role=$(profile_get "$profile" harness_role 2>/dev/null)
+    if [[ $prof_role != orchestrator && $session_role != orchestrator ]]; then
+      # Dispatch sweeps every 3s (harness_dispatch_loop); without a dedup key an
+      # unclaimed orchestration packet would re-emit this note every sweep for as
+      # long as it sits there. Same one-line-per-key shape as requested.txt.
+      mkdir -p "$HARNESS_STATE_DIR"
+      local skipf="$HARNESS_STATE_DIR/orch_skipped.txt" skipkey="$proj:$node"
+      touch "$skipf"
+      if ! grep -qxF "$skipkey" "$skipf"; then
+        event_emit "$profile" note "harness: $node is an orchestration packet ($command) but $profile is not registered as orchestrator; skipping" \
+          --source harness --level warn --ref "$ref:skipped"
+        printf '%s\n' "$skipkey" >>"$skipf"
+      fi
+      return 0
+    fi
+  fi
+  local backend model vendor
   backend=$(profile_get "$profile" backend 2>/dev/null); [[ -n $backend ]] || backend=$(profile_get "$profile" provider 2>/dev/null)
   model=$(profile_get "$profile" model 2>/dev/null)
+  vendor=$(harness_profile_vendor "$profile")
   if [[ -z $backend ]]; then
     event_emit "$profile" note "harness: profile $profile has no backend; cannot dispatch $node" --source harness --level warn --ref "$ref:failed"
     return 0
@@ -498,7 +696,11 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json>
   local name="hns-$node"
   local content trailer
   content=$(cat "$claimed" 2>/dev/null)
-  trailer=$'\n\nWhen finished, print the oracle command output; do not edit files outside touches.'
+  if [[ -n $command ]]; then
+    trailer=$'\n\nDo not write the outbox receipt file yourself; reply with exactly one JSON object (the patch) and nothing else after it -- the launcher writes the receipt.'
+  else
+    trailer=$'\n\nWhen finished, print the oracle command output; do not edit files outside touches.'
+  fi
   local -a saved_opts=("${OPTS[@]}")
   OPTS=(--backend "$backend" --name "$name" --task-title "$node" --model "$model" --job-stdin)
   [[ $class == metered ]] && OPTS+=(--approved-usd "$estimate")   # the harness already approved this budget
@@ -528,7 +730,8 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json>
   jq -n --arg project "$proj" --arg node "$node" --arg session "$sid" --arg profile "$profile" \
         --arg name "$name" --arg slug "$slug" --arg backend "$backend" --arg model "$model" --arg bin "$bin" \
         --arg claimed "$claimed" --arg pid "$pid" --argjson started "$started" \
-        '{project:$project, node:$node, session:$session, profile:$profile, name:$name, slug:$slug, backend:$backend, model:$model, bin:$bin, claimed:$claimed, pid:$pid, started_at:$started}' \
+        --arg command "$command" --arg vendor "$vendor" \
+        '{project:$project, node:$node, session:$session, profile:$profile, name:$name, slug:$slug, backend:$backend, model:$model, bin:$bin, claimed:$claimed, pid:$pid, started_at:$started, command:$command, vendor:$vendor}' \
     >"$HARNESS_JOBS_DIR/$proj/$node.json"
   if [[ -n $pid ]]; then "$bin" session set --project "$proj" --session "$sid" --pid "$pid" >/dev/null 2>&1 || true
   else "$bin" heartbeat --project "$proj" --session "$sid" >/dev/null 2>&1 || true; fi
@@ -587,7 +790,7 @@ harness_dispatch_reap() {
   [[ -d $HARNESS_JOBS_DIR ]] || return 0
   local jf
   while IFS= read -r -d '' jf; do
-    local job proj node sid profile name backend model bin started slug
+    local job proj node sid profile name backend model bin started slug command vendor
     job=$(cat "$jf" 2>/dev/null) || { rm -f "$jf"; continue; }
     slug=$(jq -r '.slug // empty' <<<"$job")
     proj=$(jq -r '.project // empty' <<<"$job"); node=$(jq -r '.node // empty' <<<"$job")
@@ -595,6 +798,8 @@ harness_dispatch_reap() {
     name=$(jq -r '.name // empty' <<<"$job"); backend=$(jq -r '.backend // empty' <<<"$job")
     model=$(jq -r '.model // empty' <<<"$job"); bin=$(jq -r '.bin // empty' <<<"$job")
     started=$(jq -r '.started_at // 0' <<<"$job")
+    command=$(jq -r '.command // empty' <<<"$job"); vendor=$(jq -r '.vendor // empty' <<<"$job")
+    [[ -n $vendor ]] || vendor=$backend
     [[ -n $proj && -n $node && -n $name && -n $bin ]] || { rm -f "$jf"; continue; }
     local dir latest
     # the delegate's staged home is under the SLUG (cmd_delegate slugifies --name)
@@ -645,11 +850,50 @@ harness_dispatch_reap() {
     usd_actual=$(jq -r '.cost_usd // empty' <<<"$usage_row" 2>/dev/null)
     tok_in=$(jq -r '.prompt // empty' <<<"$usage_row" 2>/dev/null)
     tok_out=$(jq -r '.output // empty' <<<"$usage_row" 2>/dev/null)
-    local -a rargs=(receipt --project "$proj" --session "$sid" --node "$node" --status "$status" --evidence "$evidence" --model "$model" --vendor "$backend")
-    [[ -n $usd_actual && $usd_actual != null ]] && rargs+=(--usd "$usd_actual")
-    [[ -n $tok_in && $tok_in != null ]] && rargs+=(--tokens-in "$tok_in")
-    [[ -n $tok_out && $tok_out != null ]] && rargs+=(--tokens-out "$tok_out")
-    "$bin" "${rargs[@]}" >/dev/null 2>&1 || warn "harness receipt failed for $node ($status)"
+    if [[ -n $command ]]; then
+      # Orchestration packet: the CLI verb is --command SPLIT|PM|COMPOSE
+      # --patch-file F --status done|failed (no throttled, no --evidence) --
+      # pull the LAST balanced JSON object out of the delegate's reply and
+      # hand the harness that file; a delegate that never produced one (or
+      # did not finish successfully) fails the receipt with a --summary
+      # instead of guessing at a patch.
+      local rstatus="failed" summary="" patch_file=""
+      if [[ $status == done ]]; then
+        local rawlog; rawlog=$(mktemp "$HARNESS_JOBS_DIR/.extract.XXXXXX")
+        # The trailer told the delegate to reply with nothing after the patch, so
+        # the patch is near the end -- cap what we scan to the last 64KiB. A full
+        # unattended run log can be hundreds of KB, and harness_extract_last_json's
+        # per-candidate scan (needed to skip a broken/unterminated object) would
+        # otherwise cost real seconds here, holding up the whole reap sweep (and
+        # with it harness_dispatch_heartbeat, right after the 45s-stale bug 0.13 fixed).
+        printf '%s' "$out" | tail -c 65536 >"$rawlog"
+        local json
+        if json=$(harness_extract_last_json "$rawlog"); then
+          mkdir -p "$HARNESS_STATE_DIR/patches/$proj"
+          patch_file="$HARNESS_STATE_DIR/patches/$proj/$node.$command.patch.json"
+          printf '%s' "$json" >"$patch_file"
+          rstatus="done"
+        else
+          summary="no JSON object found in the delegate's reply"
+        fi
+        rm -f "$rawlog"
+      else
+        summary="delegate did not finish successfully ($status)"
+      fi
+      local -a cargs=(receipt --project "$proj" --session "$sid" --node "$node" --command "$command" --status "$rstatus" --model "$model" --vendor "$vendor")
+      [[ -n $patch_file ]] && cargs+=(--patch-file "$patch_file")
+      [[ -n $summary ]] && cargs+=(--summary "$summary")
+      [[ -n $usd_actual && $usd_actual != null ]] && cargs+=(--usd "$usd_actual")
+      [[ -n $tok_in && $tok_in != null ]] && cargs+=(--tokens-in "$tok_in")
+      [[ -n $tok_out && $tok_out != null ]] && cargs+=(--tokens-out "$tok_out")
+      "$bin" "${cargs[@]}" >/dev/null 2>&1 || warn "harness receipt (command) failed for $node ($rstatus)"
+    else
+      local -a rargs=(receipt --project "$proj" --session "$sid" --node "$node" --status "$status" --evidence "$evidence" --model "$model" --vendor "$backend")
+      [[ -n $usd_actual && $usd_actual != null ]] && rargs+=(--usd "$usd_actual")
+      [[ -n $tok_in && $tok_in != null ]] && rargs+=(--tokens-in "$tok_in")
+      [[ -n $tok_out && $tok_out != null ]] && rargs+=(--tokens-out "$tok_out")
+      "$bin" "${rargs[@]}" >/dev/null 2>&1 || warn "harness receipt failed for $node ($status)"
+    fi
     "$bin" session set --project "$proj" --session "$sid" --clear-pid >/dev/null 2>&1 || true
     harness_prune_requested_key "$proj" "$node"
     event_emit "$profile" note "harness: $node $status" --source harness --ref "harness:$proj:$node:$status"
@@ -678,10 +922,11 @@ harness_dispatch_once() {
   while IFS= read -r sess; do
     [[ -n $sess ]] || continue
     (( HARNESS_SLOTS_LEFT <= 0 )) && break
-    local proj sid label profile
+    local proj sid label profile sess_role
     proj=$(jq -r '.project // empty' <<<"$sess")
     sid=$(jq -r '.id // empty' <<<"$sess")
     label=$(jq -r '.label // empty' <<<"$sess")
+    sess_role=$(jq -r '.role // empty' <<<"$sess")
     [[ -n $proj && -n $sid && -n $label ]] || continue
     profile=$(harness_profile_for_label "$label") || continue
     # --json is a GLOBAL flag on the harness CLI, before the subcommand (older
@@ -695,7 +940,7 @@ harness_dispatch_once() {
     while IFS= read -r pkt; do
       [[ -n $pkt ]] || continue
       (( HARNESS_SLOTS_LEFT <= 0 )) && break
-      harness_dispatch_packet "$bin" "$proj" "$sid" "$profile" "$pkt"
+      harness_dispatch_packet "$bin" "$proj" "$sid" "$profile" "$pkt" "$sess_role"
     done < <(jq -c '.[]?' <<<"$inbox")
   done < <(jq -c '.sessions[]? | select(.worker == "rix")' <<<"$overview")
 }
@@ -733,12 +978,26 @@ harness_status_json() {
   [[ $pending == \[* ]] || pending='[]'
   local slots running; slots=$(settings_get harness_workers 4); [[ $slots =~ ^[0-9]+$ ]] || slots=4
   running=$(harness_jobs_running)
-  jq -nc --argjson alive "$alive" --arg url "$url" --arg data_dir "$ddir" --arg bin "$bin" \
+  # roles: every registered Rix session's role/tier/model/vendor/ip_safe (as
+  # the harness itself recorded them in overview.json, not re-derived here).
+  # orchestrator: per project, overview.json's own projects[].orchestrator
+  # (the session or router hop that would orchestrate right now), keyed by
+  # project id -- omitted for a project that doesn't carry one yet.
+  local roles; roles=$(jq -c '[.sessions[]? | select(.worker == "rix") | {
+    session: .id, project: .project, role: (.role // null), tier: (.tier // null),
+    model: (.model // null), vendor: (.vendor // null), ip_safe: (.ip_safe // null)
+  }]' <<<"$overview" 2>/dev/null)
+  [[ $roles == \[* ]] || roles='[]'
+  local orchestrator; orchestrator=$(jq -c '[.projects[]? | select(.orchestrator != null) | {key: .id, value: .orchestrator}] | from_entries' <<<"$overview" 2>/dev/null)
+  [[ $orchestrator == \{* ]] || orchestrator='{}'
+  jq -nc --argjson alive "$alive" --arg url "$url" --arg data_dir "$ddir" --arg bin "$bin" --arg overview_path "$ov" \
     --argjson serving_pid "${serving_pid:-null}" --argjson dispatch_pid "${dispatch_pid:-null}" \
     --argjson projects "$projects" --argjson pending_approvals "$pending" \
     --argjson jobs_running "$running" --argjson jobs_slots "$slots" \
-    '{alive:$alive, url:$url, data_dir:$data_dir, bin:$bin, serving_pid:$serving_pid, dispatch_pid:$dispatch_pid,
-      projects:$projects, pending_approvals:$pending_approvals, jobs:{running:$jobs_running, slots:$jobs_slots}}'
+    --argjson roles "$roles" --argjson orchestrator "$orchestrator" \
+    '{alive:$alive, url:$url, data_dir:$data_dir, bin:$bin, overview_path:$overview_path, serving_pid:$serving_pid, dispatch_pid:$dispatch_pid,
+      projects:$projects, pending_approvals:$pending_approvals, jobs:{running:$jobs_running, slots:$jobs_slots},
+      roles:$roles, orchestrator:$orchestrator}'
 }
 
 # harness_pending_approvals_json -> [{project, estimate_usd, model, vendor,

@@ -838,7 +838,12 @@ cmd_harness() {
       local profile=${CMD[2]:?"harness register needs a profile name"} repo=${CMD[3]:-}
       local slots; slots=$(opt_value --slots || echo 1)
       local project; project=$(opt_value --project || true)
-      harness_register_rix "$profile" "$repo" "$slots" "$project" ;;
+      local role; role=$(opt_value --role || true)
+      harness_register_rix "$profile" "$repo" "$slots" "$project" "$role" ;;
+    role)
+      local profile=${CMD[2]:?"harness role needs a profile name"}
+      local role=${CMD[3]:?"harness role needs a role (orchestrator|reasoning|coding|local)"}
+      harness_set_role "$profile" "$role" ;;
     dispatch)
       if opt_flag --once; then harness_dispatch_once; else harness_dispatch_loop; fi ;;
     approve)
@@ -860,7 +865,7 @@ cmd_harness() {
         [[ -n $proj && -n $sid ]] || continue
         "$bin" --json inbox --project "$proj" --session "$sid"
       done < <(jq -c --arg label "$profile" '.sessions[]? | select(.label == $label)' <<<"$(harness_overview_json)") ;;
-    *) fail "usage: omarchy-agent-launcher harness status|serve|stop|open|projects|register PROFILE [REPO] [--slots N] [--project ID]|dispatch [--once]|approve PROJECT USD [REASON] [--request ID]|decline PROJECT|inbox PROFILE   (register: --project ID skips the repo_path lookup and registers directly; approve/decline: human only, refused with OAL_AGENT set)" ;;
+    *) fail "usage: omarchy-agent-launcher harness status|serve|stop|open|projects|register PROFILE [REPO] [--slots N] [--project ID] [--role R]|role PROFILE ROLE|dispatch [--once]|approve PROJECT USD [REASON] [--request ID]|decline PROJECT|inbox PROFILE   (register: --project ID skips the repo_path lookup and registers directly, --role defaults to the profile's harness_role (else coding); role: orchestrator|reasoning|coding|local; approve/decline: human only, refused with OAL_AGENT set)" ;;
   esac
 }
 
