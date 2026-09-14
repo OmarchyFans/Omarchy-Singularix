@@ -345,7 +345,30 @@ Built on Omarchy 4.x with Hermes Agent installed locally.
 - ✅ The omarchy.fans cloud runtime against a fake of its API: sign-in, create, wait, wake, sleep, console ticket, destroy, sign-out.
 - ⚠️ Docker, the cloud runtime against the live API, and OpenClaw were written against their official docs and contracts but **not exercised end to end** on the development machine. Treat them as beta; issues and PRs welcome.
 
+### Updates
+
+About once every six hours, when the dashboard opens (and from the bar button
+on load), the plugin fetches this repository's `manifest.json` (one small HTTPS
+request, no personal data). If a newer version is out, a dot appears on the bar
+button and the dashboard shows a banner with what changed, from
+`CHANGELOG.md`. *Update…* opens a terminal that runs `omarchy plugin update`
+(it shows the diff and asks), then `install.sh` (asks again), then offers to
+restart the shell, which a keepLoaded panel needs. *Later* hides that version.
+`omarchy-agent-launcher settings set update_check false` turns the check off.
+By hand:
+
+```bash
+omarchy plugin update fans.omarchy.agent-launcher
+~/.config/omarchy/plugins/fans.omarchy.agent-launcher/install.sh
+omarchy restart shell
+```
+
+See [docs/update-alerts.md](docs/update-alerts.md) for how it is built.
+
 ### Security notes
+
+- The only network request the plugin makes on its own is the update check
+  above: this repository's `manifest.json` and `CHANGELOG.md`, read as data.
 
 - Nothing is downloaded and executed on your machine by this plugin.
 - API keys and cloud tokens live in `~/.config/omarchy-agent-launcher/secrets.env`

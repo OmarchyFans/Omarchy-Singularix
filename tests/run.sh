@@ -485,4 +485,22 @@ printf 'y\n' >"$OAL_ANSWERS"; "$L" remove prov >/dev/null; [[ ! -f $(profile_pat
 "$L" remove provoc --yes >/dev/null || tfail "remove --yes"; [[ ! -f $(profile_path provoc) ]] || tfail "remove --yes left profile"
 tail -n 1 "$S/events.jsonl" | grep -q '"kind":"removed"' || tfail "removed event"
 pass "manage commands"
+echo "== update: the update check against file:// fixtures (docs/update-alerts.md)"
+R="$T/raw"; mkdir -p "$R"
+export OMARCHY_PLUGIN_UPDATE_RAW="file://$R" XDG_CACHE_HOME="$T/cache"
+jq '.version = "9.9.9"' "$ROOT/manifest.json" >"$R/manifest.json"
+printf '# Changelog\n\n## 9.9.9\n\n- Newest thing\n\n## 9.9.8\n\n- Older thing\n\n## 0.1.0\n\n- Ancient\n' >"$R/CHANGELOG.md"
+out=$("$L" update-check 0.11.0) || tfail "update-check exited"
+[[ $(jq -r .latest <<<"$out") == 9.9.9 && $(jq -r .update_available <<<"$out") == true && $(jq -r '.notes|join(",")' <<<"$out") == "Newest thing,Older thing" ]] || tfail "update-check: $out"
+[[ $(jq -r .mismatch <<<"$out") == true ]] || tfail "older dashboard is a mismatch: $out"
+out=$("$L" update-check); [[ $(jq -r .mismatch <<<"$out") == false ]] || tfail "same version, no mismatch: $out"
+out=$(OMARCHY_PLUGIN_UPDATE_RAW=file:///nonexistent "$L" update-check); [[ $(jq -r .latest <<<"$out") == 9.9.9 ]] || tfail "offline answer from cache: $out"
+"$L" update-dismiss 9.9.9 || tfail "update-dismiss"
+[[ $("$L" update-check | jq -r .dismissed) == 9.9.9 ]] || tfail "dismissed not recorded"
+"$L" settings set update_check false >/dev/null
+out=$("$L" update-check --force); [[ $(jq -r .enabled <<<"$out") == false ]] || tfail "opt-out via settings: $out"
+"$L" settings set update_check true >/dev/null
+out=$(OMARCHY_PLUGIN_UPDATE_PRINT=1 "$L" update-run all); [[ $(jq -r '.argv[-1]' <<<"$out") == all && $(jq -r '.argv[0]' <<<"$out") == */omarchy-launch-tui ]] || tfail "update-run argv: $out"
+unset OMARCHY_PLUGIN_UPDATE_RAW
+pass "check, notes, cache, offline, dismiss, opt-out, run"
 echo "ALL TESTS PASSED"

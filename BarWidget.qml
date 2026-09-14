@@ -17,6 +17,32 @@ BarWidget {
   readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")) + "/omarchy-agent-launcher"
   property int blockerCount: 0
 
+  // updates: a dot when a newer version is published (docs/update-alerts.md).
+  // The dashboard shows the details; this only runs the cached check on load
+  // and every six hours so the dot appears without opening the dashboard.
+  property string version: ""
+  property var updateInfo: null
+  readonly property bool updatePending: !!updateInfo && ((updateInfo.update_available === true && updateInfo.dismissed !== updateInfo.latest) || updateInfo.mismatch === true)
+  FileView {
+    path: Qt.resolvedUrl("manifest.json").toString().replace(/^file:\/\//, "")
+    printErrors: false
+    onLoaded: {
+      try { root.version = String(JSON.parse(text()).version || "") } catch (e) { root.version = "" }
+      root.checkUpdates()
+    }
+  }
+  function checkUpdates() {
+    if (root.setting("update_check", true) === false || updateProc.running) return
+    updateProc.command = [root.launcher, "update-check", root.version]
+    updateProc.running = true
+  }
+  Process {
+    id: updateProc
+    stdout: StdioCollector { id: updateOut; waitForEnd: true }
+    onExited: function(code) { try { root.updateInfo = JSON.parse(String(updateOut.text || "")) } catch (e) { root.updateInfo = null } }
+  }
+  Timer { interval: 6 * 3600 * 1000; running: true; repeat: true; onTriggered: root.checkUpdates() }
+
   // The shell keeps the panel's open state; this widget only asks it to toggle.
   readonly property bool opened: false
   function open() { toggleDashboard() }
@@ -46,12 +72,20 @@ BarWidget {
     text: "󱚝"                    // nf-md-robot_happy
     slotSize: Style.bar.statusSlot
     fontSize: Style.font.caption
-    tooltipText: root.blockerCount > 0 ? (root.blockerCount + " agent" + (root.blockerCount === 1 ? "" : "s") + " need you · Agent Dashboard") : "Agent Dashboard (right click: switch agent)"
+    tooltipText: (root.blockerCount > 0 ? (root.blockerCount + " agent" + (root.blockerCount === 1 ? "" : "s") + " need you · Agent Dashboard") : "Agent Dashboard (right click: switch agent)")
+      + (root.updatePending ? " · update waiting" : "")
     onPressed: function(b) {
       if (b === Qt.RightButton) Quickshell.execDetached([root.launcher, "switch"])
       else root.toggleDashboard()
     }
 
+    Rectangle {
+      visible: root.updatePending && root.blockerCount === 0
+      anchors.top: parent.top; anchors.right: parent.right
+      anchors.topMargin: 1; anchors.rightMargin: 0
+      width: Style.space(6); height: Style.space(6); radius: height / 2
+      color: Color.accent
+    }
     Rectangle {
       visible: root.blockerCount > 0
       anchors.top: parent.top; anchors.right: parent.right
