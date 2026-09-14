@@ -98,8 +98,9 @@ turns the check off. Bar widgets also honour `"update_check": false` in their
 
 - Commits in Omarchy.Fans repos are authored `modpunk
   <27315771+modpunk@users.noreply.github.com>`, with no `Co-Authored-By` or
-  `Claude-Session` trailers. Merge PRs with `gh pr merge --rebase` so the
-  author survives.
+  `Claude-Session` trailers. Merge by fast-forward pushing the locally rebased
+  branch (`git push origin <branch>:main`); GitHub's merge, squash and rebase
+  buttons all stamp the account's primary email as author or committer.
 - Never copy into `~/.config/omarchy/plugins/<id>` on every commit: the shell
   hot-reloads on any file change and the desktop flashes. Deploy once per
   finished version, tell the user first, and restart the shell after deploying
