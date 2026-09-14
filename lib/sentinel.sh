@@ -82,6 +82,7 @@ cmd_sentinel() {
       sentinel_handled_set "$id" declined "" "$reason"
       event_emit "${OAL_AGENT:-$RIX_NAME}" note "Sentinel advisory $id declined: $reason" --task "Sentinel advisories" --key "sentinel-$id"
       say "$id → declined ($reason). To accept the risk in Sentinel too, the user runs: omarchy-rix-sentinel ack $id" ;;
+    plan) sentinel_plan "$id" "${CMD[@]:3}" ;;
     verify)
       [[ -n $id ]] || fail "usage: omarchy-agent-launcher sentinel verify ID"
       local f arena status
@@ -100,7 +101,7 @@ cmd_sentinel() {
         return 1
       fi ;;
     status) sentinel_status_json | jq . ;;
-    *) fail "usage: omarchy-agent-launcher sentinel [advisories [--all]|read ID|assign ID WORKER|decline ID \"reason\"|verify ID|status]" ;;
+    *) fail "usage: omarchy-agent-launcher sentinel [advisories [--all]|read ID|assign ID WORKER|decline ID \"reason\"|plan ID [--project ID] [--assign rix]|verify ID|status]" ;;
   esac
 }
 
