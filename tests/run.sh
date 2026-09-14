@@ -344,6 +344,9 @@ if command -v python3 >/dev/null && command -v curl >/dev/null; then
   [[ -n $(requests POST '/v1/tokens/self/revoke$') ]] || tfail "token not revoked through /tokens/self/revoke"
   [[ -z $(requests DELETE '/v1/tokens/') ]] || tfail "a CLI token must not call DELETE /tokens/:id"
   code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ofc_test_token_123" "$OFC_API_URL/me"); [[ $code == 401 ]] || tfail "revoked token still works ($code)"
+  # an already-revoked token gets 401: that counts as signed out, not as a failure
+  secret_set OFC_TOKEN ofc_test_token_123
+  out=$(cloud_logout 2>&1) && [[ $out == "signed out of Omarchy.Fans Cloud" ]] || tfail "logout with a dead token: $out"
   # an unreachable server: forget the token here, but say it was not revoked
   secret_set OFC_TOKEN ofc_unrevoked_example
   out=$(OFC_API_URL=http://127.0.0.1:9/v1 OFC_HTTP_TIMEOUT=3 cloud_logout 2>&1) || tfail "logout exit when offline"

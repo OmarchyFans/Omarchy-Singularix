@@ -129,7 +129,8 @@ cloud_logout() {
   local revoked=0
   if [[ -n $(cloud_token) ]]; then
     if (( OAL_DRY_RUN )); then say "[dry-run] would POST $OFC_API_URL/tokens/self/revoke"; return 0; fi
-    cloud_http POST /tokens/self/revoke && [[ $CLOUD_HTTP_CODE == 2?? ]] && revoked=1
+    # 401 means the token is already dead (revoked before, or expired): nothing left to revoke.
+    cloud_http POST /tokens/self/revoke && [[ $CLOUD_HTTP_CODE == 2?? || $CLOUD_HTTP_CODE == 401 ]] && revoked=1
   else
     revoked=1   # nothing to revoke
   fi
