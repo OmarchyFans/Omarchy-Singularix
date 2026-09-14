@@ -40,7 +40,15 @@ local_status_json() {
     props=$(local_props_json)
     n_ctx=$(jq -r '.default_generation_settings.n_ctx // 0' <<<"$props"); slots=$(jq -r '.total_slots // 1' <<<"$props")
     model=$(jq -r '.model_path // .default_generation_settings.model // ""' <<<"$props"); model=${model##*/}
-    (( slots > 0 )) && per=$(( n_ctx / slots )) || per=$n_ctx
+    # llama.cpp reports default_generation_settings.n_ctx PER SLOT (and /slots agrees), so
+    # do not divide again: with --parallel 2 --ctx-size 32768 each request still gets 16384.
+    # Older builds reported the total; detect that by comparing with /slots when available.
+    per=$n_ctx
+    if (( slots > 1 )); then
+      local slot_ctx
+      slot_ctx=$(curl -s -m 2 "$LOCAL_URL/slots" 2>/dev/null | jq -r '.[0].n_ctx // 0' 2>/dev/null || echo 0)
+      if (( slot_ctx > 0 )); then per=$slot_ctx; elif (( n_ctx > 0 )); then per=$(( n_ctx / slots )); fi
+    fi
   fi
   [[ -f $LOCAL_DROPIN ]] && tuned=true
   local_unit_active && active=true
