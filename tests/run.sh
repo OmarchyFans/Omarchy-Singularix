@@ -500,7 +500,7 @@ out=$(OMARCHY_PLUGIN_UPDATE_RAW=file:///nonexistent "$L" update-check); [[ $(jq 
 "$L" settings set update_check false >/dev/null
 out=$("$L" update-check --force); [[ $(jq -r .enabled <<<"$out") == false ]] || tfail "opt-out via settings: $out"
 "$L" settings set update_check true >/dev/null
-out=$(OMARCHY_PLUGIN_UPDATE_PRINT=1 "$L" update-run all); [[ $(jq -r '.argv[-1]' <<<"$out") == all && $(jq -r '.argv[0]' <<<"$out") == */omarchy-launch-tui ]] || tfail "update-run argv: $out"
+out=$(OMARCHY_PLUGIN_UPDATE_PRINT=1 "$L" update-run all); [[ $(jq -r '.argv[-1]' <<<"$out") == all && $(jq -r '.argv[0]' <<<"$out") == *omarchy-launch-tui ]] || tfail "update-run argv: $out"
 unset OMARCHY_PLUGIN_UPDATE_RAW
 pass "check, notes, cache, offline, dismiss, opt-out, run"
 echo "ALL TESTS PASSED"
