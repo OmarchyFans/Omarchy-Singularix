@@ -635,7 +635,10 @@ FAKE2
     local job; job=$(cat)
     printf 'backend=%s name=%s model=%s\n' "$backend" "$name" "$model" >>"$DELEGATE_LOG"
     if grep -q STILL_RUNNING_MARKER <<<"$job"; then return 0; fi   # no run log yet: reaper must skip it
-    local rundir; rundir="$(stage_dir "$name")/runs"; mkdir -p "$rundir"
+    # cmd_delegate slugifies --name for the staged home; a fake that staged under
+    # the raw $name masked a real bug (harness_dispatch_reap looking for the log
+    # under the slugified name, e.g. "hns-p0-2-1" for "hns-P0.2.1").
+    local rundir; rundir="$(stage_dir "$(slugify "$name")")/runs"; mkdir -p "$rundir"
     local code=0 body
     if grep -q RATE_LIMIT_MARKER <<<"$job"; then body="429 too many requests, please slow down"; code=1
     elif grep -q FAIL_MARKER <<<"$job"; then body="boom: something broke"; code=1
@@ -1007,6 +1010,47 @@ JSON
   grep -q -- "--cwd $REPO5" "$SESSADD" || { cat "$SESSADD"; tfail "register --project (no repo): --cwd must come from harness --json ls's repo_path"; }
   rm -f "$(profile_path rix)"
   pass "harness_register_rix: --project with no repo resolves --cwd from harness --json ls"
+
+  # ---- reap: a dotted/uppercase node name stages its run log under the SLUGIFIED
+  #      name (cmd_delegate slugifies --name); the reaper must look there too -------
+  : >"$DELEGATE_LOG"; : >"$RECEIPTS"
+  PKT_J3="$HD/pkt-j3.md"; printf 'j3 body\n' >"$PKT_J3"
+  printf '[{"node":"P0.2.1","path":"%s"}]' "$PKT_J3" >"$HD/inbox/p-j3.json"
+  jq -n --arg t "$(date -Is)" '{
+    projects: [ {id:"p-j3", repo_path:"/tmp/proj-j3"} ],
+    sessions: [ {id:"s-j3", project:"p-j3", worker:"rix", label:"hns-free"} ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+  harness_dispatch_once || true
+  JF3="$HARNESS_JOBS_DIR/p-j3/P0.2.1.json"
+  [[ -f $JF3 ]] || tfail "j3 (dotted node name) job file must exist after dispatch"
+  slug3=$(jq -r '.slug' "$JF3")
+  [[ $slug3 == hns-p0-2-1 ]] || tfail "job file slug must be the slugified name, got $slug3"
+  [[ -d $(stage_dir "$slug3")/runs ]] || tfail "the fake delegate must stage its run log under the slugified name"
+  harness_dispatch_reap
+  grep -q "node=P0.2.1 status=done" "$RECEIPTS" || { cat "$RECEIPTS"; tfail "reap must find the run log staged under the slugified name"; }
+  [[ ! -f $JF3 ]] || tfail "job file must be removed after reap"
+  pass "harness_dispatch_reap: finds a dotted/uppercase node's run log via the slugified stage dir"
+
+  # ---- reap: a job file with no `slug` field (an older job) must still find the
+  #      run log by deriving slugify(name) --------------------------------------------
+  : >"$RECEIPTS"
+  PKT_J4="$HD/pkt-j4.md"; printf 'j4 body\n' >"$PKT_J4"
+  printf '[{"node":"P0.2.2","path":"%s"}]' "$PKT_J4" >"$HD/inbox/p-j4.json"
+  jq -n --arg t "$(date -Is)" '{
+    projects: [ {id:"p-j4", repo_path:"/tmp/proj-j4"} ],
+    sessions: [ {id:"s-j4", project:"p-j4", worker:"rix", label:"hns-free"} ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+  harness_dispatch_once || true
+  JF4="$HARNESS_JOBS_DIR/p-j4/P0.2.2.json"
+  [[ -f $JF4 ]] || tfail "j4 job file must exist after dispatch"
+  jq 'del(.slug)' "$JF4" >"$JF4.tmp" && mv -f "$JF4.tmp" "$JF4"   # simulate an older job file with no slug field
+  jq -e '.slug == null' "$JF4" >/dev/null || tfail "setup: job file must have no slug field"
+  harness_dispatch_reap
+  grep -q "node=P0.2.2 status=done" "$RECEIPTS" || { cat "$RECEIPTS"; tfail "reap must derive slugify(name) when the job file has no slug field"; }
+  [[ ! -f $JF4 ]] || tfail "job file must be removed after reap"
+  pass "harness_dispatch_reap: a job file with no slug field still finds the run log via slugify(name)"
   exit 0
 ) || exit 1
 
