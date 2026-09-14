@@ -3,6 +3,13 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.15.0
+
+- Plan and Projects are now one tab, "Projects": a selectable project list (progress, status, orchestrator, concurrency, kanban phase) sits above the Gantt; picking a row filters the board.
+- Model labels read `local-<name>` / `online-<name>` everywhere (dropdowns, bars, sessions lane, inspector) instead of a local model's raw `.gguf` file path.
+- The model and agent filters now match `done` tasks too, so picking a specific model/agent no longer empties the board; a note explains a genuine no-match.
+- The update terminal forces a pager-free `git diff` and tells you up front to press `q` if it still pauses, so it never strands you at a silent `(END)`.
+
 ## 0.14.1
 
 - `harness register`: a label already registered on the project is resynced (role, tier, model, vendor, cost class), never re-added as `<label>-2` (seen live: `rix-1-2`, `rix-2-2`).

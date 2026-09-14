@@ -201,7 +201,7 @@ profile registers as a harness worker session (`worker: rix`) on whatever backen
 chose (local GPU, browser sign-in, or an API key); the launcher's own dispatch loop picks up its
 inbox packets and launches each as a **detached** `delegate` job (no blocking), then a reaper
 writes the real outbox receipt — including the worker's actual cost — once it finishes. The
-dashboard's **Plan** tab renders the same picture as a Gantt (`FileView` on the harness's
+dashboard's **Projects** tab (Project Management) renders the same picture as a Gantt (`FileView` on the harness's
 `overview.json` plus a `tail -F` on `events.jsonl` for animation deltas — no network from QML),
 with a badge for any pending approval; "Open full Gantt" opens the browser UI.
 

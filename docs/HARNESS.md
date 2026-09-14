@@ -1,4 +1,4 @@
-# Rix × session-harness — one orchestrator surface (0.14.1)
+# Rix × session-harness — one orchestrator surface (0.15.0)
 
 The Agent Launcher (Rix) and the session-harness (`~/Work/session-harness`, CLI
 `harness`, API on `127.0.0.1:7744`) become one surface. Wave 5b (adversarial review of the
@@ -25,10 +25,12 @@ the harness repo for the authoritative contract this file summarizes for the lau
   anything is `done`. While the job runs the dispatcher keeps the session alive (pid or a
   heartbeat every sweep) — see "Worker liveness protocol" below; without it the harness
   marks the session `stale` at `workers.stale_after_sec` (45s) into a job that runs minutes.
-- **The dashboard shows the Gantt**: a `plan` tab renders every project's task queue from
-  the harness's `overview.json`, filterable per project / per agent / per state, animated
-  as the scheduler assigns and completes work, with the task queue, the sessions lane and a
-  cost/approval banner. "Open full Gantt" opens the browser UI.
+- **The dashboard shows the Gantt**: the Projects tab (0.15.0: the former Plan and Projects
+  tabs folded into one, still `dash.tab === "plan"` internally) renders every project's task
+  queue from the harness's `overview.json`, filterable per project / per agent / per role /
+  per model / per state, animated as the scheduler assigns and completes work, with a
+  top project list (progress, status, orchestrator, concurrency), the task queue, the
+  sessions lane and a cost/approval banner. "Open full Gantt" opens the browser UI.
 - **No surprise expenditure**: subscriptions first; a metered backend never starts work
   without an approved budget; the dashboard shows the pending request with the estimate and
   Approve/Decline; Rix must say the price and get a yes. A metered `delegate`/`rix ask`/
@@ -141,7 +143,7 @@ a belt-and-braces default, not something it actually needs to fall back to.
 ## Data flow (no network from QML — FileView/Process only)
 
 ```text
-harness serve --all  ──writes──►  ~/.session-harness/overview.json   ◄── FileView (plan tab)
+harness serve --all  ──writes──►  ~/.session-harness/overview.json   ◄── FileView (Projects tab)
                      ──appends─►  ~/.session-harness/events.jsonl    ◄── tail -F (animation deltas)
                      ──writes──►  <repo>/.harness/inbox/<sid>/<node>.md
 omarchy-agent-launcher harness dispatch  (loop; started by `harness serve` wrapper)
@@ -156,7 +158,7 @@ omarchy-agent-launcher harness approve <project> <usd> [--request ID]
          itself only checks by == "human")
 ```
 
-`status --json` stays network-free: the plan tab never calls the API; the CLI subcommands
+`status --json` stays network-free: the Projects tab never calls the API; the CLI subcommands
 do (curl to 127.0.0.1 with `X-Harness: 1`) and the harness binary does.
 
 ## lib/harness.sh (bash) — public functions
@@ -212,7 +214,7 @@ CLI: `omarchy-agent-launcher harness status|serve|stop|open|projects|register PR
 [REASON] [--request ID]|decline PROJECT|inbox PROFILE|assign PROJECT NODE [--session SID]` —
 `approve`/`decline` are refused outright when `$OAL_AGENT` is set (an agent's own shell must never
 fund or reject its own spending). `role` accepts `orchestrator|reasoning|coding|local`. `assign`
-(the Plan tab's "Assign to Rix" button, and the Rix skill's own `harness assign`) defaults
+(the Projects tab's "Assign to Rix" button, and the Rix skill's own `harness assign`) defaults
 `--session` to the first idle `rix` session on the project when omitted — the harness itself
 refuses an ineligible one.
 `harness serve` is also started by `rix chat`/`rix open` when `settings.json:harness_autostart` is true.
@@ -280,7 +282,7 @@ dashboard) themselves. Rules: "The harness decides done, never you. Before handi
 any metered backend, or when the plan shows a pending approval, say the estimate in USD and
 ask the user to approve it — you can never approve it yourself." `rix_job` gains a step:
 "check `omarchy-agent-launcher harness status`; if a pending approval exists, tell the user
-the price and ask; if the plan tab shows failed/blocked nodes, propose the next action".
+the price and ask; if the Projects tab shows failed/blocked nodes, propose the next action".
 
 **0.14.0 — `## Harness — pick up any task fresh`**: every session is stateless between
 packets, so the first command on ANY packet is `harness brief --project ID --session
@@ -296,19 +298,34 @@ launcher's dispatcher extracts it and writes the `--command` receipt; do not wri
 outbox file or run `receipt` by hand. Also lists `harness policy show`, `harness project set
 --role/--ip-class`, `harness assign`.
 
-## components/PlanTab.qml (the Gantt)
+## components/PlanTab.qml (the Projects tab: project list + Gantt)
+
+0.15.0 folded the standalone Projects tab into this one (still `dash.tab === "plan"`
+internally, `planTabRef`; the nav button reads "Projects", icon 󰙅, key `2`, header hint
+"Project Management" via `PanelHero.detail`). `open(payload)`'s old `"tab": "projects"`
+still works — it redirects to `"plan"`.
 
 - Data: `FileView { path: harness_data_dir/overview.json; watchChanges: true }` (path from
   `status --json`.harness.overview_path, injected server-side without network) + `Process
-  tail -F events.jsonl` for deltas. Fallback text when the harness is not running with a
-  "Start harness" button (`act(["harness","serve"])`).
-- Layout (dark, dense, same tokens as the other tabs): header row = project filter
-  (All + each project), agent filter (All + each session label / worker), state chips
-  (ready/running/blocked/done/failed), residual + spent/approved USD, "Open full Gantt".
-  Body = rows grouped by project: one row per unfinished edge from `queue` (sorted
-  critical-first), bar x/width from `es`/`ef` scaled to the widest project finish, bar
-  colour by state (reuse the harness palette), assignee label inside, critical outline, ⚠
-  for done-without-evidence. `Behavior on x/width { NumberAnimation 350ms }`,
+  tail -F events.jsonl` for deltas + `status --json`'s own `projects` array (the launcher's
+  sqlite/kanban rollups, folded into the harness project rows sharing a title). Fallback
+  text when the harness is not running with a "Start harness" button
+  (`act(["harness","serve"])`).
+- Layout (dark, dense, same tokens as the other tabs). Top: the project list, one row per
+  project (harness rows and kanban-only rows together) — name, kanban/orchestrator/
+  concurrency secondary line, status, progress bar. Clicking a row (or activating it with
+  the keyboard cursor) sets `projectFilter` to that project id, and again to clear it; a ▸
+  marks the row currently filtering the board. Below that: the project filter dropdown
+  (All + each project), agent filter (All + each session label / worker), role and model
+  filters (model labels are `local-<name>`/`online-<name>`, never a raw `.gguf` path —
+  see `modelLabel()`), state chips (ready/running/blocked/done/failed), a "0 of N tasks
+  match" note when the model/agent filter is the reason the board looks empty, residual +
+  spent/approved USD, "Open full Gantt". Body = rows grouped by project: one row per
+  unfinished-or-done edge from `queue` (sorted critical-first; a `done` row carries its
+  `performed_by` — model/vendor/session — so the model/agent filters still find it), bar
+  x/width from `es`/`ef` scaled to the widest project finish, bar colour by state (reuse
+  the harness palette), assignee label inside, critical outline, ⚠ for
+  done-without-evidence. `Behavior on x/width { NumberAnimation 350ms }`,
   `Behavior on color { ColorAnimation }`, a pulse on the live end of running bars, and a
   short glow on the row when an `assign`/`done` event arrives. Sessions lane at the
   bottom: one chip per session (worker, label, state incl. throttled, cost class, node).
@@ -316,6 +333,9 @@ outbox file or run `receipt` by hand. Also lists `harness policy show`, `harness
   Approve (`act(["harness","approve",project,usd])`) / Decline.
 - Row click → inspector strip (title, oracle, blockers, assignee) + "Assign to Rix"
   (`act(["harness","assign",…])` via the CLI) — no network from QML.
+- `flatRows` (the keyboard cursor's `rowCount`/`activate(i)` order) is the project rows
+  followed by the task rows, so j/k or the arrow keys walk the project list first, then
+  the Gantt — one cursor, no separate focus zone.
 
 ## Tests / release
 

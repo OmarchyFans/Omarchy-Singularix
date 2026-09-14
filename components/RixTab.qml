@@ -39,14 +39,24 @@ Item {
   // ---- roles/model policy (Wave 6, CONTRACTS.md §17.5-17.7) -----------------
   // Same rule as PlanTab.shortModel: strip a "vendor:" hop prefix, a folded-in
   // "claude-" vendor prefix, and a trailing date suffix.
-  function shortModel(m) {
+  // Same rule as PlanTab.modelLabel: "local-<name>" / "online-<name>", vendor decisive,
+  // a path or .gguf id counts as local when no vendor is known; no raw file paths.
+  function shortModel(m, vendor) {
     var s = String(m || "").trim()
     if (s === "") return ""
-    var colon = s.indexOf(":")
-    if (colon >= 0) s = s.slice(colon + 1)
-    s = s.replace(/^claude-/, "")
-    s = s.replace(/-\d{4}-?\d{2}-?\d{2}$/, "")
-    return s
+    var v = String(vendor || "")
+    var local = v !== "" ? (v === "local") : (s.indexOf("/") >= 0 || /\.gguf$/i.test(s))
+    var slash = s.lastIndexOf("/")
+    if (slash >= 0) s = s.slice(slash + 1)
+    s = s.replace(/\.gguf$/i, "")
+    s = s.replace(/-[Qq]\d[A-Za-z0-9_]*$/, "")
+    if (!local) {
+      var colon = s.indexOf(":")
+      if (colon >= 0) s = s.slice(colon + 1)
+      s = s.replace(/^claude-/, "")
+      s = s.replace(/-\d{4}-?\d{2}-?\d{2}$/, "")
+    }
+    return (local ? "local-" : "online-") + s
   }
   // The effective orchestrator right now: a named session (deduped by label
   // when every project shares one) or a router hop. "" when no project names
@@ -58,7 +68,7 @@ Item {
       var s = null
       for (var i = 0; i < tab.harnessSessions.length; i++) if (String(tab.harnessSessions[i].id) === sid) { s = tab.harnessSessions[i]; break }
       var label = s ? (s.label || s.id) : sid
-      return "session " + label + (o.model ? " (" + tab.shortModel(o.model) + ")" : "")
+      return "session " + label + (o.model ? " (" + tab.shortModel(o.model, o.vendor) + ")" : "")
     }
     if (o.kind === "router") return "router → " + (o.hop || o.model || "?")
     return ""
@@ -111,7 +121,7 @@ Item {
       var bits = [s.label || s.worker || s.id || "?"]
       if (s.role) bits.push(String(s.role))
       if (s.tier) bits.push(String(s.tier))
-      var m = tab.shortModel(s.model); if (m !== "") bits.push(m)
+      var m = tab.shortModel(s.model, s.vendor); if (m !== "") bits.push(m)
       bits.push(tab.harnessCostClassTag(s.cost_class))
       if (s.state) bits.push(String(s.state))
       // "SPLIT P0.6" while this session carries an outstanding orchestration

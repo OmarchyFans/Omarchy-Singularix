@@ -44,7 +44,11 @@ what *Update* will do. Two buttons:
   and asks), then the plugin's `install.sh` if it has one (asks again), then the
   plugin's own post-update step, then offers `omarchy restart shell` when the
   plugin has a keepLoaded panel. If the plugin folder has no `.git` (a hand
-  copy) it prints the reinstall steps instead.
+  copy) it prints the reinstall steps instead. The helper forces
+  `GIT_PAGER=cat PAGER=cat DELTA_PAGER=cat` around that diff and tells the user
+  up front to press `q` if it pauses at `(END)`, since without `delta`
+  installed the stock command pipes the diff through `less` with no hint that
+  it's waiting for a keypress.
 - **Later** records the dismissed version, so that version is never offered
   again. The next version is.
 
