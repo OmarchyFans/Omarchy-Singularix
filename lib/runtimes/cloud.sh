@@ -122,11 +122,24 @@ cloud_login() {
   fail "timed out waiting for the sign-in approval"
 }
 
+# A CLI token may revoke only itself (minting and revoking other tokens needs a
+# browser session). If the server cannot be told, the token is still forgotten
+# here, and the user is told to revoke it in the browser.
 cloud_logout() {
-  local id; id=$(secret_get OFC_TOKEN_ID)
-  if [[ -n $(cloud_token) && -n $id ]] && ! (( OAL_DRY_RUN )); then cloud_api DELETE "/tokens/$id" >/dev/null 2>&1 || true; fi
+  local revoked=0
+  if [[ -n $(cloud_token) ]]; then
+    if (( OAL_DRY_RUN )); then say "[dry-run] would POST $OFC_API_URL/tokens/self/revoke"; return 0; fi
+    cloud_http POST /tokens/self/revoke && [[ $CLOUD_HTTP_CODE == 2?? ]] && revoked=1
+  else
+    revoked=1   # nothing to revoke
+  fi
   cloud_secret_unset OFC_TOKEN; cloud_secret_unset OFC_TOKEN_ID; cloud_secret_unset OFC_ORG
-  say "signed out of Omarchy.Fans Cloud"
+  if (( revoked )); then
+    say "signed out of Omarchy.Fans Cloud"
+  else
+    say "signed out on this computer"
+    warn "the server did not confirm the token was revoked (HTTP $CLOUD_HTTP_CODE); revoke it under Tokens at https://omarchy.fans/app"
+  fi
 }
 cloud_secret_unset() { # remove one VAR from secrets.env (common.sh has set/get only)
   [[ -n ${OAL_SECRETS:-} && -f $OAL_SECRETS ]] || return 0
