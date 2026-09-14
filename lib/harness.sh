@@ -597,7 +597,8 @@ harness_dispatch_reap() {
     started=$(jq -r '.started_at // 0' <<<"$job")
     [[ -n $proj && -n $node && -n $name && -n $bin ]] || { rm -f "$jf"; continue; }
     local dir latest
-    dir="$(stage_dir "$name")/runs"
+    # the delegate's staged home is under the SLUG (cmd_delegate slugifies --name)
+    dir="$(stage_dir "${slug:-$(slugify "$name")}")/runs"
     latest=$(ls -1t "$dir"/*.log 2>/dev/null | head -n1)
     if [[ -z $latest ]]; then continue; fi   # still running: no log yet
 
@@ -640,7 +641,7 @@ harness_dispatch_reap() {
     fi
     local evidence; evidence=$(tail -n 40 <<<"$out")
     local usage_row usd_actual tok_in tok_out
-    usage_row=$(declare -F usage_json >/dev/null && usage_json | jq -c --arg n "$name" '.agents[]? | select(.name == $n)' 2>/dev/null)
+    usage_row=$(declare -F usage_json >/dev/null && usage_json | jq -c --arg n "${slug:-$name}" '.agents[]? | select(.name == $n)' 2>/dev/null)
     usd_actual=$(jq -r '.cost_usd // empty' <<<"$usage_row" 2>/dev/null)
     tok_in=$(jq -r '.prompt // empty' <<<"$usage_row" 2>/dev/null)
     tok_out=$(jq -r '.output // empty' <<<"$usage_row" 2>/dev/null)
