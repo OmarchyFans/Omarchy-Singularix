@@ -7,15 +7,17 @@ import qs.Ui
 import "components"
 
 // Agent Dashboard: a persistent window (a normal toplevel, not a popup) with
-// six pages: Rix (the chief of staff: brief, ask, backends, tokens and
-// USD per task), Agents (status, switch to chat), New agent (the setup form),
-// Events (sortable, filterable log), Notifications (open blockers), Projects
-// (per-project waterfall phase, progress, and blockers at a glance).
+// seven pages: Rix (the chief of staff: brief, ask, backends, tokens and
+// USD per task), Plan (the session-harness Gantt: per-project task queue,
+// sessions lane, cost/approval banner), Agents (status, switch to chat),
+// New agent (the setup form), Events (sortable, filterable log),
+// Notifications (open blockers), Projects (per-project waterfall phase,
+// progress, and blockers at a glance).
 //
 // Host contract (kind "panel", keepLoaded): the shell injects `shell` and
 // `manifest`, calls open(payloadJson) / close(), reads `opened`; we call
 // shell.hide(id) when the user closes the window (same plumbing as the
-// first-party dev gallery). Payload: {"tab": "rix|agents|new|events|notifications|projects",
+// first-party dev gallery). Payload: {"tab": "rix|plan|agents|new|events|notifications|projects",
 // "agent": "<name>"}.
 //
 // Data: `omarchy-agent-launcher status --json` (on open, every 30 s while
@@ -55,6 +57,7 @@ Item {
   readonly property int blockerCount: Object.keys(blockers).length
   readonly property int runningCount: status ? status.agents.filter(function(a) { return a.running }).length : 0
   readonly property int agentCount: status ? status.agents.length : 0
+  readonly property int planApprovalCount: status && status.harness && status.harness.pending_approvals ? status.harness.pending_approvals.length : 0
 
   // updates: what `update-check` reported for this window's version (docs/update-alerts.md)
   property string fileVersion: ""
@@ -69,7 +72,7 @@ Item {
   property string updateHiddenKey: ""
   readonly property bool updateBannerShown: updateKey !== "" && updateKey !== updateHiddenKey
 
-  readonly property var currentTab: tab === "rix" ? rixTab : (tab === "new" ? setupForm : (tab === "events" ? eventsTab : (tab === "notifications" ? notifTab : (tab === "projects" ? projectsTab : agentsTab))))
+  readonly property var currentTab: tab === "rix" ? rixTab : (tab === "plan" ? planTab : (tab === "new" ? setupForm : (tab === "events" ? eventsTab : (tab === "notifications" ? notifTab : (tab === "projects" ? projectsTab : agentsTab)))))
   readonly property var usage: status && status.usage ? status.usage : null
   readonly property real totalCost: usage ? usage.totals.cost_usd : 0
 
@@ -95,7 +98,7 @@ Item {
       try { var p = JSON.parse(String(payloadJson)); if (p && typeof p.tab === "string") wanted = p.tab; if (p && typeof p.agent === "string") agent = p.agent } catch (e) {}
     }
     if (wanted === "jarvis") wanted = "rix"   // pre-0.9 name of the chief of staff's page
-    if (["rix", "agents", "new", "events", "notifications", "projects"].indexOf(wanted) >= 0) tab = wanted
+    if (["rix", "plan", "agents", "new", "events", "notifications", "projects"].indexOf(wanted) >= 0) tab = wanted
     if (agent !== "") requestedAgent = agent
     window.visible = true
     refreshStatus()
@@ -261,17 +264,18 @@ Item {
         onActivateRequested: if (dash.cursorActive && dash.currentTab && typeof dash.currentTab.activate === "function") dash.currentTab.activate(dash.selectedIndex)
         onReturnRequested: if (dash.cursorActive && dash.currentTab && typeof dash.currentTab.activate === "function") dash.currentTab.activate(dash.selectedIndex)
         onTabRequested: function(direction) {
-          var order = ["rix", "agents", "new", "events", "notifications", "projects"]
+          var order = ["rix", "plan", "agents", "new", "events", "notifications", "projects"]
           var i = (order.indexOf(dash.tab) + (direction < 0 ? -1 : 1) + order.length) % order.length
           dash.selectTab(order[i])
         }
         onTextKey: function(t) {
           if (t === "1") dash.selectTab("rix")
-          else if (t === "2") dash.selectTab("agents")
-          else if (t === "3") dash.selectTab("new")
-          else if (t === "4") dash.selectTab("events")
-          else if (t === "5") dash.selectTab("notifications")
-          else if (t === "6") dash.selectTab("projects")
+          else if (t === "2") dash.selectTab("plan")
+          else if (t === "3") dash.selectTab("agents")
+          else if (t === "4") dash.selectTab("new")
+          else if (t === "5") dash.selectTab("events")
+          else if (t === "6") dash.selectTab("notifications")
+          else if (t === "7") dash.selectTab("projects")
           else if (t === "r" || t === "R") dash.refreshStatus()
           else if (t === "n" || t === "N") dash.selectTab("new")
         }
@@ -381,6 +385,7 @@ Item {
                 }
               }
               NavButton { tabId: "rix"; iconText: "󰚩"; text: "Rix" }
+              NavButton { tabId: "plan"; iconText: "▤"; text: "Plan"; badge: dash.planApprovalCount; badgeColor: dash.urgent }
               NavButton { tabId: "agents"; iconText: "󰙨"; text: "Agents"; badge: dash.runningCount; badgeColor: dash.okColor }
               NavButton { tabId: "new"; iconText: ""; text: "New agent" }
               NavButton { tabId: "events"; iconText: "󰈙"; text: "Events" }
@@ -402,7 +407,7 @@ Item {
               Item { width: 1; height: Style.space(16) }
               Text {
                 width: parent.width; wrapMode: Text.Wrap
-                text: "1-6 pages · j/k move · Enter chat · r refresh · Esc close"
+                text: "1-7 pages · j/k move · Enter chat · r refresh · Esc close"
                 color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
               }
             }
@@ -415,6 +420,7 @@ Item {
             height: parent.height
 
             RixTab { id: rixTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "rix"; dash: dash }
+            PlanTab { id: planTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "plan"; dash: dash }
             AgentsTab { id: agentsTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "agents"; dash: dash }
             SetupForm {
               id: setupForm; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "new"; dash: dash
