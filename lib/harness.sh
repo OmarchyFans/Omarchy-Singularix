@@ -175,12 +175,17 @@ harness_cost_class_reason() {
   fi
 }
 
-# harness_register_rix PROFILE [REPO] [SLOTS] -- one `harness session add`
-# per project in overview.json whose repo_path is REPO (default: $PWD), per
-# slot 1..SLOTS (default 1): SLOTS>1 registers "<profile>-1".."<profile>-N"
-# so one launcher profile can be N parallel harness workers.
+# harness_register_rix PROFILE [REPO] [SLOTS] [PROJECT_ID] -- one `harness
+# session add` per project whose repo_path resolves (realpath) to REPO
+# (default: $PWD), per slot 1..SLOTS (default 1): SLOTS>1 registers
+# "<profile>-1".."<profile>-N" so one launcher profile can be N parallel
+# harness workers. When PROJECT_ID is given, the repo_path lookup is skipped
+# entirely and that one project id is registered against directly (REPO is
+# still used as --cwd, defaulting to $PWD) -- for harness builds/projects
+# whose overview.json doesn't carry repo_path yet, or a repo living outside
+# any project's declared path.
 harness_register_rix() {
-  local profile=$1 repo=${2:-$PWD} slots=${3:-1}
+  local profile=$1 repo=${2:-$PWD} slots=${3:-1} project_id=${4:-}
   [[ $slots =~ ^[0-9]+$ && $slots -ge 1 ]] || slots=1
   profile_exists "$profile" || fail "harness register: no saved agent named '$profile'"
   local bin; bin=$(harness_bin) || return 1
@@ -193,10 +198,20 @@ harness_register_rix() {
     [[ -n $hop ]] && warn "harness register: $profile's fallback chain '$chain' can hop to $hop (api-key) -- registering as metered"
   fi
   local -a projects=()
-  mapfile -t projects < <(jq -r --arg repo "$repo" '.projects[]? | select(.repo_path == $repo) | .id' <<<"$(harness_overview_json)")
-  if (( ${#projects[@]} == 0 )); then
-    warn "harness register: no project in overview.json has repo_path $repo"
-    return 1
+  if [[ -n $project_id ]]; then
+    projects=("$project_id")
+  else
+    local repo_abs; repo_abs=$(realpath -m "$repo" 2>/dev/null || printf '%s' "$repo")
+    local id path path_abs
+    while IFS=$'\t' read -r id path; do
+      [[ -n $id ]] || continue
+      path_abs=$(realpath -m "$path" 2>/dev/null || printf '%s' "$path")
+      [[ $path_abs == "$repo_abs" ]] && projects+=("$id")
+    done < <(jq -r '.projects[]? | select(.repo_path) | [.id, .repo_path] | @tsv' <<<"$(harness_overview_json)")
+    if (( ${#projects[@]} == 0 )); then
+      warn "harness register: no project in overview.json has repo_path $repo (pass --project ID to register directly)"
+      return 1
+    fi
   fi
   local p s label rc=0
   for p in "${projects[@]}"; do
@@ -480,6 +495,11 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json>
   local -a saved_opts=("${OPTS[@]}")
   OPTS=(--backend "$backend" --name "$name" --task-title "$node" --model "$model" --job-stdin)
   [[ $class == metered ]] && OPTS+=(--approved-usd "$estimate")   # the harness already approved this budget
+  # started_at is captured BEFORE cmd_delegate runs (not after) so the reaper's
+  # non-sentinel fallback (mtime/event-time vs started) can never see a job
+  # whose run log was written inside cmd_delegate's own second land before
+  # `started`, which would misclassify a freshly-started job as already done.
+  local started; started=$(date +%s)
   printf '%s%s\n' "$content" "$trailer" | cmd_delegate >/dev/null 2>&1
   local drc=$?
   OPTS=("${saved_opts[@]}")
@@ -492,18 +512,23 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json>
   mkdir -p "$HARNESS_JOBS_DIR/$proj"
   jq -n --arg project "$proj" --arg node "$node" --arg session "$sid" --arg profile "$profile" \
         --arg name "$name" --arg backend "$backend" --arg model "$model" --arg bin "$bin" \
-        --argjson started "$(date +%s)" \
+        --argjson started "$started" \
         '{project:$project, node:$node, session:$session, profile:$profile, name:$name, backend:$backend, model:$model, bin:$bin, started_at:$started}' \
     >"$HARNESS_JOBS_DIR/$proj/$node.json"
   HARNESS_SLOTS_LEFT=$(( ${HARNESS_SLOTS_LEFT:-1} - 1 ))
   event_emit "$profile" note "harness: started $node ($name)" --source harness --ref "$ref:start"
 }
 
-# Reap finished detached jobs: a job is "finished" once its worker's run log
-# is newer than when we started it (session_run_once always writes one for
-# an unattended run, whether or not its window/tmux session stays open
-# afterward). rc-first: only a nonzero exit AND a structured marker in the
-# last 20 lines of the log counts as throttled.
+# Reap finished detached jobs. A worker's run log that ends with the
+# completion sentinel `__oal_rc=<n>` (a test-only dispatcher writes one; see
+# tests/run.sh) is trusted outright -- the exit code AND the throttle marker
+# both come from that one already-fully-read log, so there is nothing left to
+# race against (no separate events.jsonl lookup, no mtime heuristic). Without
+# a sentinel (every real job: session_run_once never writes one) we fall back
+# to the original heuristic unchanged: "finished" once the log postdates the
+# job, exit code from the last matching session_exited event. rc-first either
+# way: only a nonzero exit AND a structured marker in the last 20 lines of
+# the log (sentinel line excluded) counts as throttled.
 harness_dispatch_reap() {
   [[ -d $HARNESS_JOBS_DIR ]] || return 0
   local jf
@@ -519,12 +544,31 @@ harness_dispatch_reap() {
     local dir latest
     dir="$(stage_dir "$name")/runs"
     latest=$(ls -1t "$dir"/*.log 2>/dev/null | head -n1)
-    if [[ -z $latest ]]; then continue; fi   # still running
-    local mt; mt=$(stat -c %Y "$latest" 2>/dev/null || echo 0)
-    (( mt < started )) && continue           # still running (log predates this job)
+    if [[ -z $latest ]]; then continue; fi   # still running: no log yet
 
     local out; out=$(LC_ALL=C sed -E 's/\x1B\[[0-9;?]*[ -\/]*[@-~]//g; s/\r$//' "$latest" 2>/dev/null)
-    local code; code=$(events_recent 400 | jq -r --arg n "$name" '[.[] | select(.agent == $n and .kind == "session_exited")] | last | .code // 0' 2>/dev/null)
+    local sentinel=""
+    [[ $out =~ __oal_rc=(-?[0-9]+)[[:space:]]*$ ]] && sentinel=${BASH_REMATCH[1]}
+    if [[ -z $sentinel ]]; then
+      local mt; mt=$(stat -c %Y "$latest" 2>/dev/null || echo 0)
+      (( mt < started )) && continue   # still running (log predates this job); no sentinel to trust instead
+    fi
+
+    local code
+    if [[ -n $sentinel ]]; then
+      code=$sentinel
+      out=$(sed -E '/^__oal_rc=-?[0-9]+[[:space:]]*$/d' <<<"$out")   # keep the marker window free of the sentinel line itself
+    else
+      # No sentinel (a real job): the run log's mtime alone can't distinguish
+      # "finished" from "still writing" once it postdates `started`, so also
+      # require a session_exited event timestamped (ms) at or after this job's
+      # start -- an unrelated/stale event, or none yet, means still running.
+      local exit_evt
+      exit_evt=$(events_recent 400 | jq -c --arg n "$name" --argjson s "$((started * 1000))" \
+        '[.[] | select(.agent == $n and .kind == "session_exited" and (.t // 0) >= $s)] | last' 2>/dev/null)
+      [[ -n $exit_evt && $exit_evt != null ]] || continue   # still running: no qualifying exit event yet
+      code=$(jq -r '.code // 0' <<<"$exit_evt" 2>/dev/null)
+    fi
     [[ $code =~ ^-?[0-9]+$ ]] || code=0
     local status
     if (( code != 0 )) && grep -qiE '429|rate.?limit|usage limit' <<<"$(tail -n 20 <<<"$out")"; then status="throttled"
@@ -573,7 +617,12 @@ harness_dispatch_once() {
     label=$(jq -r '.label // empty' <<<"$sess")
     [[ -n $proj && -n $sid && -n $label ]] || continue
     profile=$(harness_profile_for_label "$label") || continue
-    local inbox; inbox=$("$bin" inbox --project "$proj" --session "$sid" --json 2>/dev/null)
+    # --json is a GLOBAL flag on the harness CLI, before the subcommand (older
+    # and newer harness builds both accept it there; only some newer builds
+    # also accept a per-subcommand --json, so the global position is the one
+    # that works everywhere). Any non-JSON-array output (including empty, on
+    # error) is treated as an empty inbox rather than failing the sweep.
+    local inbox; inbox=$("$bin" --json inbox --project "$proj" --session "$sid" 2>/dev/null)
     [[ $inbox == \[* ]] || inbox='[]'
     local pkt
     while IFS= read -r pkt; do

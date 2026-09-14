@@ -105,7 +105,7 @@ while (($#)); do
     -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --version) echo "omarchy-agent-launcher $OAL_VERSION"; exit 0 ;;
     --name|--agent|--runtime|--provider|--auth|--model|--base-url|--mode|--skill|--job-file|--task|--level|--key|--ctx|--kv|--slots|\
-    --backend|--parent|--role|--task-title|--id|--kind|--label|--url|--size|--input-per-m|--output-per-m|--approved-usd|--request)
+    --backend|--parent|--role|--task-title|--id|--kind|--label|--url|--size|--input-per-m|--output-per-m|--approved-usd|--request|--project)
                OPTS+=("$1" "${2:-}"); shift ;;   # valued options (create, delegate, backends add, local-server, harness)
     --*)       OPTS+=("$1") ;;                    # create's flags
     *)         CMD+=("$1") ;;
@@ -837,7 +837,8 @@ cmd_harness() {
     register)
       local profile=${CMD[2]:?"harness register needs a profile name"} repo=${CMD[3]:-}
       local slots; slots=$(opt_value --slots || echo 1)
-      harness_register_rix "$profile" "$repo" "$slots" ;;
+      local project; project=$(opt_value --project || true)
+      harness_register_rix "$profile" "$repo" "$slots" "$project" ;;
     dispatch)
       if opt_flag --once; then harness_dispatch_once; else harness_dispatch_loop; fi ;;
     approve)
@@ -857,9 +858,9 @@ cmd_harness() {
         [[ -n $sess ]] || continue
         local proj sid; proj=$(jq -r '.project // empty' <<<"$sess"); sid=$(jq -r '.id // empty' <<<"$sess")
         [[ -n $proj && -n $sid ]] || continue
-        "$bin" inbox --project "$proj" --session "$sid" --json
+        "$bin" --json inbox --project "$proj" --session "$sid"
       done < <(jq -c --arg label "$profile" '.sessions[]? | select(.label == $label)' <<<"$(harness_overview_json)") ;;
-    *) fail "usage: omarchy-agent-launcher harness status|serve|stop|open|projects|register PROFILE [REPO] [--slots N]|dispatch [--once]|approve PROJECT USD [REASON] [--request ID]|decline PROJECT|inbox PROFILE   (approve/decline: human only, refused with OAL_AGENT set)" ;;
+    *) fail "usage: omarchy-agent-launcher harness status|serve|stop|open|projects|register PROFILE [REPO] [--slots N] [--project ID]|dispatch [--once]|approve PROJECT USD [REASON] [--request ID]|decline PROJECT|inbox PROFILE   (register: --project ID skips the repo_path lookup and registers directly; approve/decline: human only, refused with OAL_AGENT set)" ;;
   esac
 }
 
