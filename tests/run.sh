@@ -501,6 +501,9 @@ out=$(OMARCHY_PLUGIN_UPDATE_RAW=file:///nonexistent "$L" update-check); [[ $(jq 
 out=$("$L" update-check --force); [[ $(jq -r .enabled <<<"$out") == false ]] || tfail "opt-out via settings: $out"
 "$L" settings set update_check true >/dev/null
 out=$(OMARCHY_PLUGIN_UPDATE_PRINT=1 "$L" update-run all); [[ $(jq -r '.argv[-1]' <<<"$out") == all && $(jq -r '.argv[0]' <<<"$out") == *omarchy-launch-tui ]] || tfail "update-run argv: $out"
+echo 'not json' >"$T/cache/omarchy-agent-launcher/update-check.json"
+"$L" update-dismiss 1.2.3 && [[ $("$L" update-check --force | jq -r .dismissed) == 1.2.3 ]] || tfail "a broken cache file is replaced, not kept"
+out=$("$L" --dry-run update-run); [[ $(jq -r '.argv[-1]' <<<"$out") == all ]] || tfail "--dry-run prints the argv: $out"
 unset OMARCHY_PLUGIN_UPDATE_RAW
-pass "check, notes, cache, offline, dismiss, opt-out, run"
+pass "check, notes, cache, offline, dismiss, opt-out, run, broken cache, dry-run"
 echo "ALL TESTS PASSED"

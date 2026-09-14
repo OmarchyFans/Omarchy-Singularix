@@ -35,7 +35,7 @@ UPD_BRANCH="main"        # branch whose manifest.json is "the published version"
 UPD_SLUG="omarchy-agent-launcher"            # cache lives in ~/.cache/<slug>/update-check.json
 UPD_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-agent-launcher/settings.json"        # JSON file; "update_check": false turns the check off
 UPD_KEEP_LOADED=1   # 1 when the plugin has a keepLoaded panel (needs a shell restart)
-UPD_ARTIFACT=""    # a file install.sh builds from the sources, or empty
+UPD_BUILT_STAMP=""    # file install.sh writes with the version it built for, or empty
 # Runs in the update terminal after install.sh. Ask before anything that is not
 # free to redo; keep it short.
 post_update() {
@@ -47,7 +47,7 @@ post_update() {
 UPD_TTL=${OMARCHY_PLUGIN_UPDATE_TTL:-21600}
 UPD_RAW="${OMARCHY_PLUGIN_UPDATE_RAW:-https://raw.githubusercontent.com/$UPD_REPO/$UPD_BRANCH}"
 UPD_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/$UPD_SLUG/update-check.json"
-UPD_INSTALLED="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$UPD_ID"
+UPD_INSTALLED="$HOME/.config/omarchy/plugins/$UPD_ID"   # where omarchy plugin add puts it
 UPD_REPO_URL="https://github.com/$UPD_REPO"
 
 # ---- versions ---------------------------------------------------------------
@@ -56,7 +56,7 @@ UPD_REPO_URL="https://github.com/$UPD_REPO"
 ver_key() {
   local a b c
   read -r a b c _ <<<"$(printf '%s' "${1:-0}" | tr -c '0-9' ' ')"
-  printf '%05d%05d%05d' "${a:-0}" "${b:-0}" "${c:-0}"
+  printf '%05d%05d%05d' "$((10#${a:-0}))" "$((10#${b:-0}))" "$((10#${c:-0}))"
 }
 ver_gt() { [[ $(ver_key "$1") > $(ver_key "$2") ]]; }
 
@@ -83,7 +83,7 @@ cache_put() { # cache_put JQ_UPDATE [jq args...]
   local filter=$1 tmp; shift
   mkdir -p "$(dirname "$UPD_CACHE")" 2>/dev/null || return 0
   tmp=$(mktemp "$(dirname "$UPD_CACHE")/.update-check.XXXXXX") || return 0
-  if { [[ -f $UPD_CACHE ]] && cat "$UPD_CACHE" || echo '{}'; } | jq "$filter" "$@" >"$tmp" 2>/dev/null; then
+  if { jq . "$UPD_CACHE" 2>/dev/null || echo '{}'; } | jq "$filter" "$@" >"$tmp" 2>/dev/null; then
     mv -f "$tmp" "$UPD_CACHE"
   else
     rm -f "$tmp"
@@ -110,11 +110,13 @@ cmd_check() {
   # The window is newer than the files next to this script: the plugin was
   # updated but install.sh (which copies or builds things) was not re-run.
   if [[ -n $installed && -n $cli && $(ver_key "$installed") != "$(ver_key "$cli")" ]]; then mismatch=true; fi
-  if [[ -n $UPD_ARTIFACT && -e $UPD_DIR/$UPD_ARTIFACT && $UPD_DIR/manifest.json -nt $UPD_DIR/$UPD_ARTIFACT ]]; then stale=true; mismatch=true; fi
+  # The built artifact was made for another version (install.sh writes the stamp).
+  if [[ -n $UPD_BUILT_STAMP && -f $UPD_DIR/$UPD_BUILT_STAMP ]] \
+     && [[ $(ver_key "$(head -c 64 "$UPD_DIR/$UPD_BUILT_STAMP")") != "$(ver_key "$cli")" ]]; then stale=true; mismatch=true; fi
 
   local on=true
   if enabled; then
-    checked=$(cache_get '.checked // 0'); checked=${checked:-0}
+    checked=$(cache_get '.checked // 0 | tonumber? // 0'); [[ $checked =~ ^[0-9]+$ ]] || checked=0
     fresh=$(( now - checked < UPD_TTL ))
     (( fresh && ! force )) && latest=$(cache_get '.latest // ""')
     if [[ -z $latest ]]; then
@@ -176,7 +178,7 @@ cmd_terminal() {
   (( UPD_KEEP_LOADED )) && total=3
   echo "$UPD_NAME update"
   echo
-  if [[ $UPD_DIR != "$UPD_INSTALLED" ]]; then
+  if ! [[ $UPD_DIR -ef $UPD_INSTALLED ]]; then
     echo "This copy ($UPD_DIR) is not the installed plugin ($UPD_INSTALLED)."
     echo "Update it with git yourself, then run install.sh."
     hold "Nothing was changed."; return 1

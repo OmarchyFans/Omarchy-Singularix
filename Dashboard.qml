@@ -60,11 +60,14 @@ Item {
   property string fileVersion: ""
   readonly property string version: manifest && manifest.version ? String(manifest.version) : fileVersion
   property var updateInfo: null
-  property bool updateHidden: false
   readonly property bool updateAvailable: !!updateInfo && updateInfo.update_available === true
                                           && updateInfo.dismissed !== updateInfo.latest
   readonly property bool updateMismatch: !!updateInfo && updateInfo.mismatch === true
-  readonly property bool updateBannerShown: !updateHidden && (updateAvailable || updateMismatch)
+  // What the banner is about: the newer version, or "mismatch". Update… and Later
+  // hide that key only, so the next version (or a new mismatch) shows again.
+  readonly property string updateKey: updateAvailable ? String(updateInfo.latest) : (updateMismatch ? "mismatch" : "")
+  property string updateHiddenKey: ""
+  readonly property bool updateBannerShown: updateKey !== "" && updateKey !== updateHiddenKey
 
   readonly property var currentTab: tab === "rix" ? rixTab : (tab === "new" ? setupForm : (tab === "events" ? eventsTab : (tab === "notifications" ? notifTab : (tab === "projects" ? projectsTab : agentsTab))))
   readonly property var usage: status && status.usage ? status.usage : null
@@ -115,20 +118,23 @@ Item {
   Process {
     id: updateProc
     stdout: StdioCollector { id: updateOut; waitForEnd: true }
+    stderr: StdioCollector { id: updateErr; waitForEnd: true }
     onExited: function(code) {
       var d = null
       try { d = JSON.parse(String(updateOut.text || "")) } catch (e) { d = null }
       if (d) { dash.updateInfo = d; return }
-      // A helper older than this window does not know update-check.
-      if (code !== 0) dash.updateInfo = { mismatch: true, update_available: false, latest: null, notes: [], dismissed: "", cli: "older" }
+      // A helper older than this window does not know update-check and says so.
+      // Any other failure (a tool missing, a file mid-update) leaves things as they were.
+      if (code !== 0 && String(updateErr.text || "").indexOf("unknown command") >= 0)
+        dash.updateInfo = { mismatch: true, update_available: false, latest: null, notes: [], dismissed: "", cli: "older" }
     }
   }
   function runUpdate() {
-    updateHidden = true
+    updateHiddenKey = updateKey
     Quickshell.execDetached([launcher, "update-run", updateAvailable ? "all" : "install"])
   }
   function dismissUpdate() {
-    updateHidden = true
+    updateHiddenKey = updateKey
     if (updateAvailable && updateInfo.latest) Quickshell.execDetached([launcher, "update-dismiss", String(updateInfo.latest)])
   }
   function requestClose() {
