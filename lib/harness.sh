@@ -185,10 +185,17 @@ harness_cost_class_reason() {
 # whose overview.json doesn't carry repo_path yet, or a repo living outside
 # any project's declared path.
 harness_register_rix() {
-  local profile=$1 repo=${2:-$PWD} slots=${3:-1} project_id=${4:-}
+  local profile=$1 repo=${2:-} slots=${3:-1} project_id=${4:-}
   [[ $slots =~ ^[0-9]+$ && $slots -ge 1 ]] || slots=1
   profile_exists "$profile" || fail "harness register: no saved agent named '$profile'"
   local bin; bin=$(harness_bin) || return 1
+  # With --project and no repo given, the session's cwd is that project's repo (the
+  # inbox/outbox live there) -- never the shell's cwd.
+  if [[ -n $project_id && -z $repo ]]; then
+    repo=$("$bin" --json ls 2>/dev/null | jq -r --arg id "$project_id" '.[]? | select(.id == $id) | .repo_path // empty' 2>/dev/null | head -n1)
+    [[ -n $repo ]] || fail "harness register: project '$project_id' not found (harness ls)"
+  fi
+  [[ -n $repo ]] || repo=$PWD
   local backend; backend=$(profile_get "$profile" backend 2>/dev/null)
   [[ -n $backend ]] || backend=$(profile_get "$profile" provider 2>/dev/null)
   local class; class=$(harness_cost_class "$profile")
@@ -509,14 +516,61 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json>
     event_emit "$profile" note "harness: $node did not start (delegate exit $drc)" --source harness --level warn --ref "$ref:failed"
     return 0
   fi
+  # The delegate is a saved agent under the SLUGIFIED name (cmd_delegate slugifies
+  # --name), with its own tmux server. Record the slug, the claimed packet path and the
+  # tmux server pid so the sweep can heartbeat the harness session (a job takes minutes;
+  # the harness marks a session stale after 45 s of silence and would give the node to
+  # someone else while this delegate ran on) and cancel/clean the delegate later.
+  local slug pid=""
+  slug=$(slugify "$name")
+  have tmux && pid=$(tmux -S "$(tmux_socket "$slug")" display-message -p '#{pid}' 2>/dev/null | tr -dc '0-9')
   mkdir -p "$HARNESS_JOBS_DIR/$proj"
   jq -n --arg project "$proj" --arg node "$node" --arg session "$sid" --arg profile "$profile" \
-        --arg name "$name" --arg backend "$backend" --arg model "$model" --arg bin "$bin" \
-        --argjson started "$started" \
-        '{project:$project, node:$node, session:$session, profile:$profile, name:$name, backend:$backend, model:$model, bin:$bin, started_at:$started}' \
+        --arg name "$name" --arg slug "$slug" --arg backend "$backend" --arg model "$model" --arg bin "$bin" \
+        --arg claimed "$claimed" --arg pid "$pid" --argjson started "$started" \
+        '{project:$project, node:$node, session:$session, profile:$profile, name:$name, slug:$slug, backend:$backend, model:$model, bin:$bin, claimed:$claimed, pid:$pid, started_at:$started}' \
     >"$HARNESS_JOBS_DIR/$proj/$node.json"
+  if [[ -n $pid ]]; then "$bin" session set --project "$proj" --session "$sid" --pid "$pid" >/dev/null 2>&1 || true
+  else "$bin" heartbeat --project "$proj" --session "$sid" >/dev/null 2>&1 || true; fi
   HARNESS_SLOTS_LEFT=$(( ${HARNESS_SLOTS_LEFT:-1} - 1 ))
   event_emit "$profile" note "harness: started $node ($name)" --source harness --ref "$ref:start"
+}
+
+# Forget a finished or cancelled delegate: its tmux server, staged home, profile and
+# job file. Transient `hns-*` agents must not pile up in the launcher's agent list.
+harness_job_forget() { # <slug>
+  local slug=$1
+  [[ -n $slug && $slug == hns-* ]] || return 0
+  session_kill "$slug" 2>/dev/null || true
+  rm -rf "$(stage_dir "$slug")" 2>/dev/null || true
+  rm -f "$(profile_path "$slug")" "$(job_path "$slug")" 2>/dev/null || true
+}
+
+# Every sweep, for each running job: if the harness withdrew the packet (the claimed file
+# was renamed to *.cancelled or vanished — the node was released, cancelled or reassigned)
+# stop the delegate; otherwise tell the harness the session is alive. Without this the
+# harness marked the Rix sessions stale mid-job and re-solved their nodes elsewhere
+# (observed live on 2026-09-14).
+harness_dispatch_heartbeat() {
+  [[ -d $HARNESS_JOBS_DIR ]] || return 0
+  local jf
+  while IFS= read -r -d '' jf; do
+    local job proj node sid profile slug bin claimed
+    job=$(cat "$jf" 2>/dev/null) || continue
+    proj=$(jq -r '.project // empty' <<<"$job"); node=$(jq -r '.node // empty' <<<"$job")
+    sid=$(jq -r '.session // empty' <<<"$job"); profile=$(jq -r '.profile // empty' <<<"$job")
+    slug=$(jq -r '.slug // empty' <<<"$job"); bin=$(jq -r '.bin // empty' <<<"$job")
+    claimed=$(jq -r '.claimed // empty' <<<"$job")
+    [[ -n $proj && -n $sid && -n $bin ]] || continue
+    if [[ -n $claimed && ! -f $claimed ]]; then
+      harness_job_forget "$slug"
+      "$bin" session set --project "$proj" --session "$sid" --clear-pid >/dev/null 2>&1 || true
+      event_emit "$profile" note "harness: $node withdrawn by the harness; delegate stopped" --source harness --ref "harness:$proj:$node:cancelled"
+      rm -f "$jf"
+      continue
+    fi
+    "$bin" heartbeat --project "$proj" --session "$sid" >/dev/null 2>&1 || true
+  done < <(find "$HARNESS_JOBS_DIR" -mindepth 2 -maxdepth 2 -name '*.json' -print0 2>/dev/null)
 }
 
 # Reap finished detached jobs. A worker's run log that ends with the
@@ -586,8 +640,10 @@ harness_dispatch_reap() {
     [[ -n $tok_in && $tok_in != null ]] && rargs+=(--tokens-in "$tok_in")
     [[ -n $tok_out && $tok_out != null ]] && rargs+=(--tokens-out "$tok_out")
     "$bin" "${rargs[@]}" >/dev/null 2>&1 || warn "harness receipt failed for $node ($status)"
+    "$bin" session set --project "$proj" --session "$sid" --clear-pid >/dev/null 2>&1 || true
     harness_prune_requested_key "$proj" "$node"
     event_emit "$profile" note "harness: $node $status" --source harness --ref "harness:$proj:$node:$status"
+    harness_job_forget "$(jq -r '.slug // empty' <<<"$job")"
     rm -f "$jf"
   done < <(find "$HARNESS_JOBS_DIR" -mindepth 2 -maxdepth 2 -name '*.json' -print0 2>/dev/null)
 }
@@ -600,6 +656,7 @@ harness_jobs_running() { find "$HARNESS_JOBS_DIR" -mindepth 2 -maxdepth 2 -name 
 # saved profile.
 harness_dispatch_once() {
   local bin; bin=$(harness_bin) || return 1
+  harness_dispatch_heartbeat
   harness_dispatch_reap
   harness_prune_requested_stale
   local slots; slots=$(settings_get harness_workers 4); [[ $slots =~ ^[0-9]+$ ]] || slots=4
