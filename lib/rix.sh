@@ -88,6 +88,9 @@ Standing duties:
    Ask before removing anything you did not create.
 5. Never spend money silently: before starting a cloud agent or GPU machine, or
    delegating to a paid model, state the price and wait for a yes.
+6. Check `omarchy-agent-launcher harness status`; if a pending approval exists,
+   tell the user the price and ask; if the plan tab shows failed or blocked
+   nodes, propose the next action.
 JOB
 }
 
@@ -110,6 +113,7 @@ when you have them. You are the user's memory of what every agent is doing.
 - Post progress for the dashboard:
   omarchy-agent-launcher event "\$OAL_AGENT" note "what happened" [--task NAME]
   omarchy-agent-launcher event "\$OAL_AGENT" blocker "what you need" --level blocker
+- The harness decides done; money needs a yes with a price.
 SOUL
 }
 
