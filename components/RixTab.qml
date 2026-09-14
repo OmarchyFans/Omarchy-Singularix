@@ -23,6 +23,51 @@ Item {
   property var setupInfo: null
   readonly property var launcher: dash.launcher
 
+  // ---- harness (session-harness orchestrator) ------------------------------
+  readonly property var harness: dash.status && dash.status.harness ? dash.status.harness : null
+  readonly property bool harnessInstalled: !!(harness && harness.bin)
+  readonly property bool harnessAlive: !!(harness && harness.alive)
+  readonly property int harnessProjectCount: harness ? Number(harness.projects || 0) : 0
+  readonly property var harnessApprovals: harness && harness.pending_approvals ? harness.pending_approvals : []
+  readonly property string harnessDataDir: (harness && harness.data_dir) || (Quickshell.env("HOME") + "/.session-harness")
+  readonly property string harnessOverviewPath: (harness && harness.overview_path) || (tab.harnessDataDir + "/overview.json")
+  property var harnessOverview: null
+  readonly property var harnessProjects: harnessOverview && harnessOverview.projects ? harnessOverview.projects : []
+  readonly property var harnessSessions: harnessOverview && harnessOverview.sessions ? harnessOverview.sessions : []
+  readonly property var harnessAgg: harnessAggregate()
+  function harnessAggregate() {
+    var spent = 0, approved = 0
+    for (var i = 0; i < harnessProjects.length; i++) {
+      var c = harnessProjects[i].cost
+      if (c) { spent += Number(c.spent_usd || 0); approved += Number(c.approved_usd || 0) }
+    }
+    return { spent: spent, approved: approved }
+  }
+  function harnessCostClassTag(c) {
+    if (c === "free") return "free"
+    if (c === "subscription") return "sub"
+    if (c === "metered") return "$"
+    return String(c || "—")
+  }
+  readonly property string harnessSessionsText: {
+    if (!harnessSessions.length) return "No sessions registered with the harness."
+    var parts = []
+    for (var i = 0; i < harnessSessions.length; i++) {
+      var s = harnessSessions[i]
+      parts.push((s.label || s.worker || s.id || "?") + " " + (s.state || "") + " (" + tab.harnessCostClassTag(s.cost_class) + ")")
+    }
+    return parts.join("   ·   ")
+  }
+  FileView {
+    id: harnessOverviewFile
+    path: tab.harnessOverviewPath
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: { try { tab.harnessOverview = JSON.parse(text() || "{}") } catch (e) { tab.harnessOverview = null } }
+    onLoadFailed: tab.harnessOverview = null
+  }
+
   // ---- Dashboard contract -------------------------------------------------
   readonly property int rowCount: tasks.length
   readonly property bool editing: askField.activeFocus || addForm.editing
@@ -162,6 +207,59 @@ Item {
     Keys.onEscapePressed: function(event) { dash.focusCatcher(); event.accepted = true }
   }
 
+  // Harness card: alive/offline, projects, spent/approved, open approvals, controls.
+  component HarnessCard: BorderSurface {
+    id: hcard
+    radius: Style.cornerRadius
+    color: Qt.rgba(dash.foreground.r, dash.foreground.g, dash.foreground.b, 0.04)
+    borderSpec: Border.flat(Qt.rgba(dash.foreground.r, dash.foreground.g, dash.foreground.b, 0.10), 1)
+    implicitHeight: hcol.implicitHeight + Style.space(20)
+    Column {
+      id: hcol
+      anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+      anchors.margins: Style.space(12)
+      spacing: Style.spacing.sm
+
+      Column {
+        width: parent.width
+        visible: !tab.harnessInstalled
+        spacing: Style.spacing.xxs
+        Dim { width: parent.width; text: "The session-harness orchestrator is not installed; Rix has no projects to manage yet." }
+        Dim { width: parent.width; text: "harness CLI not found (set harness_bin in settings.json, put harness on PATH, or install it at ~/Work/session-harness)" }
+      }
+
+      Column {
+        width: parent.width
+        visible: tab.harnessInstalled
+        spacing: Style.spacing.sm
+
+        Row {
+          width: parent.width; spacing: Style.spacing.controlGap
+          Rectangle { width: Style.space(8); height: Style.space(8); radius: width / 2; color: tab.harnessAlive ? dash.okColor : dash.dim; anchors.verticalCenter: parent.verticalCenter }
+          Cap { text: tab.harnessAlive ? "ALIVE" : "OFFLINE"; anchors.verticalCenter: parent.verticalCenter }
+          Item { width: Style.space(4); height: 1 }
+          Dim { anchors.verticalCenter: parent.verticalCenter; text: tab.harnessProjectCount + " project" + (tab.harnessProjectCount === 1 ? "" : "s") }
+          Dim { anchors.verticalCenter: parent.verticalCenter; text: "spent " + dash.fmtUsd(tab.harnessAgg.spent) + " / approved " + dash.fmtUsd(tab.harnessAgg.approved) }
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            text: tab.harnessApprovals.length + " approval" + (tab.harnessApprovals.length === 1 ? "" : "s")
+            color: tab.harnessApprovals.length > 0 ? dash.urgent : dash.dim
+            font.family: dash.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: tab.harnessApprovals.length > 0
+          }
+          Button { text: "Review"; bordered: true; visible: tab.harnessApprovals.length > 0; foreground: dash.urgent; fontFamily: dash.fontFamily; onClicked: dash.selectTab("plan") }
+        }
+        Row {
+          width: parent.width; spacing: Style.spacing.controlGap
+          Button { text: "Start"; iconText: "󰐊"; visible: !tab.harnessAlive; foreground: dash.okColor; fontFamily: dash.fontFamily; onClicked: dash.act([tab.launcher, "harness", "serve"]) }
+          Button { text: "Stop"; iconText: "󰓛"; visible: tab.harnessAlive; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: dash.act([tab.launcher, "harness", "stop"]) }
+          Button { text: "Register this Rix"; bordered: true; visible: !!(tab.rix && tab.rix.name); tooltipText: "Register the current Rix profile as a harness worker session"; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: dash.act([tab.launcher, "harness", "register", tab.rix.name]) }
+        }
+        Dim { width: parent.width; text: tab.harnessSessionsText; elide: Text.ElideRight; wrapMode: Text.NoWrap }
+      }
+    }
+  }
+
   // A headline number. Text wears text tokens; nothing is color-coded.
   component StatTile: BorderSurface {
     id: tile
@@ -267,6 +365,11 @@ Item {
           }
           Body { width: parent.width; visible: tab.answer !== ""; text: tab.answer }
         }
+
+        // ---- harness --------------------------------------------------
+        Item { width: 1; height: Style.space(4) }
+        PanelSectionHeader { text: "HARNESS  ·  the session orchestrator"; foreground: dash.foreground; fontFamily: dash.fontFamily }
+        HarnessCard { width: parent.width }
 
         // ---- the numbers ----------------------------------------------
         Item { width: 1; height: Style.space(4) }
