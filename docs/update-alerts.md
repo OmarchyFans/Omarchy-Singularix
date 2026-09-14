@@ -53,7 +53,7 @@ something from the plugin folder: helpers copied into `~/.local/bin`, a binary
 built from source. `omarchy plugin update` refreshes the plugin files but not
 those, so the window can end up newer than what it runs. The helper reports
 `mismatch` when the widget's version differs from the helper's, or when the
-built artifact is older than `manifest.json`; the widget then shows
+build stamp `install.sh` wrote names another version; the widget then shows
 **Finish update…**, which runs `install.sh` directly. A helper too old to know
 the `check` command exits non-zero; treat that as a mismatch too.
 

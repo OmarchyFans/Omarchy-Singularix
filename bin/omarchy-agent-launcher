@@ -837,7 +837,7 @@ case "${CMD[0]:-menu}" in
   menu)    cmd_menu ;;
   update-check)   exec bash "$OAL_LIB/update.sh" check "${CMD[@]:1}" "${OPTS[@]}" ;;
   update-dismiss) exec bash "$OAL_LIB/update.sh" dismiss "${CMD[@]:1}" ;;
-  update-run)     exec bash "$OAL_LIB/update.sh" run "${CMD[@]:1}" ;;
+  update-run)     exec env OMARCHY_PLUGIN_UPDATE_PRINT="${OMARCHY_PLUGIN_UPDATE_PRINT:-${OAL_DRY_RUN:-0}}" bash "$OAL_LIB/update.sh" run "${CMD[@]:1}" ;;
   new)     cmd_new ;;
   manage)  cmd_manage ;;
   info)    cmd_info ;;

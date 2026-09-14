@@ -42,6 +42,14 @@ BarWidget {
     onExited: function(code) { try { root.updateInfo = JSON.parse(String(updateOut.text || "")) } catch (e) { root.updateInfo = null } }
   }
   Timer { interval: 6 * 3600 * 1000; running: true; repeat: true; onTriggered: root.checkUpdates() }
+  // The dashboard's Later (and the update itself) rewrite the cache; follow it so
+  // the dot does not outlive the decision.
+  FileView {
+    path: (Quickshell.env("XDG_CACHE_HOME") || (Quickshell.env("HOME") + "/.cache")) + "/omarchy-agent-launcher/update-check.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: root.checkUpdates()
+  }
 
   // The shell keeps the panel's open state; this widget only asks it to toggle.
   readonly property bool opened: false
