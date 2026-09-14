@@ -824,7 +824,7 @@ JSON
   # session's role/model/vendor/cost class through `session set` instead.
   : >"$SESSADD"
   harness_register_rix hns-sub /tmp/proj-sub >/dev/null || tfail "register failed"
-  grep -q -- "^add .*--label hns-sub\b" "$SESSADD" && tfail "register re-added an already-registered label"
+  grep -q -- "^session add .*--label hns-sub$" "$SESSADD" && tfail "register re-added an already-registered label"
   grep -q -- "^session set --project p-sub --session s-sub" "$SESSADD" || { cat "$SESSADD"; tfail "register did not resync the existing p-sub session"; }
   grep -q -- "--cost-class subscription" "$SESSADD" || tfail "register cost class"
 
