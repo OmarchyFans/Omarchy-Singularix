@@ -392,10 +392,10 @@ if command -v hermes >/dev/null; then
   [[ -f $XDG_DATA_HOME/omarchy-agent-launcher/agents/rix/hermes/skills/omarchy/rix/SKILL.md ]] || tfail "rix skill copied into its home"
   grep -q "chief of staff" "$XDG_DATA_HOME/omarchy-agent-launcher/agents/rix/hermes/SOUL.md" || tfail "rix SOUL"
   out=$("$L" --dry-run --inline launch rix 2>&1); grep -q -- "-s rix" <<<"$out" || { echo "$out"; tfail "rix skill preload flag"; }
-  out=$(printf 'Summarize the repo.\n' | "$L" --dry-run delegate --backend anthropic --name summ --task-title "Summarize" --job-stdin 2>&1) || { echo "$out"; tfail "delegate"; }
+  out=$(printf 'Summarize the repo.\n' | "$L" --dry-run delegate --backend anthropic --name summ --task-title "Summarize" --approved-usd 999 --job-stdin 2>&1) || { echo "$out"; tfail "delegate"; }
   [[ $(jq -r .parent "$(profile_path summ)") == rix && $(jq -r .role "$(profile_path summ)") == worker && $(jq -r .mode "$(profile_path summ)") == unattended && $(jq -r .task_title "$(profile_path summ)") == Summarize ]] || tfail "delegate profile"
   grep -q "would open window" <<<"$out" || tfail "delegate must launch the worker"
-  out=$(printf 'x\n' | "$L" --dry-run delegate --backend anthropic --name summ2 --job-stdin --wait 2>&1); grep -q "would run and wait" <<<"$out" || { echo "$out"; tfail "delegate --wait dry-run"; }
+  out=$(printf 'x\n' | "$L" --dry-run delegate --backend anthropic --name summ2 --approved-usd 999 --job-stdin --wait 2>&1); grep -q "would run and wait" <<<"$out" || { echo "$out"; tfail "delegate --wait dry-run"; }
   "$L" result summ >/dev/null 2>&1 && tfail "result without runs must fail"
   out=$(printf 'x\n' | "$L" --dry-run delegate --backend gemini --name nokey --job-stdin 2>&1) && tfail "delegate to a keyless provider must fail"
   grep -q "needs GEMINI_API_KEY" <<<"$out" || { echo "$out"; tfail "keyless provider message"; }
@@ -518,10 +518,32 @@ out=$("$L" --dry-run update-run); [[ $(jq -r '.argv[-1]' <<<"$out") == all ]] ||
 unset OMARCHY_PLUGIN_UPDATE_RAW
 pass "check, notes, cache, offline, dismiss, opt-out, run, broken cache, dry-run"
 
+echo "== harness: cmd_delegate refuses a metered backend without --approved-usd"
+# "anthropic" has carried a saved ANTHROPIC_API_KEY since the very first (form)
+# test in this file, so backend_get reports auth=api-key -> metered, with no
+# sign-in involved.
+rm -f "$(profile_path gated-worker)" "$(job_path gated-worker)" 2>/dev/null
+rc=0; out=$(printf 'hello\n' | "$L" --dry-run delegate --backend anthropic --name gated-worker --job-stdin 2>&1) || rc=$?
+[[ $rc == 3 ]] || { echo "$out"; tfail "delegate without --approved-usd on a metered backend must exit 3, got $rc"; }
+grep -qiE 'would cost about \$|no known price' <<<"$out" || { echo "$out"; tfail "delegate refusal must print the estimate"; }
+[[ ! -f $(profile_path gated-worker) ]] || tfail "a refused delegate must not create a profile"
+out2=$(printf 'hello\n' | "$L" --dry-run delegate --backend anthropic --name gated-worker --approved-usd 999 --job-stdin 2>&1) || { echo "$out2"; tfail "delegate with a covering --approved-usd must proceed"; }
+grep -q "would open window" <<<"$out2" || { echo "$out2"; tfail "an approved delegate must still launch"; }
+"$L" remove gated-worker --yes >/dev/null 2>&1 || true
+pass "cmd_delegate: refused (exit 3, estimate printed) without --approved-usd on a metered backend; proceeds once approved"
+
+echo "== harness: approve/decline are human-only (refused with OAL_AGENT set)"
+out=$(OAL_AGENT=some-worker "$L" harness approve p-anything 5 2>&1) && tfail "harness approve must refuse when OAL_AGENT is set"
+grep -qi "agents cannot approve" <<<"$out" || { echo "$out"; tfail "approve refusal message"; }
+out2=$(OAL_AGENT=some-worker "$L" harness decline p-anything 2>&1) && tfail "harness decline must refuse when OAL_AGENT is set"
+grep -qi "agents cannot decline" <<<"$out2" || { echo "$out2"; tfail "decline refusal message"; }
+pass "harness approve/decline refuse an agent context (OAL_AGENT set); only a human may run them"
+
 echo "== harness: cost class, price estimate, dispatch loop, network-free status"
 (
   source "$ROOT/lib/backends.sh"
   source "$ROOT/lib/usage.sh"
+  source "$ROOT/lib/fallback.sh"
   source "$ROOT/lib/harness.sh"
   OPTS=(); CMD=(); OAL_SELF="$L"
   HD="$T/harness-test"; mkdir -p "$HD/fakebin" "$HD/inbox"
@@ -530,6 +552,7 @@ echo "== harness: cost class, price estimate, dispatch loop, network-free status
   RECEIPTS="$HD/receipts.log"; : >"$RECEIPTS"
   CURLLOG="$HD/curl.log"; : >"$CURLLOG"
   DELEGATE_LOG="$HD/delegate.log"; : >"$DELEGATE_LOG"
+  APPROVELOG="$HD/approve.log"; : >"$APPROVELOG"
 
   # ---- fake `harness` CLI: records session-add/receipt calls, answers inbox/cost --
   cat >"$HD/fakebin/harness" <<'FAKE'
@@ -546,34 +569,46 @@ case "$1" in
     proj=""
     while (( $# )); do case "$1" in --project) proj=$2; shift 2 ;; *) shift ;; esac; done
     b=$(cat "__HD__/budget-$proj" 2>/dev/null || echo 0)
-    printf '{"remaining_usd": %s}\n' "$b" ;;
+    p=$(cat "__HD__/pending-$proj.json" 2>/dev/null || echo '[]')
+    printf '{"remaining_usd": %s, "pending": %s}\n' "$b" "$p" ;;
   receipt)
-    node="" status=""
-    while (( $# )); do case "$1" in --node) node=$2; shift 2 ;; --status) status=$2; shift 2 ;; *) shift ;; esac; done
-    printf 'node=%s status=%s\n' "$node" "$status" >>"__RECEIPTS__"
+    node="" status="" usd="" tin="" tout=""
+    while (( $# )); do case "$1" in
+      --node) node=$2; shift 2 ;; --status) status=$2; shift 2 ;;
+      --usd) usd=$2; shift 2 ;; --tokens-in) tin=$2; shift 2 ;; --tokens-out) tout=$2; shift 2 ;;
+      *) shift ;; esac; done
+    printf 'node=%s status=%s usd=%s tin=%s tout=%s\n' "$node" "$status" "$usd" "$tin" "$tout" >>"__RECEIPTS__"
     echo ok ;;
-  approve|decline|ls) echo ok ;;
+  approve|decline)
+    printf '%s\n' "$*" >>"__APPROVELOG__"
+    echo ok ;;
+  ls) echo ok ;;
   *) echo '{}' ;;
 esac
 FAKE
-  sed -i "s#__SESSADD__#$SESSADD#g; s#__HD__#$HD#g; s#__RECEIPTS__#$RECEIPTS#g" "$HD/fakebin/harness"
+  sed -i "s#__SESSADD__#$SESSADD#g; s#__HD__#$HD#g; s#__RECEIPTS__#$RECEIPTS#g; s#__APPROVELOG__#$APPROVELOG#g" "$HD/fakebin/harness"
   chmod +x "$HD/fakebin/harness"
 
-  # ---- fake curl: logs URL, whether X-Harness was sent, and the POST body ----------
+  # ---- fake curl: logs URL, whether X-Harness/X-Harness-Approver were sent, and the body --
   cat >"$HD/fakebin/curl" <<'FAKE2'
 #!/bin/bash
-args=("$@"); url="${args[-1]}"; body="" hh=no
+args=("$@"); url="${args[-1]}"; body="" hh=no ha=no
 for ((i=0; i<${#args[@]}; i++)); do
   [[ ${args[i]} == -d ]] && body=${args[i+1]}
   [[ ${args[i]} == "X-Harness: 1" ]] && hh=yes
+  [[ ${args[i]} == "X-Harness-Approver: human" ]] && ha=yes
 done
-printf '%s\t%s\t%s\n' "$url" "$hh" "$body" >>"__CURLLOG__"
+printf '%s\t%s\t%s\t%s\n' "$url" "$hh" "$ha" "$body" >>"__CURLLOG__"
 echo '{}'
 FAKE2
   sed -i "s#__CURLLOG__#$CURLLOG#g" "$HD/fakebin/curl"
   chmod +x "$HD/fakebin/curl"
 
-  # ---- fake cmd_delegate: records the call, honours markers in the piped job -------
+  # ---- fake cmd_delegate: simulates a DETACHED launch (harness_dispatch_packet
+  # no longer waits). It records the call, then -- unless the job asks to look
+  # "still running" -- immediately writes the run log a real unattended worker
+  # would produce, plus the session_exited event the reaper reads for the exit
+  # code, so harness_dispatch_reap can pick it up on its very next call. ------
   cmd_delegate() {
     local backend="" name="" model="" i=0 n=${#OPTS[@]}
     while (( i < n )); do
@@ -581,17 +616,24 @@ FAKE2
         --backend) backend=${OPTS[i+1]}; ((i+=2)) ;;
         --name)    name=${OPTS[i+1]};    ((i+=2)) ;;
         --model)   model=${OPTS[i+1]};   ((i+=2)) ;;
-        --task-title) ((i+=2)) ;;
+        --task-title|--approved-usd) ((i+=2)) ;;
         --job-stdin|--wait) ((i+=1)) ;;
         *) ((i+=1)) ;;
       esac
     done
     local job; job=$(cat)
     printf 'backend=%s name=%s model=%s\n' "$backend" "$name" "$model" >>"$DELEGATE_LOG"
-    if grep -q RATE_LIMIT_MARKER <<<"$job"; then echo "429 too many requests"; return 0
-    elif grep -q FAIL_MARKER <<<"$job"; then echo "boom"; return 1
-    else echo "done: ok"; return 0
+    if grep -q STILL_RUNNING_MARKER <<<"$job"; then return 0; fi   # no run log yet: reaper must skip it
+    local rundir; rundir="$(stage_dir "$name")/runs"; mkdir -p "$rundir"
+    local code=0 body
+    if grep -q RATE_LIMIT_MARKER <<<"$job"; then body="429 too many requests, please slow down"; code=1
+    elif grep -q FAIL_MARKER <<<"$job"; then body="boom: something broke"; code=1
+    elif grep -q FALSE_POSITIVE_MARKER <<<"$job"; then body="mentions a usage limit in passing but the run actually succeeded"; code=0
+    else body="done: ok"; code=0
     fi
+    printf '%s\n' "$body" >"$rundir/$(date +%Y%m%d-%H%M%S)-$RANDOM.log"
+    event_emit "$name" session_exited "sim exit" --code "$code" >/dev/null 2>&1 || true
+    return 0
   }
 
   export PATH="$HD/fakebin:$PATH"
@@ -612,6 +654,24 @@ FAKE2
   [[ $(harness_cost_class hns-met) == metered ]] || tfail "cost class: api-key backend must be metered"
   pass "harness cost class: local -> free, oauth -> subscription, api-key -> metered"
 
+  # ---- fail-closed: unknown/unresolvable, oauth-not-signed-in, and a metered fallback hop --
+  profile_write hns-norecord hermes local "" none "" - interactive ""
+  [[ $(harness_cost_class hns-norecord) == metered ]] || tfail "cost class: no backend record must fail closed to metered"
+
+  profile_write hns-badauth hermes local ollama none model-y - interactive ""
+  [[ $(harness_cost_class hns-badauth) == metered ]] || tfail "cost class: an auth this launcher does not recognize must fail closed to metered"
+
+  profile_write hns-nosignin hermes local nous oauth model-z - interactive ""
+  [[ $(harness_cost_class hns-nosignin) == metered ]] || tfail "cost class: an OAuth provider nobody signed in to must fail closed to metered"
+
+  printf '{"mychain":[{"provider":"local","model":"x"},{"provider":"hnsteam","model":"m"}]}' >"$OAL_CONF/fallback-policy.json"
+  profile_write hns-chain hermes local local none model-x - interactive ""
+  profile_set hns-chain fallback_chain '"mychain"'
+  [[ $(harness_cost_class hns-chain) == metered ]] || tfail "cost class: a fallback chain hop to an api-key provider must make the whole profile metered"
+  grep -q "hnsteam" <<<"$(harness_cost_class_reason hns-chain)" || tfail "cost class reason should name the metered chain hop"
+  rm -f "$OAL_CONF/fallback-policy.json"
+  pass "harness cost class fails CLOSED: no record, unrecognized auth, oauth-not-signed-in, metered fallback hop"
+
   # ---- price estimate ----------------------------------------------------------------
   MODELS_CACHE="$HD/models.json"
   cat >"$MODELS_CACHE" <<'JSON'
@@ -623,13 +683,15 @@ JSON
   profile_set hns-unk backend '"hnsteam"'
   PKT="$HD/pkt-est.md"; printf '%040d' 0 >"$PKT"   # 40 bytes -> 10 input tokens, 40 output headroom
   got=$(harness_estimate_usd hns-est "$PKT") || tfail "estimate should succeed for a priced metered model"
-  awk -v g="$got" 'BEGIN{ if (g < 0.000339 || g > 0.000341) exit 1; exit 0 }' || tfail "estimate math: got $got, want ~0.00034 (10*\$2 in + 40*\$8 out per 1M)"
+  awk -v g="$got" 'BEGIN{ if (g < 0.00679 || g > 0.00681) exit 1; exit 0 }' || tfail "estimate math: got $got, want ~0.0068 (10*\$2 in + 40*\$8 out per 1M, x20 turn factor)"
   [[ $(harness_estimate_usd hns-free "$PKT") == 0 ]] || tfail "estimate: free backend must be 0"
   [[ $(harness_estimate_usd hns-sub "$PKT") == 0 ]] || tfail "estimate: subscription backend must be 0"
   harness_estimate_usd hns-unk "$PKT" >/dev/null 2>&1 && tfail "estimate must refuse an unpriced metered model, never guess \$0"
   pass "harness price estimate: chars/4 in tokens, x4 output headroom, unpriced model refused"
 
   # ---- dispatch_once: subscription runs free, funded metered runs, underfunded asks --
+  # (detached: dispatch_once only LAUNCHES; harness_dispatch_reap writes the receipt
+  # once each worker's run log shows up.)
   PKT_SUB="$HD/pkt-sub.md";   printf 'sub job body\n'  >"$PKT_SUB"
   PKT_POOR="$HD/pkt-poor.md"; printf 'poor job body\n' >"$PKT_POOR"
   PKT_RICH="$HD/pkt-rich.md"; printf 'rich job body\n' >"$PKT_RICH"
@@ -638,6 +700,7 @@ JSON
   printf '[{"node":"rich-node","path":"%s"}]' "$PKT_RICH" >"$HD/inbox/p-rich.json"
   echo 0 >"$HD/budget-p-poor"
   echo 5 >"$HD/budget-p-rich"
+  printf '[{"node":"poor-node"}]' >"$HD/pending-p-poor.json"   # the harness's own pending list still lists it
   jq -n --arg t "$(date -Is)" '{
     projects: [
       {id:"p-sub",  repo_path:"/tmp/proj-sub"},
@@ -663,34 +726,137 @@ JSON
   grep -q "name=hns-sub-node"  "$DELEGATE_LOG" || tfail "subscription packet not delegated"
   grep -q "name=hns-rich-node" "$DELEGATE_LOG" || tfail "funded metered packet not delegated"
   ! grep -q "poor-node" "$DELEGATE_LOG" || tfail "underfunded metered packet must not be delegated"
-  [[ $(wc -l <"$RECEIPTS") == 2 ]] || { cat "$RECEIPTS"; tfail "expected 2 receipts"; }
-  grep -q "node=sub-node status=done"  "$RECEIPTS" || tfail "subscription receipt not done"
-  grep -q "node=rich-node status=done" "$RECEIPTS" || tfail "rich receipt not done"
   [[ -f ${PKT_SUB}.claimed  && ! -f $PKT_SUB  ]] || tfail "subscription packet not claimed"
   [[ -f ${PKT_RICH}.claimed && ! -f $PKT_RICH ]] || tfail "rich packet not claimed"
   [[ -f $PKT_POOR ]] || tfail "underfunded packet must stay unclaimed until approved"
+  [[ $(harness_jobs_running) == 2 ]] || tfail "2 detached job files expected after launching sub-node and rich-node"
   n_req=$(grep -c "cost/request" "$CURLLOG" || true)
   [[ $n_req == 1 ]] || { cat "$CURLLOG"; tfail "expected exactly one cost/request POST"; }
   grep "cost/request" "$CURLLOG" | grep -q "p-poor" || tfail "cost/request must be for the underfunded project"
   grep "cost/request" "$CURLLOG" | awk -F'\t' '{print $2}' | grep -q yes || tfail "cost/request must carry X-Harness: 1"
 
-  harness_dispatch_once || true
-  [[ $(wc -l <"$DELEGATE_LOG") == 2 ]] || tfail "second sweep must not re-delegate claimed packets"
-  n_req2=$(grep -c "cost/request" "$CURLLOG" || true)
-  [[ $n_req2 == 1 ]] || tfail "second sweep must not re-request an already-requested packet"
-  pass "harness dispatch_once: subscription runs free, funded metered runs, underfunded metered requests budget once"
+  harness_dispatch_reap
+  [[ $(wc -l <"$RECEIPTS") == 2 ]] || { cat "$RECEIPTS"; tfail "expected 2 receipts after reaping"; }
+  grep -q "node=sub-node status=done"  "$RECEIPTS" || tfail "subscription receipt not done"
+  grep -q "node=rich-node status=done" "$RECEIPTS" || tfail "rich receipt not done"
+  [[ $(harness_jobs_running) == 0 ]] || tfail "job files must be removed once reaped"
 
-  # ---- register, approve, decline ----------------------------------------------------
+  harness_dispatch_once || true
+  [[ $(wc -l <"$DELEGATE_LOG") == 2 ]] || tfail "second sweep must not re-delegate claimed/finished packets"
+  n_req2=$(grep -c "cost/request" "$CURLLOG" || true)
+  [[ $n_req2 == 1 ]] || tfail "second sweep must not re-request an already-requested packet (the harness's pending list still lists it)"
+  pass "harness dispatch_once/reap: subscription and funded metered run detached; underfunded metered requests budget once"
+
+  # ---- register (incl. --slots), approve, decline; requested.txt pruned on approve ---
   harness_register_rix hns-sub /tmp/proj-sub >/dev/null || tfail "register failed"
   grep -q -- "--project p-sub" "$SESSADD" || tfail "register did not add a session for p-sub"
   grep -q -- "--label hns-sub" "$SESSADD" || tfail "register label"
   grep -q -- "--cost-class subscription" "$SESSADD" || tfail "register cost class"
 
-  harness_approve p-rich 5 "go ahead" >/dev/null
-  grep -q "/api/project/p-rich/approve" "$CURLLOG" || tfail "approve did not POST"
-  harness_decline p-poor >/dev/null
-  grep -q "/api/project/p-poor/cost/decline" "$CURLLOG" || tfail "decline did not POST"
-  pass "harness register, approve, decline"
+  : >"$SESSADD"
+  harness_register_rix hns-sub /tmp/proj-sub 2 >/dev/null || tfail "register --slots failed"
+  grep -q -- "--label hns-sub-1" "$SESSADD" || tfail "register --slots 2: session 1 missing"
+  grep -q -- "--label hns-sub-2" "$SESSADD" || tfail "register --slots 2: session 2 missing"
+  [[ $(harness_profile_for_label hns-sub-1) == hns-sub ]] || tfail "a slot label must resolve back to the real profile"
+
+  grep -qxF "p-poor:poor-node" "$HARNESS_STATE_DIR/requested.txt" || tfail "requested.txt should still list the underfunded packet before approval"
+  harness_approve p-poor 0.0002 "go ahead" >/dev/null   # a harness binary is on PATH: this goes through the CLI, not curl
+  grep -q -- "--project p-poor" "$APPROVELOG" || { cat "$APPROVELOG"; tfail "approve must call the harness CLI when it is available"; }
+  grep -qxF "p-poor:poor-node" "$HARNESS_STATE_DIR/requested.txt" 2>/dev/null && tfail "requested.txt must be pruned once its project is approved"
+  harness_decline p-rich >/dev/null
+  grep -q -- "--project p-rich" "$APPROVELOG" || { cat "$APPROVELOG"; tfail "decline must call the harness CLI when it is available"; }
+  pass "harness register (incl. --slots N -> <profile>-1..N), approve/decline prefer the harness CLI, approve prunes requested.txt"
+
+  # ---- approve/decline curl fallback: X-Harness + X-Harness-Approver, request_id body --
+  (
+    PATH=$(printf '%s' "$PATH" | sed "s#$HD/fakebin:##")   # no harness CLI on PATH: force the curl fallback
+    HOME="$T/fake-home-approve"; mkdir -p "$HOME"           # and no real ~/Work/session-harness fallback either
+    OAL_PATH_NO_HARNESS="$T/nobin"; mkdir -p "$OAL_PATH_NO_HARNESS"
+    PATH="$OAL_PATH_NO_HARNESS:$PATH"
+    cp "$HD/fakebin/curl" "$OAL_PATH_NO_HARNESS/curl"
+    settings_set harness_bin ""
+    : >"$CURLLOG"
+    harness_approve p-fallback 1.5 "manual test" req-1 >/dev/null
+    line=$(grep "/api/project/p-fallback/approve" "$CURLLOG" | tail -n1)
+    [[ -n $line ]] || { cat "$CURLLOG"; tfail "curl fallback: approve did not POST"; }
+    [[ $(cut -f2 <<<"$line") == yes ]] || tfail "curl fallback: approve must carry X-Harness: 1"
+    [[ $(cut -f3 <<<"$line") == yes ]] || tfail "curl fallback: approve must carry X-Harness-Approver: human"
+    body=$(cut -f4 <<<"$line")
+    jq -e '.request_id == "req-1" and .usd == 1.5 and .by == "human"' <<<"$body" >/dev/null || { echo "$body"; tfail "curl fallback: approve body must be {request_id, usd, reason, by:human}"; }
+    harness_decline p-fallback req-2 >/dev/null
+    dline=$(grep "/api/project/p-fallback/cost/decline" "$CURLLOG" | tail -n1)
+    [[ -n $dline ]] || { cat "$CURLLOG"; tfail "curl fallback: decline did not POST"; }
+    [[ $(cut -f3 <<<"$dline") == yes ]] || tfail "curl fallback: decline must carry X-Harness-Approver: human"
+    dbody=$(cut -f4 <<<"$dline")
+    jq -e '.request_id == "req-2" and .by == "human"' <<<"$dbody" >/dev/null || { echo "$dbody"; tfail "curl fallback: decline body must be {request_id, by:human}"; }
+    settings_set harness_bin "$HD/fakebin/harness"
+  ) || exit 1
+  pass "harness approve/decline curl fallback: X-Harness + X-Harness-Approver headers, request_id body"
+
+  # ---- reap: rc-first throttle detection (marker alone, or rc alone, is not enough) --
+  PKT_T1="$HD/pkt-t1.md"; printf 'RATE_LIMIT_MARKER please retry\n' >"$PKT_T1"
+  PKT_T2="$HD/pkt-t2.md"; printf 'FAIL_MARKER nothing special\n' >"$PKT_T2"
+  PKT_T3="$HD/pkt-t3.md"; printf 'FALSE_POSITIVE_MARKER usage limit mentioned in passing\n' >"$PKT_T3"
+  printf '[{"node":"t1","path":"%s"},{"node":"t2","path":"%s"},{"node":"t3","path":"%s"}]' \
+    "$PKT_T1" "$PKT_T2" "$PKT_T3" >"$HD/inbox/p-throttle.json"
+  jq -n --arg t "$(date -Is)" '{
+    projects: [ {id:"p-throttle", repo_path:"/tmp/proj-throttle"} ],
+    sessions: [ {id:"s-throttle", project:"p-throttle", worker:"rix", label:"hns-free"} ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+  harness_dispatch_once || true
+  harness_dispatch_reap
+  grep -q "node=t1 status=throttled" "$RECEIPTS" || { cat "$RECEIPTS"; tfail "rc-first: nonzero exit + a structured marker must be throttled"; }
+  grep -q "node=t2 status=failed"    "$RECEIPTS" || { cat "$RECEIPTS"; tfail "rc-first: nonzero exit without a marker must be failed, not throttled"; }
+  grep -q "node=t3 status=done"      "$RECEIPTS" || { cat "$RECEIPTS"; tfail "rc-first: a marker in a SUCCESSFUL (exit 0) run must not be throttled"; }
+  pass "harness reap: rc-first throttle detection"
+
+  # ---- concurrency: harness_workers caps detached jobs; the reaper drains them ------
+  settings_set harness_workers 2
+  : >"$DELEGATE_LOG"; : >"$RECEIPTS"
+  PKT_C1="$HD/pkt-c1.md"; printf 'c1 body\n' >"$PKT_C1"; PKT_C2="$HD/pkt-c2.md"; printf 'c2 body\n' >"$PKT_C2"
+  PKT_C3="$HD/pkt-c3.md"; printf 'c3 body\n' >"$PKT_C3"; PKT_C4="$HD/pkt-c4.md"; printf 'c4 body\n' >"$PKT_C4"
+  printf '[{"node":"c1","path":"%s"},{"node":"c2","path":"%s"},{"node":"c3","path":"%s"},{"node":"c4","path":"%s"}]' \
+    "$PKT_C1" "$PKT_C2" "$PKT_C3" "$PKT_C4" >"$HD/inbox/p-conc.json"
+  jq -n --arg t "$(date -Is)" '{
+    projects: [ {id:"p-conc", repo_path:"/tmp/proj-conc"} ],
+    sessions: [ {id:"s-conc", project:"p-conc", worker:"rix", label:"hns-free"} ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+
+  harness_dispatch_once || true
+  [[ $(wc -l <"$DELEGATE_LOG") == 2 ]] || { cat "$DELEGATE_LOG"; tfail "concurrency: only harness_workers(2) jobs may launch per sweep"; }
+  [[ $(harness_jobs_running) == 2 ]] || tfail "concurrency: 2 job files expected after the first sweep"
+  s2=$(harness_status_json)
+  [[ $(jq -r '.jobs.running' <<<"$s2") == 2 && $(jq -r '.jobs.slots' <<<"$s2") == 2 ]] || { echo "$s2"; tfail "status must report jobs.running/jobs.slots"; }
+
+  harness_dispatch_reap
+  [[ $(wc -l <"$RECEIPTS") == 2 ]] || { cat "$RECEIPTS"; tfail "concurrency: 2 receipts expected after reaping the first batch"; }
+  [[ $(harness_jobs_running) == 0 ]] || tfail "concurrency: job files must be removed once reaped"
+
+  harness_dispatch_once || true
+  [[ $(wc -l <"$DELEGATE_LOG") == 4 ]] || { cat "$DELEGATE_LOG"; tfail "concurrency: the freed slots must launch the 2 remaining packets"; }
+  harness_dispatch_reap
+  [[ $(wc -l <"$RECEIPTS") == 4 ]] || { cat "$RECEIPTS"; tfail "concurrency: 4 total receipts expected"; }
+  [[ $(harness_jobs_running) == 0 ]] || tfail "concurrency: no jobs should remain running"
+  pass "harness concurrency: 4 packets over harness_workers=2 -> two capped sweeps, reaper drains each"
+  settings_set harness_workers 4
+
+  # ---- reap: receipt carries the delegate's ACTUAL cost from usage --json ----------
+  usage_json() { jq -nc --arg n hns-usage1 '{agents:[{name:$n, cost_usd:0.0042, prompt:123, output:45}]}'; }
+  : >"$DELEGATE_LOG"; : >"$RECEIPTS"
+  PKT_U="$HD/pkt-usage1.md"; printf 'usage test body\n' >"$PKT_U"
+  printf '[{"node":"usage1","path":"%s"}]' "$PKT_U" >"$HD/inbox/p-usage.json"
+  jq -n --arg t "$(date -Is)" '{
+    projects: [ {id:"p-usage", repo_path:"/tmp/proj-usage"} ],
+    sessions: [ {id:"s-usage", project:"p-usage", worker:"rix", label:"hns-free"} ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+  harness_dispatch_once || true
+  harness_dispatch_reap
+  grep -q "node=usage1 status=done usd=0.0042 tin=123 tout=45" "$RECEIPTS" || { cat "$RECEIPTS"; tfail "receipt must carry the worker's actual usage (--usd/--tokens-in/--tokens-out)"; }
+  pass "harness reap: receipt carries the delegate's actual cost from usage --json"
+  unset -f usage_json; source "$ROOT/lib/usage.sh"   # restore the real usage.sh function
 
   # ---- status --json with no harness installed: still network-free ------------------
   (
@@ -704,7 +870,7 @@ JSON
     [[ $(jq -r .bin <<<"$s2") == "" ]] || tfail "bin must be empty when the harness CLI cannot be found"
     after=$(wc -l <"$CURLLOG")
     [[ $before == "$after" ]] || tfail "status --json must never call curl"
-  )
+  ) || exit 1
   pass "harness status --json is network-free with no harness installed"
 
   # ---- harness_notify_sync: one blocker per pending approval, cleared when it's
@@ -749,6 +915,133 @@ JSON
   [[ $(blockers_json | jq '[.[] | select(.key=="approval-p-rich")] | length') == 0 ]] || tfail "notify_sync must resolve the blocker once the approval disappears"
   grep -q '"kind":"blocker_cleared".*"key":"approval-p-rich"' "$OAL_EVENTS" || tfail "notify_sync must log blocker_cleared for the resolved approval"
   pass "harness_notify_sync: clears the blocker when the approval disappears"
+  exit 0
+) || exit 1
+
+echo "== sentinel → harness: put a Sentinel advisory on the Gantt"
+(
+  source "$ROOT/lib/common.sh"; OAL_LIB="$ROOT/lib"
+  source "$ROOT/lib/events.sh"
+  source "$ROOT/lib/harness.sh"
+  source "$ROOT/lib/sentinel.sh"
+  source "$ROOT/lib/harness_bridge.sh"
+  OPTS=(); CMD=(); JSON=0; OAL_DRY_RUN=0; OAL_SELF="$L"
+  export OAL_AGENT=test-rix OAL_SENTINEL_BIN=true   # sentinel_installed only needs `have` to succeed; advisories are stubbed below
+  SB="$T/sentinel-bridge"; mkdir -p "$SB/fakebin" "$SB/nodes"
+  export HARNESS_DATA_DIR="$SB/data"; mkdir -p "$HARNESS_DATA_DIR"
+  INITLOG="$SB/init.log"; : >"$INITLOG"
+  LSFLAG="$SB/ls-created"
+  CURLLOG="$SB/curl.log"; : >"$CURLLOG"
+
+  # ---- fake `harness`: records init argv, ls flips [] -> [project] after init, show reads a fixture per node --
+  cat >"$SB/fakebin/harness" <<'FAKE'
+#!/bin/bash
+case "$1" in
+  init)
+    printf '%s\n' "$*" >>"__INITLOG__"
+    touch "__LSFLAG__"
+    echo ok ;;
+  ls)
+    if [[ -f "__LSFLAG__" ]]; then echo '[{"id":"sentinel-repo1","repo_path":"repo1"}]'
+    else echo '[]'
+    fi ;;
+  show)
+    shift; proj="" node=""
+    while (( $# )); do case "$1" in --project) proj=$2; shift 2 ;; --node) node=$2; shift 2 ;; *) shift ;; esac; done
+    cat "__SB__/nodes/$node.json" 2>/dev/null || echo "{\"id\":\"$node\",\"children\":[]}" ;;
+  *) echo '{}' ;;
+esac
+FAKE
+  sed -i "s#__INITLOG__#$INITLOG#g; s#__LSFLAG__#$LSFLAG#g; s#__SB__#$SB#g" "$SB/fakebin/harness"
+  chmod +x "$SB/fakebin/harness"
+
+  # ---- fake curl: logs URL, whether X-Harness was sent, and the POST body ----------
+  cat >"$SB/fakebin/curl" <<'FAKE2'
+#!/bin/bash
+args=("$@"); url="${args[-1]}"; body="" hh=no
+for ((i=0; i<${#args[@]}; i++)); do
+  [[ ${args[i]} == -d ]] && body=${args[i+1]}
+  [[ ${args[i]} == "X-Harness: 1" ]] && hh=yes
+done
+printf '%s\t%s\t%s\n' "$url" "$hh" "$body" >>"__CURLLOG__"
+echo '{}'
+FAKE2
+  sed -i "s#__CURLLOG__#$CURLLOG#g" "$SB/fakebin/curl"
+  chmod +x "$SB/fakebin/curl"
+
+  export PATH="$SB/fakebin:$PATH"
+  settings_set harness_bin "$SB/fakebin/harness"
+  patch_line() { awk -F'\t' '$1 ~ /\/patch$/ {print $3}' "$CURLLOG" | sed -n "${1}p"; }
+
+  # ---- one advisory, <=2 files, has a verification command -------------------------
+  cat >"$SB/nodes/P0.json" <<'JSON'
+{"id":"P0","children":[{"id":"n-edge-1","title":"Leaked key in config.js"}]}
+JSON
+  sentinel_advisories_json() {
+    cat <<'JSON'
+[{"id":"a1","severity":"high","title":"Leaked key in config.js","summary":"A secret key is committed in config.js.",
+  "repo_path":"repo1","verification":"grep -q ok config.js","affected_files":["config.js"]}]
+JSON
+  }
+  out=$(sentinel_plan a1)
+  grep -q "a1 -> project sentinel-repo1, node n-edge-1" <<<"$out" || { echo "$out"; tfail "plan output"; }
+  [[ $(wc -l <"$INITLOG") == 1 ]] || { cat "$INITLOG"; tfail "harness init must be called exactly once"; }
+  grep -q -- "--repo repo1" "$INITLOG" || tfail "init repo"
+  body1=$(patch_line 1)
+  jq -e 'type == "object"' <<<"$body1" >/dev/null || { echo "$body1"; tfail "ADD_CHILDREN body must be valid JSON"; }
+  [[ $(jq '.children | length' <<<"$body1") == 1 ]] || tfail "one edge child for a single advisory"
+  [[ $(jq -r '.parent' <<<"$body1") == P0 ]] || tfail "children added under P0"
+  [[ $(jq -r '.children[0].oracle.type' <<<"$body1") == cmd ]] || tfail "cmd oracle when a verification command exists"
+  [[ $(jq -r '.children[0].oracle.cmd' <<<"$body1") == "grep -q ok config.js" ]] || tfail "oracle cmd carried through"
+  [[ $(jq -r '.children[0].touches | length' <<<"$body1") == 1 ]] || tfail "one touch"
+  node1=$(jq -r --arg id a1 '.[$id].harness_node' "$XDG_STATE_HOME/omarchy-agent-launcher/sentinel-advisories.json")
+  [[ $node1 == n-edge-1 ]] || tfail "advisory -> node mapping recorded"
+
+  # ---- idempotent: re-running must not add another child ---------------------------
+  before=$(wc -l <"$CURLLOG")
+  out2=$(sentinel_plan a1)
+  grep -q "already planned" <<<"$out2" || { echo "$out2"; tfail "second run should say already planned"; }
+  after=$(wc -l <"$CURLLOG")
+  [[ $before == "$after" ]] || tfail "second run must not POST again"
+  [[ $(wc -l <"$INITLOG") == 1 ]] || tfail "second run must not call harness init again"
+  pass "sentinel plan: creates the project once, one cmd-oracle edge under P0, idempotent re-run"
+
+  # ---- no verification command -> session_ack oracle; severity -> estimate_min -----
+  cat >"$SB/nodes/P0.json" <<'JSON'
+{"id":"P0","children":[{"id":"n-edge-1","title":"Leaked key in config.js"},{"id":"n-edge-2","title":"Unpinned action"}]}
+JSON
+  sentinel_advisories_json() {
+    cat <<'JSON'
+[{"id":"a2","severity":"low","title":"Unpinned action","repo_path":"repo1","affected_files":["/.github/workflows/ci.yml"]}]
+JSON
+  }
+  sentinel_plan a2 >/dev/null
+  body2=$(patch_line 2)
+  [[ $(jq -r '.children[0].oracle.type' <<<"$body2") == session_ack ]] || tfail "session_ack oracle when no verification command"
+  [[ $(jq -r '.children[0].estimate_min' <<<"$body2") == 15 ]] || tfail "low severity -> 15 min estimate"
+  [[ $(wc -l <"$INITLOG") == 1 ]] || tfail "same repo must reuse the existing project, no second init"
+  pass "sentinel plan: session_ack oracle without a verification command; severity maps to estimate_min"
+
+  # ---- more than two files -> a container with up to 4 edge children, <=2 touches each --
+  cat >"$SB/nodes/P0.json" <<'JSON'
+{"id":"P0","children":[{"id":"c-3","title":"Widely scattered secret"}]}
+JSON
+  sentinel_advisories_json() {
+    cat <<'JSON'
+[{"id":"a3","severity":"medium","title":"Widely scattered secret","repo_path":"repo1",
+  "verification":"scripts/verify.sh","affected_files":["a.js","b.js","c.js","d.js"]}]
+JSON
+  }
+  sentinel_plan a3 >/dev/null
+  body3=$(patch_line 3)   # the container child, added under P0
+  body4=$(patch_line 4)   # the edge children, added under the container
+  [[ $(jq -r '.parent' <<<"$body3") == P0 ]] || tfail "the container is added under P0"
+  [[ $(jq -r '.children[0].kind' <<<"$body3") == container ]] || tfail "more than 2 files -> a container child"
+  [[ $(jq -r '.parent' <<<"$body4") == c-3 ]] || tfail "edge children are added under the container node"
+  [[ $(jq '.children | length' <<<"$body4") == 2 ]] || tfail "4 files chunked into edge children of at most 2 touches"
+  jq -e 'all(.children[]; .kind == "edge" and (.touches | length) <= 2 and .oracle.type == "cmd")' <<<"$body4" >/dev/null \
+    || { echo "$body4"; tfail "each edge child: kind edge, <=2 touches, a real (cmd) oracle"; }
+  pass "sentinel plan: more than two files -> a container with edge children of at most two touches each"
   exit 0
 ) || exit 1
 

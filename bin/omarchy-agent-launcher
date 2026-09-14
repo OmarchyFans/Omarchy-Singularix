@@ -105,8 +105,8 @@ while (($#)); do
     -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --version) echo "omarchy-agent-launcher $OAL_VERSION"; exit 0 ;;
     --name|--agent|--runtime|--provider|--auth|--model|--base-url|--mode|--skill|--job-file|--task|--level|--key|--ctx|--kv|--slots|\
-    --backend|--parent|--role|--task-title|--id|--kind|--label|--url|--size|--input-per-m|--output-per-m)
-               OPTS+=("$1" "${2:-}"); shift ;;   # valued options (create, delegate, backends add, local-server)
+    --backend|--parent|--role|--task-title|--id|--kind|--label|--url|--size|--input-per-m|--output-per-m|--approved-usd|--request)
+               OPTS+=("$1" "${2:-}"); shift ;;   # valued options (create, delegate, backends add, local-server, harness)
     --*)       OPTS+=("$1") ;;                    # create's flags
     *)         CMD+=("$1") ;;
   esac
@@ -675,32 +675,68 @@ cmd_usage() { if (( JSON )); then usage_json | jq .; else usage_print; fi; }
 cmd_rix() {
   case "${CMD[1]:-chat}" in
     setup)     rix_setup "${CMD[2]:-}" "${CMD[3]:-}" ;;
-    chat|open) [[ $(settings_get harness_autostart false) == true ]] && { harness_serve_start || true; }
-               rix_exists || rix_setup; cmd_launch "$RIX_NAME" ;;
+    chat|open) rix_exists || rix_setup
+               harness_gate_profile "$RIX_NAME" "$(cat "$(job_path "$RIX_NAME")" 2>/dev/null)" --interactive \
+                 || { warn "rix chat: refusing to start on a metered backend without an approved budget (exit 3)"; return 3; }
+               [[ $(settings_get harness_autostart false) == true ]] && { harness_serve_start || true; }
+               cmd_launch "$RIX_NAME" ;;
     brief)     rix_brief ;;
-    ask)       rix_ask "${CMD[2]:?rix ask needs a question}" ;;
+    ask)       local q=${CMD[2]:?rix ask needs a question}
+               harness_gate_profile "$RIX_NAME" "$q" \
+                 || { warn "rix ask: refusing to run on a metered backend without --approved-usd (exit 3)"; return 3; }
+               rix_ask "$q" ;;
     status)    rix_status_json | jq . ;;
     *) fail "usage: omarchy-agent-launcher rix [chat|setup [BACKEND [MODEL]]|brief|ask \"…\"|status]" ;;
   esac
 }
 
 # Hand a job to a worker agent on a backend. Rix calls this from its session
-# (OAL_AGENT is set, so the worker records it as parent); you can too.
+# (OAL_AGENT is set, so the worker records it as parent); you can too. On a
+# metered backend this refuses (exit 3) and prints the estimate unless
+# --approved-usd covers it -- a human types that flag, or the harness
+# dispatch loop supplies it once ITS OWN budget check has already cleared.
 cmd_delegate() {
   local backend name title mode=unattended model
   backend=$(opt_value --backend) || fail "delegate: --backend is required (see: omarchy-agent-launcher backends list)"
   name=$(opt_value --name || echo "task-$(date +%m%d%H%M%S)"); name=$(slugify "$name")
   title=$(opt_value --task-title || echo "$name"); model=$(opt_value --model || true)
   opt_flag --interactive && mode=interactive
+  local approved; approved=$(opt_value --approved-usd || echo 0)
+
+  # Buffer the job text once (from stdin/file/env) so its size can be
+  # estimated before the profile is created, then hand those same bytes to
+  # `create` via a temp file regardless of how they arrived (stdin can only
+  # be read once).
+  local jobtmp; jobtmp=$(mktemp "${TMPDIR:-/tmp}/oal-delegate-job.XXXXXX")
+  if opt_flag --job-stdin; then cat >"$jobtmp"
+  elif opt_flag --job-env; then printf '%s\n' "${OAL_JOB:-}" >"$jobtmp"
+  else
+    local jf; jf=$(opt_value --job-file) || { rm -f "$jobtmp"; fail "delegate: --job-file, --job-stdin, or --job-env is required"; }
+    [[ -f $jf ]] || { rm -f "$jobtmp"; fail "delegate: no such file: $jf"; }
+    cp -f "$jf" "$jobtmp"
+  fi
+
+  local resolved; resolved=$(backend_resolve "$backend" "$model") || { rm -f "$jobtmp"; exit 1; }
+  local gate_model; gate_model=$(jq -r .model <<<"$resolved")
+  local estimate drc=0
+  estimate=$(harness_gate "$backend" "$gate_model" "$jobtmp" "$approved") || drc=$?
+  if (( drc == 3 )); then
+    rm -f "$jobtmp"
+    if [[ $estimate == unknown ]]; then
+      warn "delegate: no known price for $gate_model on $backend; refusing (metered, unknown cost -- pass --approved-usd to override)"
+    else
+      warn "delegate: this would cost about \$$estimate on $backend/$gate_model (metered). Pass --approved-usd $estimate to proceed."
+    fi
+    return 3
+  fi
+
   local parent=${OAL_AGENT:-}; [[ -z $parent ]] && rix_exists && parent=$RIX_NAME
-  local -a create=(--name "$name" --agent hermes --runtime local --backend "$backend" --mode "$mode" --role worker --task-title "$title")
+  local -a create=(--name "$name" --agent hermes --runtime local --backend "$backend" --mode "$mode" --role worker --task-title "$title" --job-file "$jobtmp")
   [[ -n $parent ]] && create+=(--parent "$parent")
   [[ -n $model ]] && create+=(--model "$model")
   local i; for ((i=0; i<${#OPTS[@]}; i++)); do
     case "${OPTS[i]}" in
       --skill) create+=(--skill "${OPTS[i+1]}"); ((i++)) ;;
-      --job-file) create+=(--job-file "${OPTS[i+1]}"); ((i++)) ;;
-      --job-stdin|--job-env) create+=("${OPTS[i]}") ;;
     esac
   done
   local wait=0; opt_flag --wait && wait=1
@@ -708,6 +744,7 @@ cmd_delegate() {
   local saved_json=$JSON; JSON=0
   OPTS=("${create[@]}"); cmd_create      # prints "saved <name>", then launches (or dry-run lines)
   JSON=$saved_json
+  rm -f "$jobtmp"
   if (( wait )); then
     load_profile_adapters "$name"
     if (( OAL_DRY_RUN )); then local -a cmd; mapfile -t cmd < <(rt_cmd "$name" 0); say "[dry-run] would run and wait for:"; show_cmd "${cmd[@]}"
@@ -788,7 +825,8 @@ cmd_harness() {
       fi
       local s; s=$(harness_status_json)
       jq -r '"harness: " + (if .alive then "running" else "not running" end) + " · " + .url
-             + (if .bin == "" then " · CLI not found" else "" end) + " · " + (.projects|tostring) + " project(s)"' <<<"$s"
+             + (if .bin == "" then " · CLI not found" else "" end) + " · " + (.projects|tostring) + " project(s)"
+             + " · jobs " + (.jobs.running|tostring) + "/" + (.jobs.slots|tostring)' <<<"$s"
       jq -r '.pending_approvals[]? | "  pending approval: project \(.id) — $" + (.pending_approval.estimate_usd // .pending_approval.usd // "?" | tostring) + " — " + (.pending_approval.reason // "")' <<<"$s" ;;
     serve)   harness_serve_start && say "harness serve started ($(harness_url))" ;;
     stop)    harness_serve_stop; say "harness serve/dispatch stopped" ;;
@@ -798,15 +836,19 @@ cmd_harness() {
       if (( JSON )); then "$bin" ls --json; else "$bin" ls; fi ;;
     register)
       local profile=${CMD[2]:?"harness register needs a profile name"} repo=${CMD[3]:-}
-      harness_register_rix "$profile" "$repo" ;;
+      local slots; slots=$(opt_value --slots || echo 1)
+      harness_register_rix "$profile" "$repo" "$slots" ;;
     dispatch)
       if opt_flag --once; then harness_dispatch_once; else harness_dispatch_loop; fi ;;
     approve)
+      [[ -z ${OAL_AGENT:-} ]] || fail "harness approve: agents cannot approve spending; ask the user to run this"
       local project=${CMD[2]:?"harness approve needs a project id"} usd=${CMD[3]:?"harness approve needs a USD amount"}
-      harness_approve "$project" "$usd" "${CMD[4]:-approved}" | jq . 2>/dev/null || true ;;
+      local reason=${CMD[4]:-approved} req; req=$(opt_value --request || true)
+      harness_approve "$project" "$usd" "$reason" "$req" | jq . 2>/dev/null || true ;;
     decline)
-      local project=${CMD[2]:?"harness decline needs a project id"}
-      harness_decline "$project" | jq . 2>/dev/null || true ;;
+      [[ -z ${OAL_AGENT:-} ]] || fail "harness decline: agents cannot decline spending; ask the user to run this"
+      local project=${CMD[2]:?"harness decline needs a project id"} req; req=$(opt_value --request || true)
+      harness_decline "$project" "$req" | jq . 2>/dev/null || true ;;
     inbox)
       local profile=${CMD[2]:?"harness inbox needs a profile name"}
       local bin; bin=$(harness_bin) || fail "harness CLI not found"
@@ -817,7 +859,7 @@ cmd_harness() {
         [[ -n $proj && -n $sid ]] || continue
         "$bin" inbox --project "$proj" --session "$sid" --json
       done < <(jq -c --arg label "$profile" '.sessions[]? | select(.label == $label)' <<<"$(harness_overview_json)") ;;
-    *) fail "usage: omarchy-agent-launcher harness status|serve|stop|open|projects|register PROFILE [REPO]|dispatch [--once]|approve PROJECT USD [REASON]|decline PROJECT|inbox PROFILE" ;;
+    *) fail "usage: omarchy-agent-launcher harness status|serve|stop|open|projects|register PROFILE [REPO] [--slots N]|dispatch [--once]|approve PROJECT USD [REASON] [--request ID]|decline PROJECT|inbox PROFILE   (approve/decline: human only, refused with OAL_AGENT set)" ;;
   esac
 }
 

@@ -199,36 +199,50 @@ edges to worker sessions as inbox packets, and is the single source of truth for
 `done` — it runs the real oracle before a node is marked finished, never Rix's say-so. A Rix
 profile registers as a harness worker session (`worker: rix`) on whatever backend the launcher
 chose (local GPU, browser sign-in, or an API key); the launcher's own dispatch loop picks up its
-inbox packets, runs each as a `delegate --wait` job, and writes the outbox receipt from the real
-result. The dashboard's **Plan** tab renders the same picture as a Gantt (`FileView` on the
-harness's `overview.json` plus a `tail -F` on `events.jsonl` for animation deltas — no network
-from QML), with a badge for any pending approval; "Open full Gantt" opens the browser UI.
+inbox packets and launches each as a **detached** `delegate` job (no blocking), then a reaper
+writes the real outbox receipt — including the worker's actual cost — once it finishes. The
+dashboard's **Plan** tab renders the same picture as a Gantt (`FileView` on the harness's
+`overview.json` plus a `tail -F` on `events.jsonl` for animation deltas — no network from QML),
+with a badge for any pending approval; "Open full Gantt" opens the browser UI.
 
 - **`omarchy-agent-launcher harness status`** — is the harness running, how many projects, any
-  budget requests waiting on you.
+  budget requests waiting on you, and how many detached jobs are running out of the configured
+  concurrency (`jobs.running`/`jobs.slots`).
 - **`omarchy-agent-launcher harness serve`** / **`stop`** — start (or stop) `harness serve --all`
   plus the launcher's own dispatch loop, both under `~/.local/state/omarchy-agent-launcher/harness/`
   (pid files + logs); `settings.json:harness_autostart` (default `false`) starts it automatically
   on `rix chat`/`rix open`. `harness open` opens the harness's own browser UI.
 - **`omarchy-agent-launcher harness projects`** — lists the harness's own projects (`harness ls`).
-- **`omarchy-agent-launcher harness register <profile> [repo]`** — registers a saved agent profile
-  as a harness worker session for every project whose repo matches.
-- **`omarchy-agent-launcher harness dispatch [--once]`** — runs the cost-gate → claim → `delegate
-  --wait` → `harness receipt` loop once, or forever (this is what `harness serve` starts in the
-  background; run it by hand to watch one sweep).
+- **`omarchy-agent-launcher harness register <profile> [repo] [--slots N]`** — registers a saved
+  agent profile as a harness worker session for every project whose repo matches. `--slots N`
+  (default 1) registers `<profile>-1`..`<profile>-N`, so one saved profile can run N packets at
+  once; the dispatch loop maps any of those labels straight back to the real profile.
+- **`omarchy-agent-launcher harness dispatch [--once]`** — one sweep (or forever, in a loop): reap
+  every detached job that finished since the last sweep, then launch up to
+  `settings.json:harness_workers` (default 4) new ones from unclaimed, cost-cleared packets. This
+  is what `harness serve` starts in the background; run `--once` by hand to watch a single sweep.
 - **`omarchy-agent-launcher harness inbox <profile>`** — the profile's unclaimed inbox packets
   across every project it's registered on, as JSON.
-- **`omarchy-agent-launcher harness approve <project> <usd> [reason]`** /
-  **`harness decline <project>`** — answer a pending budget request.
+- **The cost rule, fail CLOSED**: a backend is `free` only when it is the local GPU, and
+  `subscription` only when it is an OAuth provider you are actually signed in to — an API key, a
+  backend the launcher can't resolve at all, an OAuth provider nobody signed in to, or a Hermes
+  fallback chain that can hop to an api-key provider, is all `metered`. A metered packet is never
+  run until its estimated price (a whole agent loop, not one call: chars/4 tokens ×
+  `settings.json:harness_turn_factor`, default 20, × the models.dev price) fits the project's
+  remaining budget; short by even a cent, or unpriced, it posts one `cost/request` (deduplicated,
+  and cleared the moment it's funded, resolved, or no longer pending) and waits — it never guesses
+  `$0`. Outside the harness, a direct `delegate`, `rix ask`, or `rix chat` on a metered backend
+  needs a human-typed `--approved-usd N` (or, for `rix chat` only, an interactive y/N) or it
+  refuses (exit 3) and prints the estimate. No surprise expenditures.
+- **Approvals are human-only**: `omarchy-agent-launcher harness approve <project> <usd> [reason]
+  [--request ID]` / `harness decline <project> [--request ID]` refuse outright when run from an
+  agent's own session (`$OAL_AGENT` set) — Rix can say the price and ask, but it can never approve
+  or decline spending itself. They prefer the harness's own `approve`/`decline` CLI (which enforces
+  the same rule and resolves the request id for you); without a harness binary they fall back to
+  POSTing the API directly with `X-Harness: 1` and `X-Harness-Approver: human`.
 - **`settings.json:harness_bin`** — explicit path to the `harness` binary; otherwise resolved as
-  PATH, then `~/Work/session-harness/.venv/bin/harness`.
-- **The cost rule**: subscriptions first; a metered backend never starts work without an approved
-  budget; no surprise expenditures. Local work and a browser sign-in cost nothing to dispatch
-  (`free` / `subscription`); an API-key backend is `metered`, and the dispatch loop estimates a
-  packet's price from models.dev before it ever runs it. When the project's remaining budget is
-  short, it asks once (never guesses `$0` for a model it has no price for) and waits — nothing
-  metered starts without an approved budget. Rix says the price and gets a yes before `harness
-  approve`, same as every other paid backend.
+  PATH, then `~/Work/session-harness/.venv/bin/harness`. Other keys: `harness_autostart` (bool,
+  default `false`), `harness_turn_factor` (int, default `20`), `harness_workers` (int, default `4`).
 
 ### From a terminal
 
