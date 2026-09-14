@@ -553,6 +553,8 @@ echo "== harness: cost class, price estimate, dispatch loop, network-free status
   CURLLOG="$HD/curl.log"; : >"$CURLLOG"
   DELEGATE_LOG="$HD/delegate.log"; : >"$DELEGATE_LOG"
   APPROVELOG="$HD/approve.log"; : >"$APPROVELOG"
+  HEARTBEATLOG="$HD/heartbeat.log"; : >"$HEARTBEATLOG"
+  ORDERLOG="$HD/order.log"; : >"$ORDERLOG"
 
   # ---- fake `harness` CLI: records session-add/receipt calls, answers inbox/cost --
   cat >"$HD/fakebin/harness" <<'FAKE'
@@ -561,9 +563,13 @@ echo "== harness: cost class, price estimate, dispatch loop, network-free status
 # (`harness --json inbox ...`); strip it here so this fake dispatches on the
 # subcommand the same way regardless of where the caller put --json.
 while [[ ${1:-} == --json ]]; do shift; done
+printf '%s\n' "$*" >>"__ORDERLOG__"
 case "$1" in
   session)
     printf '%s\n' "$*" >>"__SESSADD__"
+    echo ok ;;
+  heartbeat)
+    printf '%s\n' "$*" >>"__HEARTBEATLOG__"
     echo ok ;;
   inbox)
     proj=""
@@ -586,11 +592,11 @@ case "$1" in
   approve|decline)
     printf '%s\n' "$*" >>"__APPROVELOG__"
     echo ok ;;
-  ls) echo ok ;;
+  ls) cat "__HD__/ls-response.json" 2>/dev/null || echo '[]' ;;
   *) echo '{}' ;;
 esac
 FAKE
-  sed -i "s#__SESSADD__#$SESSADD#g; s#__HD__#$HD#g; s#__RECEIPTS__#$RECEIPTS#g; s#__APPROVELOG__#$APPROVELOG#g" "$HD/fakebin/harness"
+  sed -i "s#__SESSADD__#$SESSADD#g; s#__HD__#$HD#g; s#__RECEIPTS__#$RECEIPTS#g; s#__APPROVELOG__#$APPROVELOG#g; s#__HEARTBEATLOG__#$HEARTBEATLOG#g; s#__ORDERLOG__#$ORDERLOG#g" "$HD/fakebin/harness"
   chmod +x "$HD/fakebin/harness"
 
   # ---- fake curl: logs URL, whether X-Harness/X-Harness-Approver were sent, and the body --
@@ -919,6 +925,88 @@ JSON
   [[ $(blockers_json | jq '[.[] | select(.key=="approval-p-rich")] | length') == 0 ]] || tfail "notify_sync must resolve the blocker once the approval disappears"
   grep -q '"kind":"blocker_cleared".*"key":"approval-p-rich"' "$OAL_EVENTS" || tfail "notify_sync must log blocker_cleared for the resolved approval"
   pass "harness_notify_sync: clears the blocker when the approval disappears"
+
+  # ---- dispatch_packet: job file records slug/claimed/started_at; the harness sees
+  #      either `session set --pid` or `heartbeat` for the dispatched session ---------
+  : >"$DELEGATE_LOG"; : >"$SESSADD"; : >"$HEARTBEATLOG"
+  PKT_J1="$HD/pkt-j1.md"; printf 'j1 body\n' >"$PKT_J1"
+  printf '[{"node":"j1","path":"%s"}]' "$PKT_J1" >"$HD/inbox/p-j1.json"
+  jq -n --arg t "$(date -Is)" '{
+    projects: [ {id:"p-j1", repo_path:"/tmp/proj-j1"} ],
+    sessions: [ {id:"s-j1", project:"p-j1", worker:"rix", label:"hns-free"} ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+  harness_dispatch_once || true
+  JF1="$HARNESS_JOBS_DIR/p-j1/j1.json"
+  [[ -f $JF1 ]] || tfail "dispatch: expected a job file for the claimed j1 packet"
+  jf1=$(cat "$JF1")
+  [[ -n $(jq -r '.slug // empty' <<<"$jf1") ]] || tfail "job file must record slug"
+  [[ -n $(jq -r '.claimed // empty' <<<"$jf1") ]] || tfail "job file must record claimed"
+  [[ $(jq -r '.started_at // empty' <<<"$jf1") =~ ^[0-9]+$ ]] || tfail "job file must record a numeric started_at"
+  grep -q -- "--session s-j1 --pid" "$SESSADD" || grep -q -- "--session s-j1" "$HEARTBEATLOG" \
+    || { cat "$SESSADD" "$HEARTBEATLOG"; tfail "the harness must see either session set --pid or heartbeat for the dispatched session"; }
+  pass "harness_dispatch_packet: job file has slug/claimed/started_at; session pid or heartbeat recorded"
+
+  # ---- harness_dispatch_heartbeat: claimed packet still present -> heartbeat only,
+  #      job file survives ------------------------------------------------------------
+  : >"$HEARTBEATLOG"
+  harness_dispatch_heartbeat
+  [[ -f $JF1 ]] || tfail "job file must survive a heartbeat sweep while the claimed packet is still present"
+  grep -q -- "--project p-j1 --session s-j1" "$HEARTBEATLOG" || { cat "$HEARTBEATLOG"; tfail "harness_dispatch_heartbeat must heartbeat a still-claimed session"; }
+  pass "harness_dispatch_heartbeat: claimed packet present -> heartbeat recorded, job file survives"
+
+  # ---- harness_dispatch_heartbeat: the harness withdrew the packet (renamed out from
+  #      under the job's recorded .claimed path) -> forget the delegate, clear the pid,
+  #      emit a cancelled event, and remove the transient profile/stage dir -----------
+  slug1=$(jq -r '.slug' "$JF1")
+  mkdir -p "$(stage_dir "$slug1")"; touch "$(stage_dir "$slug1")/marker"
+  printf '{}' >"$(profile_path "$slug1")"
+  mv -f "${PKT_J1}.claimed" "${PKT_J1}.claimed.cancelled"
+  : >"$SESSADD"
+  harness_dispatch_heartbeat
+  [[ ! -f $JF1 ]] || tfail "withdrawn packet: the job file must be removed"
+  grep -q -- "--project p-j1 --session s-j1 --clear-pid" "$SESSADD" || { cat "$SESSADD"; tfail "withdrawn packet must call session set --clear-pid"; }
+  grep -q "harness:p-j1:j1:cancelled" "$OAL_EVENTS" || tfail "withdrawn packet must emit a harness:<proj>:<node>:cancelled event"
+  [[ ! -d $(stage_dir "$slug1") ]] || tfail "harness_job_forget must remove the transient stage dir"
+  [[ ! -f $(profile_path "$slug1") ]] || tfail "harness_job_forget must remove the transient profile"
+  pass "harness_dispatch_heartbeat: withdrawn packet -> job forgotten, session cleared, cancelled event, stage/profile removed"
+
+  # ---- harness_dispatch_reap: a finished job -> receipt written, then session set
+  #      --clear-pid, and its stage dir removed ---------------------------------------
+  : >"$DELEGATE_LOG"; : >"$RECEIPTS"; : >"$SESSADD"
+  PKT_J2="$HD/pkt-j2.md"; printf 'j2 body\n' >"$PKT_J2"
+  printf '[{"node":"j2","path":"%s"}]' "$PKT_J2" >"$HD/inbox/p-j2.json"
+  jq -n --arg t "$(date -Is)" '{
+    projects: [ {id:"p-j2", repo_path:"/tmp/proj-j2"} ],
+    sessions: [ {id:"s-j2", project:"p-j2", worker:"rix", label:"hns-free"} ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+  harness_dispatch_once || true
+  JF2="$HARNESS_JOBS_DIR/p-j2/j2.json"
+  [[ -f $JF2 ]] || tfail "j2 job file must exist after dispatch"
+  slug2=$(jq -r '.slug' "$JF2")
+  [[ -d $(stage_dir "$slug2") ]] || tfail "stage dir should exist for the running job"
+  : >"$ORDERLOG"
+  harness_dispatch_reap
+  grep -q "node=j2 status=done" "$RECEIPTS" || { cat "$RECEIPTS"; tfail "reap of a finished job must write a receipt"; }
+  grep -q -- "--project p-j2 --session s-j2 --clear-pid" "$SESSADD" || { cat "$SESSADD"; tfail "reap must call session set --clear-pid"; }
+  n_receipt=$(grep -n "^receipt --project p-j2 --session s-j2 --node j2" "$ORDERLOG" | tail -n1 | cut -d: -f1)
+  n_clearpid=$(grep -n "^session set --project p-j2 --session s-j2 --clear-pid" "$ORDERLOG" | tail -n1 | cut -d: -f1)
+  [[ -n $n_receipt && -n $n_clearpid && $n_receipt -lt $n_clearpid ]] || { cat "$ORDERLOG"; tfail "reap must call receipt BEFORE session set --clear-pid"; }
+  [[ ! -d $(stage_dir "$slug2") ]] || tfail "reap must remove the stage dir via harness_job_forget"
+  [[ ! -f $JF2 ]] || tfail "job file must be removed after reap"
+  pass "harness_dispatch_reap: finished job -> receipt then session set --clear-pid, stage dir removed"
+
+  # ---- harness_register_rix: --project with no repo resolves --cwd from `harness --json ls` --
+  profile_write rix hermes local local none model-x - interactive ""
+  REPO5="$HD/repo-parse-cookie"; mkdir -p "$REPO5"
+  jq -n --arg id parse_cookie --arg repo "$REPO5" '[{id:$id, repo_path:$repo}]' >"$HD/ls-response.json"
+  : >"$SESSADD"
+  harness_register_rix rix "" 1 parse_cookie >/dev/null || tfail "register --project (no repo) failed"
+  grep -q -- "--project parse_cookie" "$SESSADD" || { cat "$SESSADD"; tfail "register --project: session add must target the given project id"; }
+  grep -q -- "--cwd $REPO5" "$SESSADD" || { cat "$SESSADD"; tfail "register --project (no repo): --cwd must come from harness --json ls's repo_path"; }
+  rm -f "$(profile_path rix)"
+  pass "harness_register_rix: --project with no repo resolves --cwd from harness --json ls"
   exit 0
 ) || exit 1
 
