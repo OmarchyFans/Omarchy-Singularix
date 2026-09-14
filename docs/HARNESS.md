@@ -1,4 +1,4 @@
-# Rix × session-harness — one orchestrator surface (0.14.0)
+# Rix × session-harness — one orchestrator surface (0.14.1)
 
 The Agent Launcher (Rix) and the session-harness (`~/Work/session-harness`, CLI
 `harness`, API on `127.0.0.1:7744`) become one surface. Wave 5b (adversarial review of the

@@ -3,6 +3,10 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.14.1
+
+- `harness register`: a label already registered on the project is resynced (role, tier, model, vendor, cost class), never re-added as `<label>-2` (seen live: `rix-1-2`, `rix-2-2`).
+
 ## 0.14.0 — Roles and model policy (2026-09-14)
 
 - **Profile field `harness_role`** (`orchestrator|reasoning|coding|local`, default `coding`):
