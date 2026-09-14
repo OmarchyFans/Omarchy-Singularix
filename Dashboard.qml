@@ -50,6 +50,7 @@ Item {
   property var events: []              // ingested events.jsonl lines (capped)
   property int eventsVersion: 0
   property var eventsTabRef: null      // set once EventsTab is instantiated; lets other tabs deep-link with a filter
+  property var planTabRef: null        // set once PlanTab is instantiated; lets other tabs deep-link a harness project
   property int selectedIndex: 0
   property bool cursorActive: false
   property string requestedAgent: ""
@@ -278,6 +279,9 @@ Item {
           else if (t === "7") dash.selectTab("projects")
           else if (t === "r" || t === "R") dash.refreshStatus()
           else if (t === "n" || t === "N") dash.selectTab("new")
+          else if (dash.tab === "plan" && (t === "a" || t === "A")) { if (dash.planTabRef) dash.planTabRef.assignSelected() }
+          else if (dash.tab === "plan" && (t === "p" || t === "P")) { if (dash.planTabRef) dash.planTabRef.cycleProjectFilter() }
+          else if (dash.tab === "plan" && (t === "f" || t === "F")) { if (dash.planTabRef) dash.planTabRef.toggleCriticalOnly() }
         }
 
         // ---- update banner (docs/update-alerts.md) ------------------------
@@ -420,7 +424,7 @@ Item {
             height: parent.height
 
             RixTab { id: rixTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "rix"; dash: dash }
-            PlanTab { id: planTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "plan"; dash: dash }
+            PlanTab { id: planTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "plan"; dash: dash; Component.onCompleted: dash.planTabRef = planTab }
             AgentsTab { id: agentsTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "agents"; dash: dash }
             SetupForm {
               id: setupForm; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "new"; dash: dash
