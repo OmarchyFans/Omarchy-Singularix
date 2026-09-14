@@ -56,6 +56,16 @@ Item {
   readonly property int runningCount: status ? status.agents.filter(function(a) { return a.running }).length : 0
   readonly property int agentCount: status ? status.agents.length : 0
 
+  // updates: what `update-check` reported for this window's version (docs/update-alerts.md)
+  property string fileVersion: ""
+  readonly property string version: manifest && manifest.version ? String(manifest.version) : fileVersion
+  property var updateInfo: null
+  property bool updateHidden: false
+  readonly property bool updateAvailable: !!updateInfo && updateInfo.update_available === true
+                                          && updateInfo.dismissed !== updateInfo.latest
+  readonly property bool updateMismatch: !!updateInfo && updateInfo.mismatch === true
+  readonly property bool updateBannerShown: !updateHidden && (updateAvailable || updateMismatch)
+
   readonly property var currentTab: tab === "rix" ? rixTab : (tab === "new" ? setupForm : (tab === "events" ? eventsTab : (tab === "notifications" ? notifTab : (tab === "projects" ? projectsTab : agentsTab))))
   readonly property var usage: status && status.usage ? status.usage : null
   readonly property real totalCost: usage ? usage.totals.cost_usd : 0
@@ -87,8 +97,40 @@ Item {
     window.visible = true
     refreshStatus()
     focusTimer.restart()
+    checkUpdates()
   }
   function close() { closingFromHost = true; window.visible = false; closingFromHost = false }
+
+  // ---- updates ------------------------------------------------------------
+  FileView {
+    path: Qt.resolvedUrl("manifest.json").toString().replace(/^file:\/\//, "")
+    printErrors: false
+    onLoaded: { try { dash.fileVersion = String(JSON.parse(text()).version || "") } catch (e) { dash.fileVersion = "" } }
+  }
+  function checkUpdates() {
+    if (updateProc.running) return
+    updateProc.command = [launcher, "update-check", version]
+    updateProc.running = true
+  }
+  Process {
+    id: updateProc
+    stdout: StdioCollector { id: updateOut; waitForEnd: true }
+    onExited: function(code) {
+      var d = null
+      try { d = JSON.parse(String(updateOut.text || "")) } catch (e) { d = null }
+      if (d) { dash.updateInfo = d; return }
+      // A helper older than this window does not know update-check.
+      if (code !== 0) dash.updateInfo = { mismatch: true, update_available: false, latest: null, notes: [], dismissed: "", cli: "older" }
+    }
+  }
+  function runUpdate() {
+    updateHidden = true
+    Quickshell.execDetached([launcher, "update-run", updateAvailable ? "all" : "install"])
+  }
+  function dismissUpdate() {
+    updateHidden = true
+    if (updateAvailable && updateInfo.latest) Quickshell.execDetached([launcher, "update-dismiss", String(updateInfo.latest)])
+  }
   function requestClose() {
     if (shell && typeof shell.hide === "function") shell.hide(pluginId)
     else window.visible = false
@@ -228,8 +270,68 @@ Item {
           else if (t === "n" || t === "N") dash.selectTab("new")
         }
 
+        // ---- update banner (docs/update-alerts.md) ------------------------
+        Rectangle {
+          id: updateBanner
+          anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right
+          anchors.margins: visible ? Style.space(10) : 0
+          visible: dash.updateBannerShown
+          height: visible ? updateRow.implicitHeight + Style.space(14) : 0
+          radius: Style.space(6)
+          color: Qt.rgba(dash.accent.r, dash.accent.g, dash.accent.b, 0.08)
+          border.width: 1
+          border.color: dash.accent
+          Row {
+            id: updateRow
+            width: parent.width - Style.space(14)
+            anchors.centerIn: parent
+            spacing: Style.space(8)
+            Column {
+              id: updateCol
+              width: parent.width - updateButtons.width - parent.spacing
+              spacing: Style.space(2)
+              Text {
+                width: parent.width; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                text: dash.updateAvailable
+                      ? "Agent Launcher " + dash.updateInfo.latest + " is available (you have " + dash.version + ")"
+                      : "Finish updating Agent Launcher: the dashboard is " + dash.version + ", its helper is " + (dash.updateInfo ? dash.updateInfo.cli : "")
+                color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.body; font.bold: true
+              }
+              Repeater {
+                model: dash.updateAvailable ? dash.updateInfo.notes.slice(0, 4) : []
+                delegate: Text {
+                  required property var modelData
+                  width: updateCol.width; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                  text: "•  " + modelData
+                  color: dash.foreground; opacity: 0.8; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+                }
+              }
+              Text {
+                width: parent.width; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                text: dash.updateAvailable
+                      ? "Update opens a terminal: omarchy plugin update shows the changes and asks, install.sh asks, then the shell restarts to load the new dashboard."
+                      : "Run install.sh once so the helper matches. It asks before changing anything."
+                color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+              }
+            }
+            Row {
+              id: updateButtons
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(4)
+              Button {
+                text: dash.updateAvailable ? "Update…" : "Finish update…"; bordered: true
+                foreground: dash.accent; fontFamily: dash.fontFamily
+                onClicked: dash.runUpdate()
+              }
+              Button { text: "Later"; bordered: true; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: dash.dismissUpdate() }
+            }
+          }
+        }
+
         Row {
-          anchors.fill: parent
+          anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+          anchors.top: updateBanner.bottom
+          anchors.topMargin: updateBanner.visible ? Style.space(10) : 0
 
           // ---- sidebar ---------------------------------------------------
           Rectangle {

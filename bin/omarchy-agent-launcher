@@ -26,6 +26,9 @@
 #                                          append to the event log (agents and hooks may call this;
 #                                          OAL_AGENT holds the agent's own name inside its session)
 #   omarchy-agent-launcher settings get|set <key> [value]   e.g. notify_blockers false
+#   omarchy-agent-launcher update-check [VERSION] [--force]   is a newer version published? (JSON, cached 6 h)
+#   omarchy-agent-launcher update-dismiss <version>           stop offering that version
+#   omarchy-agent-launcher update-run [all|install]           terminal: omarchy plugin update, install.sh, shell restart
 #
 # Rix (chief of staff) and the fleet:
 #   omarchy-agent-launcher rix [chat]             open Rix (set up on the local GPU the first time)
@@ -832,6 +835,9 @@ cmd_focus_window() {
 # ==================================================================== main ====
 case "${CMD[0]:-menu}" in
   menu)    cmd_menu ;;
+  update-check)   exec bash "$OAL_LIB/update.sh" check "${CMD[@]:1}" "${OPTS[@]}" ;;
+  update-dismiss) exec bash "$OAL_LIB/update.sh" dismiss "${CMD[@]:1}" ;;
+  update-run)     exec bash "$OAL_LIB/update.sh" run "${CMD[@]:1}" ;;
   new)     cmd_new ;;
   manage)  cmd_manage ;;
   info)    cmd_info ;;
