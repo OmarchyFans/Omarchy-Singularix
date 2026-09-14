@@ -45,17 +45,37 @@ Item {
   readonly property var queueAll: overview && overview.queue ? overview.queue : []
 
   // ---- roles/model policy lookups (Wave 6, CONTRACTS.md §17.5-17.7) ---------
-  // Short model label: strip a "vendor:" hop prefix, a folded-in "claude-"
-  // vendor prefix, and a trailing date suffix. Everything else (gpt-5.4-codex,
-  // deepseek-v4-flash) is a model family name, not a vendor prefix -- leave it.
-  function shortModel(m) {
+  // Display label for a model id: "local-<name>" or "online-<name>", never
+  // the raw id -- a local model's id is a .gguf file path, unreadable in a
+  // narrow dropdown or bar. "local" when the caller's vendor says so, or the
+  // id itself looks local (a path, or a .gguf file); everything else is
+  // "online". The basename is taken (path directories stripped), then its
+  // extension and a trailing quantisation tag (-Q4_K_M, -q8_0, ...) are
+  // dropped; an online id also loses a "vendor:" hop prefix, a folded-in
+  // "claude-" vendor prefix, and a trailing date suffix. Everything else
+  // (gpt-5.4-codex, deepseek-v4-flash) is a model family name, not a vendor
+  // prefix -- left alone. Dropdown option VALUES stay the raw model id
+  // (filtering compares raw ids); only the label goes through this.
+  function modelLabel(m, vendor) {
     var s = String(m || "").trim()
     if (s === "") return ""
-    var colon = s.indexOf(":")
-    if (colon >= 0) s = s.slice(colon + 1)
-    s = s.replace(/^claude-/, "")
-    s = s.replace(/-\d{4}-?\d{2}-?\d{2}$/, "")
-    return s
+    var v = String(vendor || "")
+    // A known vendor is decisive -- an OpenRouter id like "anthropic/claude-
+    // sonnet-5" contains a "/" too, but it is not a local model. Only fall
+    // back to the id's own shape (a path, or a .gguf file) when the caller
+    // has no vendor to tell us.
+    var local = v !== "" ? (v === "local") : (s.indexOf("/") >= 0 || /\.gguf$/i.test(s))
+    var slash = s.lastIndexOf("/")
+    if (slash >= 0) s = s.slice(slash + 1)
+    s = s.replace(/\.gguf$/i, "")
+    s = s.replace(/-[Qq]\d[A-Za-z0-9_]*$/, "")
+    if (!local) {
+      var colon = s.indexOf(":")
+      if (colon >= 0) s = s.slice(colon + 1)
+      s = s.replace(/^claude-/, "")
+      s = s.replace(/-\d{4}-?\d{2}-?\d{2}$/, "")
+    }
+    return (local ? "local-" : "online-") + s
   }
 
   // sid -> session, built once per overview change (not per-row).
@@ -168,12 +188,161 @@ Item {
   }
   readonly property var approvalRows: approvalRowsAll()
 
+  // ---- project list (folded in from the former Projects tab, 0.15.0) --------
+  // Merges the harness's own projects (id/title/status/residual/progress/
+  // next node/cost/pending-approval count, straight from overview.json) with
+  // the launcher's sqlite rollups (source "kanban": name/phase/percent_done/
+  // open_blockers). A kanban project sharing a title with a harness project
+  // is folded into that harness row (its kanban phase shown as a secondary
+  // line) rather than listed twice.
+  readonly property var kanbanProjects: dash.status && dash.status.projects ? dash.status.projects : []
+
+  function projStateColor(s) {
+    if (s === "blocked") return "#6b7280"
+    if (s === "pending approval") return dash.warnColor
+    if (s === "ready") return "#d9a400"
+    if (s === "running") return "#3b82f6"
+    if (s === "done") return dash.okColor
+    if (s === "failed") return dash.urgent
+    return dash.dim
+  }
+
+  // earliest / most-critical unfinished queue node for a harness project
+  function nextNodeForProject(pid) {
+    var best = null
+    for (var i = 0; i < queueAll.length; i++) {
+      var q = queueAll[i]
+      if (q.project !== pid) continue
+      if (q.state === "done" || q.state === "cancelled") continue
+      if (!best) { best = q; continue }
+      if (!!q.critical !== !!best.critical) { if (q.critical) best = q; continue }
+      if (Number(q.es || 0) < Number(best.es || 0)) best = q
+    }
+    return best
+  }
+
+  // Short orchestrator label for a project row: a named session, or a
+  // router hop. "" when the project payload has no `orchestrator` yet
+  // (older harness). A session id is resolved to that session's label,
+  // matched by project + id (a profile like "rix-1" can register the same
+  // session id in more than one project).
+  function shortOrchestrator(o, pid) {
+    if (!o) return ""
+    if (o.kind === "session") {
+      var sid = String(o.id || "")
+      var s = null
+      for (var i = 0; i < tab.sessions.length; i++) {
+        var cand = tab.sessions[i]
+        if (String(cand.id) !== sid) continue
+        if (cand.project !== undefined && String(cand.project) !== String(pid)) continue
+        s = cand; break
+      }
+      return "session " + (s ? (s.label || s.id) : sid)
+    }
+    if (o.kind === "router") return "router→" + (o.hop || o.model || "?")
+    return ""
+  }
+  function concurrencyText(c) {
+    if (!c || c.eligible_idle === undefined || c.wave0 === undefined) return ""
+    return Number(c.eligible_idle || 0) + "/" + Number(c.wave0 || 0)
+  }
+  // Second line under a project row's name: kanban phase (either source)
+  // plus, for a harness row, its orchestrator and concurrency X/Y -- each
+  // part omitted when the row doesn't have it, "" (no second line at all)
+  // when none do.
+  function secondaryLineFor(row) {
+    if (!row) return ""
+    var parts = []
+    if (row.kanbanPhase) parts.push("kanban: " + row.kanbanPhase)
+    if (row.source === "harness") {
+      if (row.orchestratorShort) parts.push("orchestrator: " + row.orchestratorShort)
+      if (row.concurrencyShort) parts.push("concurrency " + row.concurrencyShort)
+    }
+    return parts.join("  ·  ")
+  }
+
+  function harnessStatusFor(p, next) {
+    if (p.pending_approval) return "pending approval"
+    if (Number(p.residual || 0) <= 0) return "done"
+    if (next) return String(next.state || "ready")
+    return "ready"
+  }
+
+  function buildProjectRows() {
+    var out = []
+    var kanbanByKey = {}
+    for (var i = 0; i < kanbanProjects.length; i++) {
+      var kp = kanbanProjects[i]
+      kanbanByKey[String(kp.name || "").trim().toLowerCase()] = kp
+    }
+    var matched = {}
+    for (var j = 0; j < projects.length; j++) {
+      var hp = projects[j]
+      var title = hp.title || hp.id
+      var key = String(title).trim().toLowerCase()
+      var kb = kanbanByKey[key]
+      if (kb) matched[key] = true
+      var next = nextNodeForProject(hp.id)
+      var progress = Number(hp.progress || 0); if (progress <= 1) progress *= 100
+      out.push({
+        __kind: "project", source: "harness", id: hp.id, name: title,
+        status: harnessStatusFor(hp, next),
+        progress: progress,
+        kanbanPhase: kb ? (kb.phase || "") : "",
+        agent: kb ? kb.agent : "",
+        orchestratorShort: tab.shortOrchestrator(hp.orchestrator, hp.id),
+        concurrencyShort: tab.concurrencyText(hp.concurrency)
+      })
+    }
+    for (var k = 0; k < kanbanProjects.length; k++) {
+      var kp2 = kanbanProjects[k]
+      var key2 = String(kp2.name || "").trim().toLowerCase()
+      if (matched[key2]) continue
+      out.push({
+        __kind: "project", source: "kanban", id: kp2.name, name: kp2.name,
+        status: kp2.phase || "N/A",
+        progress: Number(kp2.percent_done || 0),
+        kanbanPhase: "", agent: kp2.agent
+      })
+    }
+    return out
+  }
+  readonly property var projectRows: buildProjectRows()
+  readonly property int projectRowCount: projectRows.length
+  function projectsEmptyMessage() {
+    if (tab.projectRowCount > 0) return ""
+    if (!overviewLoaded && !harnessAlive) return "No projects yet, and the harness isn't running. Create one with `harness project create <name>`, or click “Start harness” below."
+    return "No projects yet. Create one with `harness project create <name>`."
+  }
+  readonly property string projectsEmpty: projectsEmptyMessage()
+
+  // Selecting a project row filters the board to it; selecting the same row
+  // again clears the filter. A kanban-only row (no matching harness project,
+  // so no queue rows to filter to) keeps the former Projects tab's deep
+  // link to Events filtered by its agent instead of setting a project
+  // filter that would silently match nothing.
+  function selectProjectRow(pr) {
+    if (!pr) return
+    if (pr.source === "kanban") {
+      dash.selectTab("events")
+      if (dash.eventsTabRef) dash.eventsTabRef.filterAgent = pr.agent
+      return
+    }
+    tab.projectFilter = (tab.projectFilter === pr.id) ? "" : pr.id
+  }
+
   // ---- Dashboard contract -------------------------------------------------
   readonly property var flatRows: computeFlatRows()
   readonly property int rowCount: flatRows.length
   readonly property bool editing: false
   readonly property bool popupOpen: projectDrop.popupOpen || agentDrop.popupOpen || roleDrop.popupOpen || modelDrop.popupOpen
-  function activate(i) { var n = flatRows[i]; if (n) selectRow(n) }
+  // j/k or arrows walk project rows first (prepended to flatRows), then task
+  // rows -- one cursor, one rowCount, no separate focus zone to juggle.
+  function activate(i) {
+    var n = flatRows[i]; if (!n) return
+    if (n.__kind === "project") { tab.selectProjectRow(n); return }
+    selectRow(n)
+  }
 
   // ---- keyboard shortcuts (routed from Dashboard.qml while dash.tab === "plan") --
   // NOTE: `cycleRoleFilter`/`cycleModelFilter` are wired up the same way as
@@ -259,9 +428,9 @@ Item {
 
   function modelOptionsFn() {
     var seen = {}, out = [{ value: "", label: "All models" }]
-    function add(v) { v = String(v || ""); if (v !== "" && !seen[v]) { seen[v] = true; out.push({ value: v, label: tab.shortModel(v) }) } }
-    for (var i = 0; i < queueAll.length; i++) add(tab.rowModel(queueAll[i]))
-    for (var j = 0; j < sessions.length; j++) add(sessions[j].model)
+    function add(v, vendor) { v = String(v || ""); if (v !== "" && !seen[v]) { seen[v] = true; out.push({ value: v, label: tab.modelLabel(v, vendor) }) } }
+    for (var i = 0; i < queueAll.length; i++) add(tab.rowModel(queueAll[i]), tab.rowVendor(queueAll[i]))
+    for (var j = 0; j < sessions.length; j++) add(sessions[j].model, sessions[j].vendor)
     return out
   }
   readonly property var modelOptionsList: modelOptionsFn()
@@ -291,7 +460,47 @@ Item {
     return out
   }
   readonly property var groups: groupedProjects()
-  function computeFlatRows() { var out = []; for (var i = 0; i < groups.length; i++) out = out.concat(groups[i].rows); return out }
+  readonly property int matchedTaskCount: { var n = 0; for (var i = 0; i < groups.length; i++) n += groups[i].rows.length; return n }
+
+  // Rows that match project/state/critical/role, i.e. everything except the
+  // model and agent filters -- the count a "0 of N" empty-state message
+  // needs so the user can tell "no tasks at all" from "these two filters
+  // together match nothing".
+  function tasksBeforeModelAgent() {
+    var list = projectFilter === "" ? projects : projects.filter(function(p) { return p.id === projectFilter })
+    var count = 0
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i]
+      for (var j = 0; j < queueAll.length; j++) {
+        var q = queueAll[j]
+        if (q.project !== p.id) continue
+        if (!stateOk(q.state)) continue
+        if (tab.criticalOnly && !q.critical) continue
+        if (tab.roleFilter !== "" && String(q.role || "") !== tab.roleFilter) continue
+        count++
+      }
+    }
+    return count
+  }
+  readonly property int tasksBeforeModelAgentCount: tasksBeforeModelAgent()
+  function activeModelAgentFilterLabel() {
+    var parts = []
+    if (tab.modelFilter !== "") parts.push("model")
+    if (tab.agentFilter !== "") parts.push("agent")
+    return parts.join(" and ")
+  }
+  // "0 of N tasks match" note shown under the filter bar only when a model
+  // and/or agent filter is the reason the board looks empty (not when there
+  // is simply nothing in the project/state/role selection to begin with).
+  readonly property string filterEmptyNote: {
+    if (tab.matchedTaskCount > 0) return ""
+    if (tab.modelFilter === "" && tab.agentFilter === "") return ""
+    var n = tab.tasksBeforeModelAgentCount
+    if (n <= 0) return ""
+    var label = tab.activeModelAgentFilterLabel()
+    return "0 of " + n + " task" + (n === 1 ? "" : "s") + " match — the " + label + " filter only matches tasks that are running or done with that " + label + "; ready/blocked tasks have none yet."
+  }
+  function computeFlatRows() { var out = tab.projectRows.slice(); for (var i = 0; i < groups.length; i++) out = out.concat(groups[i].rows); return out }
 
   function aggregate() {
     var list = projectFilter === "" ? projects : projects.filter(function(p) { return p.id === projectFilter })
@@ -367,7 +576,7 @@ Item {
     var parts = []
     if (r.role) parts.push("role: " + String(r.role))
     parts.push("ip: " + (r.ip_class === "open" ? "open" : "protected"))
-    if (m !== "") parts.push("model: " + tab.shortModel(m))
+    if (m !== "") parts.push("model: " + tab.modelLabel(m, v))
     if (v !== "") parts.push("vendor: " + v)
     if (c !== "") parts.push("cost: " + c)
     return parts.join("  ·  ")
@@ -431,7 +640,7 @@ Item {
     if (c === "metered") return "$"
     return String(c || "—")
   }
-  // "role · tier · shortModel" for a session group's first member, omitting
+  // "role · tier · modelLabel" for a session group's first member, omitting
   // whatever the session doesn't carry (older harness registers with none).
   function sessionPolicyTag(members) {
     if (!members || !members.length) return ""
@@ -439,7 +648,7 @@ Item {
     var parts = []
     if (s.role) parts.push(String(s.role))
     if (s.tier) parts.push(String(s.tier))
-    var m = tab.shortModel(s.model); if (m !== "") parts.push(m)
+    var m = tab.modelLabel(s.model, s.vendor); if (m !== "") parts.push(m)
     return parts.join(" · ")
   }
   // "SPLIT P0.6" when a group member is mid-orchestration: the harness's
@@ -595,7 +804,7 @@ Item {
     // ---- roles/model policy (Wave 6): wave membership, model label, IP lock --
     readonly property int wave: tab.waveOf(qrow.node)
     readonly property bool wavesLive: tab.harnessAlive && !tab.stale
-    readonly property string rowShortModel: qrow.node ? tab.shortModel(tab.rowModel(qrow.node)) : ""
+    readonly property string rowShortModel: qrow.node ? tab.modelLabel(tab.rowModel(qrow.node), tab.rowVendor(qrow.node)) : ""
     // Unlabelled means protected (contract §17.1: the graph fails closed).
     readonly property bool ipOpen: !!(qrow.node && qrow.node.ip_class === "open")
     // Dim by wave distance: this wave full, next wave 0.7, anything further
@@ -724,6 +933,80 @@ Item {
         opacity: qrow.waveOpacity
         text: qrow.node ? (String(qrow.node.state || "") + (qrow.wave === 1 ? "  ·  next" : "")) : ""
         color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+      }
+    }
+  }
+
+  // ---- one row of the project list (folded in from the former Projects tab) --
+  component ProjectSummaryRow: CursorSurface {
+    id: psrow
+    property var row: null
+    hasCursor: dash.cursorActive && dash.tab === "plan" && dash.selectedIndex === tab.flatRows.indexOf(psrow.row)
+    foreground: dash.foreground
+    implicitHeight: psrow.row && tab.secondaryLineFor(psrow.row) !== "" ? Style.space(46) : Style.space(34)
+    readonly property bool active: !!(psrow.row && tab.projectFilter !== "" && tab.projectFilter === psrow.row.id)
+
+    MouseArea {
+      anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+      onContainsMouseChanged: if (containsMouse) { dash.cursorActive = true; dash.selectedIndex = tab.flatRows.indexOf(psrow.row) }
+      onClicked: tab.selectProjectRow(psrow.row)
+    }
+
+    Row {
+      anchors.fill: parent; spacing: 0
+      Text {
+        width: Style.space(18); height: parent.height
+        verticalAlignment: Text.AlignVCenter; horizontalAlignment: Text.AlignHCenter
+        text: psrow.active ? "▸" : ""
+        color: dash.accent; font.family: dash.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true
+      }
+      Column {
+        width: Style.space(260)
+        anchors.verticalCenter: parent.verticalCenter
+        Text {
+          width: parent.width
+          rightPadding: Style.spacing.md
+          elide: Text.ElideRight; textFormat: Text.PlainText
+          text: psrow.row ? psrow.row.name : ""
+          color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true
+        }
+        Text {
+          visible: !!(psrow.row && tab.secondaryLineFor(psrow.row) !== "")
+          width: parent.width
+          rightPadding: Style.spacing.md
+          elide: Text.ElideRight
+          text: psrow.row ? tab.secondaryLineFor(psrow.row) : ""
+          color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+        }
+      }
+      Text {
+        width: Style.space(110); height: parent.height
+        leftPadding: Style.spacing.md; rightPadding: Style.spacing.md
+        verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
+        text: psrow.row ? String(psrow.row.status || "N/A") : ""
+        color: psrow.row ? tab.projStateColor(psrow.row.status) : dash.dim
+        font.family: dash.fontFamily; font.pixelSize: Style.font.bodySmall
+      }
+      Item {
+        width: Math.max(Style.space(90), psrow.width - Style.space(18) - Style.space(260) - Style.space(110))
+        height: parent.height
+        Rectangle {
+          anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.right: parent.right
+          anchors.margins: Style.spacing.md
+          height: Style.space(8); radius: height / 2
+          color: Qt.rgba(dash.foreground.r, dash.foreground.g, dash.foreground.b, 0.12)
+          Rectangle {
+            anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
+            width: parent.width * Math.max(0, Math.min(100, psrow.row ? psrow.row.progress : 0)) / 100
+            radius: height / 2
+            color: psrow.row && psrow.row.progress >= 100 ? dash.okColor : dash.accent
+          }
+        }
+        Text {
+          anchors.right: parent.right; anchors.rightMargin: Style.spacing.md; anchors.verticalCenter: parent.verticalCenter
+          text: psrow.row ? Math.round(psrow.row.progress) + "%" : ""
+          color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+        }
       }
     }
   }
@@ -894,10 +1177,43 @@ Item {
 
     PanelHero {
       width: parent.width
-      title: "Plan"
-      meta: tab.projects.length + " project" + (tab.projects.length === 1 ? "" : "s") + (tab.overviewLoaded ? (tab.harnessAlive ? "  ·  harness running" : "  ·  harness offline (last snapshot)") : "") + (tab.stale ? "  ·  stale " + tab.staleSeconds + "s" : "")
+      title: "Projects"
+      detail: "Project Management"
+      meta: tab.projectRowCount + " project" + (tab.projectRowCount === 1 ? "" : "s") + (tab.overviewLoaded ? (tab.harnessAlive ? "  ·  harness running" : "  ·  harness offline (last snapshot)") : "") + (tab.stale ? "  ·  stale " + tab.staleSeconds + "s" : "")
       foreground: dash.foreground; fontFamily: dash.fontFamily
-      iconComponent: Component { Text { text: "▤"; color: tab.harnessAlive ? dash.okColor : dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.display } }
+      iconComponent: Component { Text { text: "󰙅"; color: tab.harnessAlive ? dash.okColor : dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.display } }
+    }
+    PanelSeparator { width: parent.width; foreground: dash.foreground }
+
+    // ---- project list (top): one row per project, selectable -- click (or
+    // Enter with the cursor on it) sets/clears the board's project filter.
+    Rectangle {
+      id: projectsPane
+      width: parent.width
+      // Bounded so a long project list doesn't crowd the Gantt out, but
+      // shrinks to fit one or two rows instead of always claiming the max.
+      height: tab.projectsEmpty !== "" ? Style.space(46) : Math.min(Style.space(120), projectsList.contentHeight + Style.space(8))
+      color: Qt.rgba(dash.foreground.r, dash.foreground.g, dash.foreground.b, 0.03)
+      radius: Style.cornerRadius
+      Text {
+        visible: tab.projectsEmpty !== ""
+        anchors.fill: parent
+        anchors.margins: Style.space(10)
+        text: tab.projectsEmpty
+        color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.bodySmall
+        wrapMode: Text.Wrap
+      }
+      ListView {
+        id: projectsList
+        visible: tab.projectsEmpty === ""
+        anchors.fill: parent
+        anchors.margins: Style.space(4)
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        model: tab.projectRows
+        delegate: ProjectSummaryRow { required property var modelData; width: projectsList.width; row: modelData }
+      }
     }
     PanelSeparator { width: parent.width; foreground: dash.foreground }
 
@@ -931,6 +1247,12 @@ Item {
         }
       }
       Button { text: "Critical only"; bordered: true; selected: tab.criticalOnly; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: tab.toggleCriticalOnly() }
+    }
+    Text {
+      visible: tab.filterEmptyNote !== ""
+      width: parent.width; wrapMode: Text.Wrap; textFormat: Text.PlainText
+      text: tab.filterEmptyNote
+      color: dash.warnColor; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
     }
     Flow {
       width: parent.width; spacing: Style.spacing.controlGap

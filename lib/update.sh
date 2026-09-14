@@ -186,7 +186,13 @@ cmd_terminal() {
   if [[ $step == all ]]; then
     if [[ -d $UPD_DIR/.git ]]; then
       echo "$n/$total  omarchy plugin update $UPD_ID   (shows the changes and asks first)"
-      omarchy plugin update "$UPD_ID" || { hold "The plugin update did not finish."; return 1; }
+      echo "What changed is listed next. If it pauses with (END), press q."
+      echo "Then answer the Update? question."
+      # Without `delta` installed, Omarchy's updater pipes `git diff` through
+      # `less`, which waits at (END) for a keypress the user isn't told about.
+      # Force everything to print straight to the terminal instead.
+      GIT_PAGER=cat PAGER=cat DELTA_PAGER=cat omarchy plugin update "$UPD_ID" \
+        || { hold "The plugin update did not finish."; return 1; }
     else
       echo "This copy was not installed with 'omarchy plugin add', so it cannot update itself."
       echo "Reinstall it from the marketplace:"
@@ -209,7 +215,7 @@ cmd_terminal() {
   else
     echo "The bar picks up the new files by itself."
   fi
-  echo "Done."
+  echo "Done. You can close this window."
   sleep 2
 }
 

@@ -516,7 +516,13 @@ echo 'not json' >"$T/cache/omarchy-agent-launcher/update-check.json"
 "$L" update-dismiss 1.2.3 && [[ $("$L" update-check --force | jq -r .dismissed) == 1.2.3 ]] || tfail "a broken cache file is replaced, not kept"
 out=$("$L" --dry-run update-run); [[ $(jq -r '.argv[-1]' <<<"$out") == all ]] || tfail "--dry-run prints the argv: $out"
 unset OMARCHY_PLUGIN_UPDATE_RAW
-pass "check, notes, cache, offline, dismiss, opt-out, run, broken cache, dry-run"
+# cmd_terminal itself isn't exercised here (it opens an interactive terminal),
+# but a static check guards the (END)-prompt fix: without it, `git diff`
+# piped through `less` by the stock `omarchy plugin update` leaves the user
+# at a silent prompt with no idea a keypress is expected.
+grep -q 'GIT_PAGER=cat PAGER=cat DELTA_PAGER=cat' "$ROOT/lib/update.sh" || tfail "update terminal must force a pager-free diff"
+grep -q 'Done. You can close this window.' "$ROOT/lib/update.sh" || tfail "update terminal must tell the user it is safe to close"
+pass "check, notes, cache, offline, dismiss, opt-out, run, broken cache, dry-run, pager-free diff"
 
 echo "== harness: cmd_delegate refuses a metered backend without --approved-usd"
 # "anthropic" has carried a saved ANTHROPIC_API_KEY since the very first (form)

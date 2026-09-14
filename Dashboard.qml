@@ -7,18 +7,20 @@ import qs.Ui
 import "components"
 
 // Agent Dashboard: a persistent window (a normal toplevel, not a popup) with
-// seven pages: Rix (the chief of staff: brief, ask, backends, tokens and
-// USD per task), Plan (the session-harness Gantt: per-project task queue,
-// sessions lane, cost/approval banner), Agents (status, switch to chat),
-// New agent (the setup form), Events (sortable, filterable log),
-// Notifications (open blockers), Projects (per-project waterfall phase,
-// progress, and blockers at a glance).
+// six pages: Rix (the chief of staff: brief, ask, backends, tokens and
+// USD per task), Projects (0.15.0: the former Plan + Projects tabs folded
+// into one -- a top project list, one row per project with its progress
+// bar/status/orchestrator/concurrency/kanban phase, selectable to filter the
+// session-harness Gantt below it: per-project task queue, sessions lane,
+// cost/approval banner), Agents (status, switch to chat), New agent (the
+// setup form), Events (sortable, filterable log), Notifications (open
+// blockers).
 //
 // Host contract (kind "panel", keepLoaded): the shell injects `shell` and
 // `manifest`, calls open(payloadJson) / close(), reads `opened`; we call
 // shell.hide(id) when the user closes the window (same plumbing as the
-// first-party dev gallery). Payload: {"tab": "rix|plan|agents|new|events|notifications|projects",
-// "agent": "<name>"}.
+// first-party dev gallery). Payload: {"tab": "rix|plan|agents|new|events|notifications",
+// "agent": "<name>"} ("projects" is still accepted and redirected to "plan").
 //
 // Data: `omarchy-agent-launcher status --json` (on open, every 30 s while
 // visible, after each action), a `tail -F` on events.jsonl, and a watch on
@@ -73,7 +75,7 @@ Item {
   property string updateHiddenKey: ""
   readonly property bool updateBannerShown: updateKey !== "" && updateKey !== updateHiddenKey
 
-  readonly property var currentTab: tab === "rix" ? rixTab : (tab === "plan" ? planTab : (tab === "new" ? setupForm : (tab === "events" ? eventsTab : (tab === "notifications" ? notifTab : (tab === "projects" ? projectsTab : agentsTab)))))
+  readonly property var currentTab: tab === "rix" ? rixTab : (tab === "plan" ? planTab : (tab === "new" ? setupForm : (tab === "events" ? eventsTab : (tab === "notifications" ? notifTab : agentsTab))))
   readonly property var usage: status && status.usage ? status.usage : null
   readonly property real totalCost: usage ? usage.totals.cost_usd : 0
 
@@ -99,7 +101,8 @@ Item {
       try { var p = JSON.parse(String(payloadJson)); if (p && typeof p.tab === "string") wanted = p.tab; if (p && typeof p.agent === "string") agent = p.agent } catch (e) {}
     }
     if (wanted === "jarvis") wanted = "rix"   // pre-0.9 name of the chief of staff's page
-    if (["rix", "plan", "agents", "new", "events", "notifications", "projects"].indexOf(wanted) >= 0) tab = wanted
+    if (wanted === "projects") wanted = "plan"   // pre-0.15 name of the Projects tab (now folded into it)
+    if (["rix", "plan", "agents", "new", "events", "notifications"].indexOf(wanted) >= 0) tab = wanted
     if (agent !== "") requestedAgent = agent
     window.visible = true
     refreshStatus()
@@ -265,7 +268,7 @@ Item {
         onActivateRequested: if (dash.cursorActive && dash.currentTab && typeof dash.currentTab.activate === "function") dash.currentTab.activate(dash.selectedIndex)
         onReturnRequested: if (dash.cursorActive && dash.currentTab && typeof dash.currentTab.activate === "function") dash.currentTab.activate(dash.selectedIndex)
         onTabRequested: function(direction) {
-          var order = ["rix", "plan", "agents", "new", "events", "notifications", "projects"]
+          var order = ["rix", "plan", "agents", "new", "events", "notifications"]
           var i = (order.indexOf(dash.tab) + (direction < 0 ? -1 : 1) + order.length) % order.length
           dash.selectTab(order[i])
         }
@@ -276,7 +279,6 @@ Item {
           else if (t === "4") dash.selectTab("new")
           else if (t === "5") dash.selectTab("events")
           else if (t === "6") dash.selectTab("notifications")
-          else if (t === "7") dash.selectTab("projects")
           else if (t === "r" || t === "R") dash.refreshStatus()
           else if (t === "n" || t === "N") dash.selectTab("new")
           else if (dash.tab === "plan" && (t === "a" || t === "A")) { if (dash.planTabRef) dash.planTabRef.assignSelected() }
@@ -391,12 +393,11 @@ Item {
                 }
               }
               NavButton { tabId: "rix"; iconText: "󰚩"; text: "Rix" }
-              NavButton { tabId: "plan"; iconText: "▤"; text: "Plan"; badge: dash.planApprovalCount; badgeColor: dash.urgent }
+              NavButton { tabId: "plan"; iconText: "󰙅"; text: "Projects"; badge: dash.planApprovalCount; badgeColor: dash.urgent }
               NavButton { tabId: "agents"; iconText: "󰙨"; text: "Agents"; badge: dash.runningCount; badgeColor: dash.okColor }
               NavButton { tabId: "new"; iconText: ""; text: "New agent" }
               NavButton { tabId: "events"; iconText: "󰈙"; text: "Events" }
               NavButton { tabId: "notifications"; iconText: "󰂚"; text: "Notifications"; badge: dash.blockerCount; badgeColor: dash.urgent }
-              NavButton { tabId: "projects"; iconText: "󰙅"; text: "Projects" }
 
               Item { width: 1; height: Style.space(16) }
               Text {
@@ -413,7 +414,7 @@ Item {
               Item { width: 1; height: Style.space(16) }
               Text {
                 width: parent.width; wrapMode: Text.Wrap
-                text: "1-7 pages · j/k move · Enter chat · r refresh · Esc close"
+                text: "1-6 pages · j/k move · Enter chat · r refresh · Esc close"
                 color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
               }
             }
@@ -434,7 +435,6 @@ Item {
             }
             EventsTab { id: eventsTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "events"; dash: dash; Component.onCompleted: dash.eventsTabRef = eventsTab }
             NotificationsTab { id: notifTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "notifications"; dash: dash }
-            ProjectsTab { id: projectsTab; anchors.fill: parent; anchors.margins: Style.space(18); visible: dash.tab === "projects"; dash: dash }
           }
         }
       }
