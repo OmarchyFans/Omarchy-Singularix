@@ -517,4 +517,196 @@ echo 'not json' >"$T/cache/omarchy-agent-launcher/update-check.json"
 out=$("$L" --dry-run update-run); [[ $(jq -r '.argv[-1]' <<<"$out") == all ]] || tfail "--dry-run prints the argv: $out"
 unset OMARCHY_PLUGIN_UPDATE_RAW
 pass "check, notes, cache, offline, dismiss, opt-out, run, broken cache, dry-run"
+
+echo "== harness: cost class, price estimate, dispatch loop, network-free status"
+(
+  source "$ROOT/lib/backends.sh"
+  source "$ROOT/lib/usage.sh"
+  source "$ROOT/lib/harness.sh"
+  OPTS=(); CMD=(); OAL_SELF="$L"
+  HD="$T/harness-test"; mkdir -p "$HD/fakebin" "$HD/inbox"
+  export HARNESS_DATA_DIR="$HD/data"; mkdir -p "$HARNESS_DATA_DIR"
+  SESSADD="$HD/session-add.log"; : >"$SESSADD"
+  RECEIPTS="$HD/receipts.log"; : >"$RECEIPTS"
+  CURLLOG="$HD/curl.log"; : >"$CURLLOG"
+  DELEGATE_LOG="$HD/delegate.log"; : >"$DELEGATE_LOG"
+
+  # ---- fake `harness` CLI: records session-add/receipt calls, answers inbox/cost --
+  cat >"$HD/fakebin/harness" <<'FAKE'
+#!/bin/bash
+case "$1" in
+  session)
+    printf '%s\n' "$*" >>"__SESSADD__"
+    echo ok ;;
+  inbox)
+    proj=""
+    while (( $# )); do case "$1" in --project) proj=$2; shift 2 ;; *) shift ;; esac; done
+    cat "__HD__/inbox/$proj.json" 2>/dev/null || echo '[]' ;;
+  cost)
+    proj=""
+    while (( $# )); do case "$1" in --project) proj=$2; shift 2 ;; *) shift ;; esac; done
+    b=$(cat "__HD__/budget-$proj" 2>/dev/null || echo 0)
+    printf '{"remaining_usd": %s}\n' "$b" ;;
+  receipt)
+    node="" status=""
+    while (( $# )); do case "$1" in --node) node=$2; shift 2 ;; --status) status=$2; shift 2 ;; *) shift ;; esac; done
+    printf 'node=%s status=%s\n' "$node" "$status" >>"__RECEIPTS__"
+    echo ok ;;
+  approve|decline|ls) echo ok ;;
+  *) echo '{}' ;;
+esac
+FAKE
+  sed -i "s#__SESSADD__#$SESSADD#g; s#__HD__#$HD#g; s#__RECEIPTS__#$RECEIPTS#g" "$HD/fakebin/harness"
+  chmod +x "$HD/fakebin/harness"
+
+  # ---- fake curl: logs URL, whether X-Harness was sent, and the POST body ----------
+  cat >"$HD/fakebin/curl" <<'FAKE2'
+#!/bin/bash
+args=("$@"); url="${args[-1]}"; body="" hh=no
+for ((i=0; i<${#args[@]}; i++)); do
+  [[ ${args[i]} == -d ]] && body=${args[i+1]}
+  [[ ${args[i]} == "X-Harness: 1" ]] && hh=yes
+done
+printf '%s\t%s\t%s\n' "$url" "$hh" "$body" >>"__CURLLOG__"
+echo '{}'
+FAKE2
+  sed -i "s#__CURLLOG__#$CURLLOG#g" "$HD/fakebin/curl"
+  chmod +x "$HD/fakebin/curl"
+
+  # ---- fake cmd_delegate: records the call, honours markers in the piped job -------
+  cmd_delegate() {
+    local backend="" name="" model="" i=0 n=${#OPTS[@]}
+    while (( i < n )); do
+      case "${OPTS[i]}" in
+        --backend) backend=${OPTS[i+1]}; ((i+=2)) ;;
+        --name)    name=${OPTS[i+1]};    ((i+=2)) ;;
+        --model)   model=${OPTS[i+1]};   ((i+=2)) ;;
+        --task-title) ((i+=2)) ;;
+        --job-stdin|--wait) ((i+=1)) ;;
+        *) ((i+=1)) ;;
+      esac
+    done
+    local job; job=$(cat)
+    printf 'backend=%s name=%s model=%s\n' "$backend" "$name" "$model" >>"$DELEGATE_LOG"
+    if grep -q RATE_LIMIT_MARKER <<<"$job"; then echo "429 too many requests"; return 0
+    elif grep -q FAIL_MARKER <<<"$job"; then echo "boom"; return 1
+    else echo "done: ok"; return 0
+    fi
+  }
+
+  export PATH="$HD/fakebin:$PATH"
+  settings_set harness_bin "$HD/fakebin/harness"
+
+  # ---- cost class mapping -----------------------------------------------------------
+  profile_write hns-free hermes local local none model-x - interactive ""
+  [[ $(harness_cost_class hns-free) == free ]] || tfail "cost class: local backend must be free"
+
+  profile_write hns-sub hermes local anthropic oauth claude-sonnet-5 - interactive ""
+  profile_set hns-sub signed_in true
+  mkdir -p "$(stage_dir hns-sub)/hermes"; printf '{"anthropic":{"token":"t"}}\n' >"$(stage_dir hns-sub)/hermes/auth.json"
+  [[ $(harness_cost_class hns-sub) == subscription ]] || tfail "cost class: oauth backend must be subscription"
+
+  backend_write hnsteam '{"id":"hnsteam","kind":"endpoint","label":"hnsteam","model":"m","url":"https://hns.example.com/v1","state":"ready","model_ctx":32768}'
+  profile_write hns-met hermes local endpoint api-key m - interactive ""
+  profile_set hns-met backend '"hnsteam"'
+  [[ $(harness_cost_class hns-met) == metered ]] || tfail "cost class: api-key backend must be metered"
+  pass "harness cost class: local -> free, oauth -> subscription, api-key -> metered"
+
+  # ---- price estimate ----------------------------------------------------------------
+  MODELS_CACHE="$HD/models.json"
+  cat >"$MODELS_CACHE" <<'JSON'
+{"testvendor":{"models":{"test-model":{"name":"Test Model","tool_call":true,"cost":{"input":2,"output":8}}}}}
+JSON
+  profile_write hns-est hermes local endpoint api-key test-model - interactive ""
+  profile_set hns-est backend '"hnsteam"'
+  profile_write hns-unk hermes local endpoint api-key unknown-model - interactive ""
+  profile_set hns-unk backend '"hnsteam"'
+  PKT="$HD/pkt-est.md"; printf '%040d' 0 >"$PKT"   # 40 bytes -> 10 input tokens, 40 output headroom
+  got=$(harness_estimate_usd hns-est "$PKT") || tfail "estimate should succeed for a priced metered model"
+  awk -v g="$got" 'BEGIN{ if (g < 0.000339 || g > 0.000341) exit 1; exit 0 }' || tfail "estimate math: got $got, want ~0.00034 (10*\$2 in + 40*\$8 out per 1M)"
+  [[ $(harness_estimate_usd hns-free "$PKT") == 0 ]] || tfail "estimate: free backend must be 0"
+  [[ $(harness_estimate_usd hns-sub "$PKT") == 0 ]] || tfail "estimate: subscription backend must be 0"
+  harness_estimate_usd hns-unk "$PKT" >/dev/null 2>&1 && tfail "estimate must refuse an unpriced metered model, never guess \$0"
+  pass "harness price estimate: chars/4 in tokens, x4 output headroom, unpriced model refused"
+
+  # ---- dispatch_once: subscription runs free, funded metered runs, underfunded asks --
+  PKT_SUB="$HD/pkt-sub.md";   printf 'sub job body\n'  >"$PKT_SUB"
+  PKT_POOR="$HD/pkt-poor.md"; printf 'poor job body\n' >"$PKT_POOR"
+  PKT_RICH="$HD/pkt-rich.md"; printf 'rich job body\n' >"$PKT_RICH"
+  printf '[{"node":"sub-node","path":"%s"}]'  "$PKT_SUB"  >"$HD/inbox/p-sub.json"
+  printf '[{"node":"poor-node","path":"%s"}]' "$PKT_POOR" >"$HD/inbox/p-poor.json"
+  printf '[{"node":"rich-node","path":"%s"}]' "$PKT_RICH" >"$HD/inbox/p-rich.json"
+  echo 0 >"$HD/budget-p-poor"
+  echo 5 >"$HD/budget-p-rich"
+  jq -n --arg t "$(date -Is)" '{
+    projects: [
+      {id:"p-sub",  repo_path:"/tmp/proj-sub"},
+      {id:"p-poor", repo_path:"/tmp/proj-poor"},
+      {id:"p-rich", repo_path:"/tmp/proj-rich", pending_approval:{estimate_usd:0.5, reason:"test"}}
+    ],
+    sessions: [
+      {id:"s-sub",  project:"p-sub",  worker:"rix", label:"hns-sub"},
+      {id:"s-poor", project:"p-poor", worker:"rix", label:"hns-est"},
+      {id:"s-rich", project:"p-rich", worker:"rix", label:"hns-est"}
+    ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+
+  s=$(harness_status_json)
+  [[ $(jq -r .alive <<<"$s") == true ]] || tfail "status alive must be true with a fresh overview.json"
+  [[ $(jq -r '.pending_approvals|length' <<<"$s") == 1 ]] || tfail "status must surface p-rich's pending approval"
+  [[ $(jq -r '.pending_approvals[0].id' <<<"$s") == p-rich ]] || tfail "pending approval project id"
+  [[ $(jq -r .serving_pid <<<"$s") == null && $(jq -r .dispatch_pid <<<"$s") == null ]] || tfail "no serve/dispatch pid files yet"
+
+  harness_dispatch_once || true
+  [[ $(wc -l <"$DELEGATE_LOG") == 2 ]] || { cat "$DELEGATE_LOG"; tfail "expected 2 delegate calls (subscription + funded metered)"; }
+  grep -q "name=hns-sub-node"  "$DELEGATE_LOG" || tfail "subscription packet not delegated"
+  grep -q "name=hns-rich-node" "$DELEGATE_LOG" || tfail "funded metered packet not delegated"
+  ! grep -q "poor-node" "$DELEGATE_LOG" || tfail "underfunded metered packet must not be delegated"
+  [[ $(wc -l <"$RECEIPTS") == 2 ]] || { cat "$RECEIPTS"; tfail "expected 2 receipts"; }
+  grep -q "node=sub-node status=done"  "$RECEIPTS" || tfail "subscription receipt not done"
+  grep -q "node=rich-node status=done" "$RECEIPTS" || tfail "rich receipt not done"
+  [[ -f ${PKT_SUB}.claimed  && ! -f $PKT_SUB  ]] || tfail "subscription packet not claimed"
+  [[ -f ${PKT_RICH}.claimed && ! -f $PKT_RICH ]] || tfail "rich packet not claimed"
+  [[ -f $PKT_POOR ]] || tfail "underfunded packet must stay unclaimed until approved"
+  n_req=$(grep -c "cost/request" "$CURLLOG" || true)
+  [[ $n_req == 1 ]] || { cat "$CURLLOG"; tfail "expected exactly one cost/request POST"; }
+  grep "cost/request" "$CURLLOG" | grep -q "p-poor" || tfail "cost/request must be for the underfunded project"
+  grep "cost/request" "$CURLLOG" | awk -F'\t' '{print $2}' | grep -q yes || tfail "cost/request must carry X-Harness: 1"
+
+  harness_dispatch_once || true
+  [[ $(wc -l <"$DELEGATE_LOG") == 2 ]] || tfail "second sweep must not re-delegate claimed packets"
+  n_req2=$(grep -c "cost/request" "$CURLLOG" || true)
+  [[ $n_req2 == 1 ]] || tfail "second sweep must not re-request an already-requested packet"
+  pass "harness dispatch_once: subscription runs free, funded metered runs, underfunded metered requests budget once"
+
+  # ---- register, approve, decline ----------------------------------------------------
+  harness_register_rix hns-sub /tmp/proj-sub >/dev/null || tfail "register failed"
+  grep -q -- "--project p-sub" "$SESSADD" || tfail "register did not add a session for p-sub"
+  grep -q -- "--label hns-sub" "$SESSADD" || tfail "register label"
+  grep -q -- "--cost-class subscription" "$SESSADD" || tfail "register cost class"
+
+  harness_approve p-rich 5 "go ahead" >/dev/null
+  grep -q "/api/project/p-rich/approve" "$CURLLOG" || tfail "approve did not POST"
+  harness_decline p-poor >/dev/null
+  grep -q "/api/project/p-poor/cost/decline" "$CURLLOG" || tfail "decline did not POST"
+  pass "harness register, approve, decline"
+
+  # ---- status --json with no harness installed: still network-free ------------------
+  (
+    PATH=$(printf '%s' "$PATH" | sed "s#$HD/fakebin:##")
+    HOME="$T/fake-home"; mkdir -p "$HOME"
+    export HARNESS_DATA_DIR="$HD/empty-data"; mkdir -p "$HARNESS_DATA_DIR"
+    settings_set harness_bin ""
+    before=$(wc -l <"$CURLLOG")
+    s2=$(harness_status_json)
+    [[ $(jq -r .alive <<<"$s2") == false ]] || tfail "alive must be false with no overview.json"
+    [[ $(jq -r .bin <<<"$s2") == "" ]] || tfail "bin must be empty when the harness CLI cannot be found"
+    after=$(wc -l <"$CURLLOG")
+    [[ $before == "$after" ]] || tfail "status --json must never call curl"
+  )
+  pass "harness status --json is network-free with no harness installed"
+  exit 0
+) || exit 1
+
 echo "ALL TESTS PASSED"

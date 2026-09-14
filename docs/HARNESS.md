@@ -1,4 +1,4 @@
-# Rix × session-harness — one orchestrator surface (0.12.0)
+# Rix × session-harness — one orchestrator surface (0.13.0)
 
 The Agent Launcher (Rix) and the session-harness (`~/Work/session-harness`, CLI
 `harness`, API on `127.0.0.1:7744`) become one surface:
@@ -93,5 +93,5 @@ price and ask; if the plan tab shows failed/blocked nodes, propose the next acti
 PATH (a bash stub that records args and prints canned JSON) and a fake `curl`: cost
 class mapping, estimate math, dispatch_once claims a packet + calls delegate + writes the
 receipt via the stub, metered + no budget → cost/request + no delegate, approve posts with
-the header. Version → 0.12.0 in `manifest.json` and `skills/rix/SKILL.md`; README section
+the header. Version → 0.13.0 in `manifest.json` and `skills/rix/SKILL.md`; README section
 "Rix × harness"; deploy once with the flash warning; shell restart (keepLoaded panel).
