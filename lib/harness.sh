@@ -55,6 +55,13 @@ harness_url() {
 
 harness_alive() { have curl && curl -sf -m 1 "$(harness_url)/api/status" >/dev/null 2>&1; }
 
+# harness_session_registered PROJECT LABEL -> 0 when overview.json already lists a rix
+# session with that label on that project.
+harness_session_registered() {
+  jq -e --arg p "$1" --arg l "$2" '.sessions[]? | select(.project == $p and .worker == "rix" and .label == $l)' \
+    <<<"$(harness_overview_json)" >/dev/null 2>&1
+}
+
 harness_overview_json() {
   local f; f="$(harness_data_dir)/overview.json"
   [[ -s $f ]] && cat "$f" || printf '{}'
@@ -270,6 +277,13 @@ harness_register_rix() {
   for p in "${projects[@]}"; do
     for (( s = 1; s <= slots; s++ )); do
       label=$profile; (( slots > 1 )) && label="$profile-$s"
+      # Already registered for this project (overview.json is the harness's own view):
+      # skip the add -- `session add` would mint a fresh id like "<label>-2" -- and let the
+      # resync below bring the existing session's role/model/vendor/cost class up to date.
+      if harness_session_registered "$p" "$label"; then
+        info "harness register: $label already registered on $p (resyncing, not adding)"
+        continue
+      fi
       if (( OAL_DRY_RUN )); then
         say "[dry-run] would: $bin session add --project $p --worker rix --label $label --cwd $repo --cost-class $class --backend $backend --role $role --model $model --vendor $vendor"
       else

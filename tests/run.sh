@@ -819,9 +819,13 @@ JSON
   pass "harness dispatch_once/reap: subscription and funded metered run detached; underfunded metered requests budget once"
 
   # ---- register (incl. --slots), approve, decline; requested.txt pruned on approve ---
+  # overview.json already lists hns-sub registered on p-sub (s-sub): register must NOT
+  # `session add` it again (that would mint "hns-sub-2") -- it resyncs the existing
+  # session's role/model/vendor/cost class through `session set` instead.
+  : >"$SESSADD"
   harness_register_rix hns-sub /tmp/proj-sub >/dev/null || tfail "register failed"
-  grep -q -- "--project p-sub" "$SESSADD" || tfail "register did not add a session for p-sub"
-  grep -q -- "--label hns-sub" "$SESSADD" || tfail "register label"
+  grep -q -- "^add .*--label hns-sub\b" "$SESSADD" && tfail "register re-added an already-registered label"
+  grep -q -- "^session set --project p-sub --session s-sub" "$SESSADD" || { cat "$SESSADD"; tfail "register did not resync the existing p-sub session"; }
   grep -q -- "--cost-class subscription" "$SESSADD" || tfail "register cost class"
 
   : >"$SESSADD"
@@ -829,6 +833,16 @@ JSON
   grep -q -- "--label hns-sub-1" "$SESSADD" || tfail "register --slots 2: session 1 missing"
   grep -q -- "--label hns-sub-2" "$SESSADD" || tfail "register --slots 2: session 2 missing"
   [[ $(harness_profile_for_label hns-sub-1) == hns-sub ]] || tfail "a slot label must resolve back to the real profile"
+
+  # an already-registered label is resynced, never re-added as "<label>-2" (live bug 2026-09-14)
+  ov_backup=$(cat "$HARNESS_DATA_DIR/overview.json" 2>/dev/null || printf '{}')
+  jq '.sessions = ((.sessions // []) + [{project:"p-sub", id:"hns-sub-1", label:"hns-sub-1", worker:"rix", state:"idle"}])' <<<"$ov_backup" >"$HARNESS_DATA_DIR/overview.json"
+  : >"$SESSADD"
+  harness_register_rix hns-sub /tmp/proj-sub 2 >/dev/null || tfail "register --slots with one existing label failed"
+  grep -q -- "--label hns-sub-1" "$SESSADD" && tfail "register must not re-add an already-registered label (would mint hns-sub-1-2)"
+  grep -q -- "--label hns-sub-2" "$SESSADD" || tfail "register must still add the missing slot label"
+  printf '%s' "$ov_backup" >"$HARNESS_DATA_DIR/overview.json"
+  pass "harness register: existing labels are resynced, missing slots added"
 
   grep -qxF "p-poor:poor-node" "$HARNESS_STATE_DIR/requested.txt" || tfail "requested.txt should still list the underfunded packet before approval"
   harness_approve p-poor 0.0002 "go ahead" >/dev/null   # a harness binary is on PATH: this goes through the CLI, not curl
