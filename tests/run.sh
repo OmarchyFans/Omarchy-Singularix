@@ -557,6 +557,10 @@ echo "== harness: cost class, price estimate, dispatch loop, network-free status
   # ---- fake `harness` CLI: records session-add/receipt calls, answers inbox/cost --
   cat >"$HD/fakebin/harness" <<'FAKE'
 #!/bin/bash
+# The real harness CLI takes --json as a GLOBAL flag before the subcommand
+# (`harness --json inbox ...`); strip it here so this fake dispatches on the
+# subcommand the same way regardless of where the caller put --json.
+while [[ ${1:-} == --json ]]; do shift; done
 case "$1" in
   session)
     printf '%s\n' "$*" >>"__SESSADD__"
@@ -606,9 +610,10 @@ FAKE2
 
   # ---- fake cmd_delegate: simulates a DETACHED launch (harness_dispatch_packet
   # no longer waits). It records the call, then -- unless the job asks to look
-  # "still running" -- immediately writes the run log a real unattended worker
-  # would produce, plus the session_exited event the reaper reads for the exit
-  # code, so harness_dispatch_reap can pick it up on its very next call. ------
+  # "still running" -- writes the COMPLETE run log a real unattended worker
+  # would produce in ONE printf, ending with the completion sentinel
+  # (`__oal_rc=<n>`) harness_dispatch_reap trusts outright: no events.jsonl
+  # lookup, no mtime race, nothing left to be flaky about. --------------------
   cmd_delegate() {
     local backend="" name="" model="" i=0 n=${#OPTS[@]}
     while (( i < n )); do
@@ -631,8 +636,7 @@ FAKE2
     elif grep -q FALSE_POSITIVE_MARKER <<<"$job"; then body="mentions a usage limit in passing but the run actually succeeded"; code=0
     else body="done: ok"; code=0
     fi
-    printf '%s\n' "$body" >"$rundir/$(date +%Y%m%d-%H%M%S)-$RANDOM.log"
-    event_emit "$name" session_exited "sim exit" --code "$code" >/dev/null 2>&1 || true
+    printf '%s\n__oal_rc=%s\n' "$body" "$code" >"$rundir/$(date +%Y%m%d-%H%M%S)-$RANDOM.log"
     return 0
   }
 
