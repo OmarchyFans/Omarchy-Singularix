@@ -191,6 +191,34 @@ prompt tokens (input plus cache reads), output tokens, and USD, with the cost
 basis labelled (the agent's own estimate, a catalog price, or unknown), per
 agent and per task, on the Rix and Agents pages and in `usage --json`.
 
+### Rix × session-harness
+
+**session-harness** (`~/Work/session-harness`, CLI `harness`, API on `127.0.0.1:7744`) is a
+task-plan scheduler: it splits a project into a dependency graph, assigns
+edges to worker sessions as inbox packets, and is the single source of truth for what is actually
+`done` — it runs the real oracle before a node is marked finished, never Rix's say-so. A Rix
+profile registers as a harness worker session (`worker: rix`) on whatever backend the launcher
+chose (local GPU, browser sign-in, or an API key); the launcher's own dispatch loop picks up its
+inbox packets, runs each as a `delegate --wait` job, and writes the outbox receipt from the real
+result.
+
+- **`omarchy-agent-launcher harness status`** — is the harness running, how many projects, any
+  budget requests waiting on you.
+- **`omarchy-agent-launcher harness serve`** / **`stop`** — start (or stop) `harness serve --all`
+  plus the launcher's own dispatch loop, both under `~/.local/state/omarchy-agent-launcher/harness/`
+  (pid files + logs); `settings.json:harness_autostart` (default `false`) starts it automatically
+  on `rix chat`.
+- **`omarchy-agent-launcher harness register <profile> [repo]`** — registers a saved agent profile
+  as a harness worker session for every project whose repo matches.
+- **`omarchy-agent-launcher harness approve <project> <usd> [reason]`** /
+  **`harness decline <project>`** — answer a pending budget request.
+- **The cost rule**: local work and a browser sign-in cost nothing to dispatch (`free` /
+  `subscription`); an API-key backend is `metered`, and the dispatch loop estimates a packet's
+  price from models.dev before it ever runs it. When the project's remaining budget is short, it
+  asks once (never guesses `$0` for a model it has no price for) and waits — nothing metered starts
+  without an approved budget. Rix says the price and gets a yes before `harness approve`, same as
+  every other paid backend.
+
 ### From a terminal
 
 ```bash
