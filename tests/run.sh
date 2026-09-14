@@ -285,7 +285,7 @@ if command -v python3 >/dev/null && command -v curl >/dev/null; then
   jq -e '.agents[] | select(.id=="hermes") | .runtimes.cloud.ok == false' <<<"$("$L" info --json)" >/dev/null || tfail "info --json reports the cloud runtime"
 
   out=$(cloud_login 2>&1) || { echo "$out"; tfail "cloud login"; }
-  grep -q "FANS-7Q2K" <<<"$out" && grep -q "signed in as milton" <<<"$out" || tfail "device flow output: $out"
+  grep -q "H7K4-QX9M" <<<"$out" && grep -q "signed in as milton" <<<"$out" || tfail "device flow output: $out"
   grep -q "^OFC_TOKEN=ofc_test_token_123$" "$OAL_SECRETS" || tfail "OFC_TOKEN not saved"
   [[ $(requests POST '/v1/device/token$' | wc -l) == 3 ]] || tfail "device flow polls"
   out=$(rt_check) || tfail "cloud rt_check after sign-in"; grep -q "signed in · org milton" <<<"$out" || tfail "rt_check line: $out"
@@ -338,9 +338,17 @@ if command -v python3 >/dev/null && command -v curl >/dev/null; then
   out=$(rt_destroy researcher) && [[ $out == "cloud agent agt_1 destroyed" ]] || tfail "destroy: $out"
   [[ -z $(profile_get researcher cloud_agent_id) ]] || tfail "cloud_agent_id not cleared"
   "$L" remove researcher --yes >/dev/null
-  cloud_logout >/dev/null
+  out=$(cloud_logout 2>&1) || tfail "logout exit"
+  [[ $out == "signed out of Omarchy.Fans Cloud" ]] || tfail "logout: $out"
   grep -q "^OFC_TOKEN=" "$OAL_SECRETS" && tfail "token still saved after logout"
-  [[ -n $(requests DELETE '/v1/tokens/tok_1$') ]] || tfail "token not revoked"
+  [[ -n $(requests POST '/v1/tokens/self/revoke$') ]] || tfail "token not revoked through /tokens/self/revoke"
+  [[ -z $(requests DELETE '/v1/tokens/') ]] || tfail "a CLI token must not call DELETE /tokens/:id"
+  code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ofc_test_token_123" "$OFC_API_URL/me"); [[ $code == 401 ]] || tfail "revoked token still works ($code)"
+  # an unreachable server: forget the token here, but say it was not revoked
+  secret_set OFC_TOKEN ofc_unrevoked_example
+  out=$(OFC_API_URL=http://127.0.0.1:9/v1 OFC_HTTP_TIMEOUT=3 cloud_logout 2>&1) || tfail "logout exit when offline"
+  grep -q "signed out on this computer" <<<"$out" && grep -q "revoke it under Tokens" <<<"$out" || tfail "offline logout message: $out"
+  grep -q "^OFC_TOKEN=" "$OAL_SECRETS" && tfail "token kept after offline logout"
   exit 0
 ) || exit 1
 pass "cloud runtime: sign-in, create validation, prepare, wake/sleep, ticketed console, destroy, logout"

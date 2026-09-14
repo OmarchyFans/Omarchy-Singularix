@@ -3,6 +3,10 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.12.1
+
+- Signing out of Omarchy.Fans Cloud revokes the token on the server, and says so plainly when it could not
+
 ## 0.12.0
 
 - The dashboard tells you when a new version is out, shows what changed, and updates in one click

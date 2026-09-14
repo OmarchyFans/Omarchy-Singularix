@@ -64,7 +64,7 @@ class H(BaseHTTPRequestHandler):
             f.write(json.dumps({"method": method, "path": path, "auth": self.headers.get("Authorization", ""), "body": body}) + "\n")
 
     def _authed(self):
-        return self.headers.get("Authorization", "") == f"Bearer {TOKEN}"
+        return not state.get("revoked") and self.headers.get("Authorization", "") == f"Bearer {TOKEN}"
 
     def do_GET(self):
         self.handle_any("GET")
@@ -93,9 +93,9 @@ class H(BaseHTTPRequestHandler):
         if parts == ["device", "code"] and method == "POST":
             if not body.get("client_name"):
                 return self._err(400, "bad_request", "client_name required")
-            return self._send(200, {"device_code": "dc_test", "user_code": "FANS-7Q2K",
+            return self._send(200, {"device_code": "dc_test", "user_code": "H7K4-QX9M",
                                     "verification_uri": "https://omarchy.fans/device",
-                                    "verification_uri_complete": "https://omarchy.fans/device?user_code=FANS-7Q2K",
+                                    "verification_uri_complete": "https://omarchy.fans/device?user_code=H7K4-QX9M",
                                     "expires_in": 900, "interval": 5})
         if parts == ["device", "token"] and method == "POST":
             if body.get("device_code") != "dc_test":
@@ -117,6 +117,9 @@ class H(BaseHTTPRequestHandler):
                                     "orgs": [], "quotas": {"hosted_agents": 3, "awake_hours": 60},
                                     "usage": {"hosted_agents": len(state["agents"]), "awake_hours": 1.5}})
         if parts == ["tokens", "tok_1"] and method == "DELETE":
+            return self._err(403, "forbidden", "revoking tokens needs a browser session")
+        if parts == ["tokens", "self", "revoke"] and method == "POST":
+            state["revoked"] = True
             return self._send(200, {"ok": True})
 
         if parts == ["agents"] and method == "GET":
