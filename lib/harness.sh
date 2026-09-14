@@ -523,7 +523,7 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json>
   # someone else while this delegate ran on) and cancel/clean the delegate later.
   local slug pid=""
   slug=$(slugify "$name")
-  have tmux && pid=$(tmux -S "$(tmux_socket "$slug")" display-message -p '#{pid}' 2>/dev/null | tr -dc '0-9')
+  have tmux && pid=$(tmux -S "$(tmux_socket "$slug")" list-panes -a -F '#{pane_pid}' 2>/dev/null | head -n1 | tr -dc '0-9')
   mkdir -p "$HARNESS_JOBS_DIR/$proj"
   jq -n --arg project "$proj" --arg node "$node" --arg session "$sid" --arg profile "$profile" \
         --arg name "$name" --arg slug "$slug" --arg backend "$backend" --arg model "$model" --arg bin "$bin" \
@@ -587,8 +587,9 @@ harness_dispatch_reap() {
   [[ -d $HARNESS_JOBS_DIR ]] || return 0
   local jf
   while IFS= read -r -d '' jf; do
-    local job proj node sid profile name backend model bin started
+    local job proj node sid profile name backend model bin started slug
     job=$(cat "$jf" 2>/dev/null) || { rm -f "$jf"; continue; }
+    slug=$(jq -r '.slug // empty' <<<"$job")
     proj=$(jq -r '.project // empty' <<<"$job"); node=$(jq -r '.node // empty' <<<"$job")
     sid=$(jq -r '.session // empty' <<<"$job"); profile=$(jq -r '.profile // empty' <<<"$job")
     name=$(jq -r '.name // empty' <<<"$job"); backend=$(jq -r '.backend // empty' <<<"$job")
@@ -617,11 +618,19 @@ harness_dispatch_reap() {
       # "finished" from "still writing" once it postdates `started`, so also
       # require a session_exited event timestamped (ms) at or after this job's
       # start -- an unrelated/stale event, or none yet, means still running.
+      # Unattended runs log `job_done` (interactive ones `session_exited`); accept both.
+      # If neither has landed but the delegate's tmux server is gone, the run is over
+      # too (the log is complete once the server exits): exit code unknown -> 1.
       local exit_evt
-      exit_evt=$(events_recent 400 | jq -c --arg n "$name" --argjson s "$((started * 1000))" \
-        '[.[] | select(.agent == $n and .kind == "session_exited" and (.t // 0) >= $s)] | last' 2>/dev/null)
-      [[ -n $exit_evt && $exit_evt != null ]] || continue   # still running: no qualifying exit event yet
-      code=$(jq -r '.code // 0' <<<"$exit_evt" 2>/dev/null)
+      exit_evt=$(events_recent 400 | jq -c --arg n "$slug" --argjson s "$((started * 1000))" \
+        '[.[] | select(.agent == $n and (.kind == "session_exited" or .kind == "job_done") and (.t // 0) >= $s)] | last' 2>/dev/null)
+      if [[ -n $exit_evt && $exit_evt != null ]]; then
+        code=$(jq -r '.code // 0' <<<"$exit_evt" 2>/dev/null)
+      elif [[ -n $slug ]] && ! session_alive "$slug"; then
+        code=1
+      else
+        continue   # still running
+      fi
     fi
     [[ $code =~ ^-?[0-9]+$ ]] || code=0
     local status

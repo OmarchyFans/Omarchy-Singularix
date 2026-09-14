@@ -46,7 +46,8 @@ local_status_json() {
     per=$n_ctx
     if (( slots > 1 )); then
       local slot_ctx
-      slot_ctx=$(curl -s -m 2 "$LOCAL_URL/slots" 2>/dev/null | jq -r '.[0].n_ctx // 0' 2>/dev/null || echo 0)
+      slot_ctx=$(curl -s -m 2 "$(local_server_url)/slots" 2>/dev/null | jq -r '.[0].n_ctx // 0' 2>/dev/null || echo 0)
+      [[ $slot_ctx =~ ^[0-9]+$ ]] || slot_ctx=0
       if (( slot_ctx > 0 )); then per=$slot_ctx; elif (( n_ctx > 0 )); then per=$(( n_ctx / slots )); fi
     fi
   fi
