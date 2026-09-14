@@ -38,6 +38,17 @@ when an update is available. Keep one short line per bullet.
   `--model/--vendor`) once the worker's run log lands, classifying `done`/`failed`/`throttled`
   from the real exit code. `settings.json:harness_workers` (default 4) caps how many run at
   once across a whole sweep.
+- **Worker liveness protocol** (assign → claim → pid/heartbeat → receipt → clear): fixes a
+  live defect where a Rix session went `stale` 45s into a multi-minute delegate job, had its
+  node released and re-solved by the harness, while the delegate kept running orphaned.
+  `harness_dispatch_packet` now records the delegate's tmux pid (`harness session set
+  --project P --session S --pid N`) or heartbeats it (`harness heartbeat --project P
+  --session S [--pid N] [--note]`); `harness_dispatch_heartbeat` re-heartbeats every running
+  job each sweep, or stops the delegate and `--clear-pid`s the session if the harness
+  withdrew its claimed packet (`.md.claimed.cancelled`); `harness_dispatch_reap` also
+  `--clear-pid`s and `harness_job_forget`s the transient `hns-*` agent once a receipt is
+  written, so scratch agents never pile up. `register --project ID` now uses that project's
+  own repo as cwd instead of `$PWD`. `harness sessions --json` gains `pid`/`heartbeat_age`.
 - **Cost-gated dispatch, deduped**: a `metered` Rix profile's packet is never run until its
   estimated price (chars/4 tokens × `settings.json:harness_turn_factor`, default 20, × models.dev
   price) fits the project's remaining budget; short by even a cent, or unpriced, it posts one
@@ -77,7 +88,10 @@ when an update is available. Keep one short line per bullet.
   (`[routing] daily_cap_usd`), keyed/idempotent approval requests
   (`project.pending_approvals`), per-vendor throttling (`project.throttled_vendors`, never
   crossing subscription → metered), inbox claim timeouts (`workers.claim_timeout_sec`), and
-  eight new `harness audit` codes covering the money path and stale claims.
+  eight new `harness audit` codes covering the money path and stale claims. §9.1/§16 now
+  also specify the worker liveness protocol above and `project.scheduler = manual|auto`
+  (`harness project set --project ID --scheduler manual|auto`) for a receipts/oracle-only
+  tick on a project an external dispatcher fully drives.
 - README: revised "Rix × session-harness" section to match the shipped CLI and rule wording.
 
 ## 0.12.1

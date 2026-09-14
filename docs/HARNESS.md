@@ -22,7 +22,9 @@ the harness repo for the authoritative contract this file summarizes for the lau
   a packet, launches a **detached** `delegate` (no `--wait`) and a reaper picks up the
   result once the worker's run log lands, writing the outbox receipt (with actual
   `--usd`/`--tokens-in`/`--tokens-out`) from it; the harness runs the real oracle before
-  anything is `done`.
+  anything is `done`. While the job runs the dispatcher keeps the session alive (pid or a
+  heartbeat every sweep) — see "Worker liveness protocol" below; without it the harness
+  marks the session `stale` at `workers.stale_after_sec` (45s) into a job that runs minutes.
 - **The dashboard shows the Gantt**: a `plan` tab renders every project's task queue from
   the harness's `overview.json`, filterable per project / per agent / per state, animated
   as the scheduler assigns and completes work, with the task queue, the sessions lane and a
@@ -43,9 +45,11 @@ harness serve --all  ──writes──►  ~/.session-harness/overview.json   �
                      ──appends─►  ~/.session-harness/events.jsonl    ◄── tail -F (animation deltas)
                      ──writes──►  <repo>/.harness/inbox/<sid>/<node>.md
 omarchy-agent-launcher harness dispatch  (loop; started by `harness serve` wrapper)
-    per sweep: reap finished detached jobs (write their harness receipt) → cost-gate each
-    unclaimed packet of a rix session → claim + detached `delegate` (up to harness_workers
-    concurrent) → job file for the reaper; also runs harness_notify_sync (blockers/toasts)
+    per sweep: heartbeat every running job's session (or stop the delegate + clear-pid if
+    the harness withdrew its claimed packet) → reap finished detached jobs (write their
+    harness receipt, clear-pid) → cost-gate each unclaimed packet of a rix session → claim +
+    record pid/heartbeat + detached `delegate` (up to harness_workers concurrent) → job file
+    for the reaper; also runs harness_notify_sync (blockers/toasts) each loop iteration
 omarchy-agent-launcher harness approve <project> <usd> [--request ID]
     ──► POST /approve  (human-only: refused when $OAL_AGENT is set; needs header
          X-Harness-Approver: human — the CLI/dashboard prove a human is present, budget.py
@@ -69,7 +73,7 @@ do (curl to 127.0.0.1 with `X-Harness: 1`) and the harness binary does.
 | `harness_chain_metered_hop CHAIN` | the first hop in a Hermes `fallback_chain` that resolves to an `auth=api-key` backend, or empty — used so a chain that *can* fall back to a paid vendor is never registered as free/subscription |
 | `harness_cost_class PROFILE` | `harness_backend_cost_class` on the profile's own backend, upgraded to `metered` if `harness_chain_metered_hop` finds a paid hop in its fallback chain |
 | `harness_cost_class_reason PROFILE` | why (never used to decide, only to explain in `register`'s warning / the event trail) |
-| `harness_register_rix PROFILE [REPO] [SLOTS]` | `harness session add --worker rix --label PROFILE[-N] --cwd REPO --cost-class $(harness_cost_class PROFILE) --backend <id>` for every project whose repo_path is REPO, once per slot `1..SLOTS` (default 1) so one profile can run `SLOTS` parallel harness workers |
+| `harness_register_rix PROFILE [REPO] [SLOTS] [PROJECT_ID]` | `harness session add --worker rix --label PROFILE[-N] --cwd REPO --cost-class $(harness_cost_class PROFILE) --backend <id>` for every project whose repo_path is REPO, once per slot `1..SLOTS` (default 1); with `PROJECT_ID` the repo_path lookup is skipped and that one project is targeted directly, defaulting `REPO`/`--cwd` to *that project's own* `repo_path` (not `$PWD`) when no repo is given |
 | `harness_profile_for_label LABEL` | resolves a session label (`PROFILE` or `PROFILE-N`) back to its saved profile name |
 | `harness_estimate_from_class CLASS MODEL TEXT` | chars/4 input tokens × 4 for output × `settings.json:harness_turn_factor` (default 20, a delegate is a whole agent loop, not one call) × models.dev price; `0` for free/subscription; non-zero exit when a metered model's price is unknown (never guess `$0`) |
 | `harness_estimate_usd PROFILE PACKET` | `harness_estimate_from_class` using `harness_cost_class PROFILE` |
@@ -79,20 +83,57 @@ do (curl to 127.0.0.1 with `X-Harness: 1`) and the harness binary does.
 | `harness_prune_requested_key` / `_project` / `_stale` | maintain `$HARNESS_STATE_DIR/requested.txt` (the dedup set of already-asked-for node shortfalls): drop one node's entry once funded, drop a whole project's on approve/decline, drop any entry the harness no longer lists pending |
 | `harness_approve PROJECT USD [REASON] [REQUEST_ID]` | resolves the oldest open `pending_approvals` entry matching `USD` via `harness cost --json` when no request id is given, then `POST /approve`; prunes `requested.txt` for the project |
 | `harness_decline PROJECT` | `POST /cost/decline`; prunes `requested.txt` for the project |
-| `harness_dispatch_packet` | cost-gates one packet (fail-closed class; metered + short → one `cost/request` + skip, deduped via `requested.txt`); if slots remain, claims (`.md`→`.md.claimed`) and launches a **detached** `delegate` (`--approved-usd` pre-filled with the harness's own estimate for a metered call) recording a job file under `$HARNESS_STATE_DIR/jobs/<project>/<node>.json`; never blocks |
-| `harness_dispatch_reap` | for each job file whose worker's run log postdates it: reads the real exit code + usage (`usage_json`), classifies `done`/`failed`/`throttled` (a nonzero exit *and* a rate-limit marker in the tail), writes `harness receipt` with `--usd/--tokens-in/--tokens-out/--model/--vendor`, prunes `requested.txt`, removes the job file |
+| `harness_dispatch_packet` | cost-gates one packet (fail-closed class; metered + short → one `cost/request` + skip, deduped via `requested.txt`); if slots remain, claims (`.md`→`.md.claimed`) and launches a **detached** `delegate` (`--approved-usd` pre-filled with the harness's own estimate for a metered call), reads the delegate's tmux server pid and records a job file under `$HARNESS_STATE_DIR/jobs/<project>/<node>.json` (project, node, session, slug, claimed path, pid, started_at); calls `harness session set --pid N` when a pid was found, else `harness heartbeat` once immediately; never blocks |
+| `harness_dispatch_heartbeat` | one sweep over every job file: if its `.md.claimed` no longer exists as itself (the harness withdrew/cancelled it), `harness_job_forget` the delegate (kill its tmux server, remove staged home/profile/job file) and `session set --clear-pid`; otherwise `harness heartbeat --project --session` to keep it out of `stale` |
+| `harness_job_forget SLUG` | kill an `hns-*` delegate's tmux server, remove its staged home/profile/job file — transient per-job agents must not accumulate in the launcher's own agent list |
+| `harness_dispatch_reap` | for each job file whose worker's run log postdates it (or, in tests, carries a `__oal_rc=<n>` sentinel line trusted outright): reads the real exit code + usage (`usage_json`), classifies `done`/`failed`/`throttled` (a nonzero exit *and* a rate-limit marker in the tail), writes `harness receipt` with `--usd/--tokens-in/--tokens-out/--model/--vendor`, `session set --clear-pid`, prunes `requested.txt`, `harness_job_forget`s the delegate, removes the job file |
 | `harness_jobs_running` | count of job files (the concurrency accounting for `harness_workers`) |
-| `harness_dispatch_once` | reap, prune stale requests, compute `HARNESS_SLOTS_LEFT = settings.json:harness_workers (default 4) − running jobs`, then sweep every `rix` session's unclaimed inbox packets across projects, dispatching up to the remaining slots |
-| `harness_dispatch_loop` | every 3 s: `harness_dispatch_once` then `harness_notify_sync`, until stopped |
+| `harness_dispatch_once` | heartbeat running jobs (or stop+clear-pid a withdrawn one), reap finished jobs, prune stale requests, compute `HARNESS_SLOTS_LEFT = settings.json:harness_workers (default 4) − running jobs`, then sweep every `rix` session's unclaimed inbox packets across projects, dispatching up to the remaining slots |
+| `harness_dispatch_loop` | every 3 s: `harness_dispatch_once` (which itself heartbeats/reaps first) then `harness_notify_sync`, until stopped |
 | `harness_status_json` | `{alive, url, data_dir, bin, serving_pid, dispatch_pid, projects: n, pending_approvals: [...], jobs: {running, slots}}` — file/pid based, no network beyond one 1 s curl |
 | `harness_pending_approvals_json` | `[{project, estimate_usd, model, vendor, reason, at}]` from `overview.json`, file only |
 | `harness_notify_sync` | one blocker per project with a `pending_approval` (resolved when it clears), one warn-level note per throttled session's `retry_at` — deduped in `$HARNESS_STATE_DIR/notified.txt` so nothing re-toasts; safe every dispatch cycle and from `status` |
 
 CLI: `omarchy-agent-launcher harness status|serve|stop|open|projects|register PROFILE [REPO]
-[--slots N]|dispatch [--once]|approve PROJECT USD [REASON] [--request ID]|decline
-PROJECT|inbox PROFILE` — `approve`/`decline` are refused outright when `$OAL_AGENT` is set
-(an agent's own shell must never fund or reject its own spending).
+[--slots N] [--project ID]|dispatch [--once]|approve PROJECT USD [REASON] [--request ID]|
+decline PROJECT|inbox PROFILE` — `approve`/`decline` are refused outright when `$OAL_AGENT`
+is set (an agent's own shell must never fund or reject its own spending).
 `harness serve` is also started by `rix chat`/`rix open` when `settings.json:harness_autostart` is true.
+
+## Worker liveness protocol (assign → claim → pid/heartbeat → receipt → clear)
+
+Fixes a live defect (2026-09-14): a Rix delegate running a multi-minute job went `stale` at
+`workers.stale_after_sec` (45s) of harness-side silence, its node was released and re-solved
+by the harness itself, and the original delegate kept running with no one collecting its
+result. Every dispatcher (the launcher's `harness_dispatch_*` functions) now follows this
+sequence for each node it takes off a session's inbox — full contract in the harness repo's
+`docs/CONTRACTS.md` §9.1/§16:
+
+1. **Assign** — the harness writes `<repo>/.harness/inbox/<sid>/<node>.md` and puts the node
+   `running`, assigned to `sid`.
+2. **Claim** — the dispatcher renames it to `<node>.md.claimed` before acting on it
+   (`harness_dispatch_packet`).
+3. **Pid / heartbeat** — the dispatcher records the delegate's real tmux-server pid on the
+   session (`harness session set --project P --session S --pid N`) when it can read one,
+   else calls `harness heartbeat --project P --session S` once immediately and again every
+   dispatch sweep (`harness_dispatch_heartbeat`; a `--every N [--until-gone]` daemon form of
+   `harness heartbeat` is landing for dispatchers that don't want to loop it by hand). The
+   harness's `RixAdapter.heartbeat` treats the session alive on a live `/proc/<pid>` *or* a
+   `.md.claimed` packet younger than `workers.claim_timeout_sec` (1800s) — the claimed-file
+   check is the safety net when no pid was recorded.
+4. **Withdraw or receipt** — each sweep, if the job's recorded `.md.claimed` path no longer
+   exists (the harness renamed it `.md.claimed.cancelled` — released, reassigned, or its
+   parent finished), the dispatcher kills the delegate (`harness_job_forget`) instead of
+   letting it run to completion orphaned; otherwise, once the run log shows it finished, it
+   writes `harness receipt --status done|failed|progress|throttled ... --usd U --tokens-in N
+   --tokens-out N --model M --vendor V` (`harness_dispatch_reap`).
+5. **Clear** — either way, `harness session set --project P --session S --clear-pid` and
+   `harness_job_forget` drop the pid and any transient `hns-*` scratch agent, so nothing
+   from a finished or cancelled job lingers in the launcher's own agent list.
+
+`harness sessions [--json]` (cross-project) now shows each session's `pid` and
+`heartbeat_age` (seconds since `last_heartbeat`, or `"never"`), so a stuck/dead session is
+visible without cross-referencing job files by hand.
 
 ## lib/harness_bridge.sh (Sentinel → harness bridge)
 
@@ -154,8 +195,12 @@ class (no backend, unsigned OAuth, api-key, a fallback chain with a paid hop →
 estimate math, `dispatch_once` claims a packet + launches a detached delegate + a later
 `dispatch_reap` writes the receipt (with usd/tokens) via the stub once the fake run log
 lands, metered + short budget → one deduped `cost/request` + no delegate, `harness_workers`
-caps concurrent dispatches, `--slots N` registers `PROFILE-1..N`, `approve`/`decline`
+caps concurrent dispatches, `--slots N` registers `PROFILE-1..N`, `--project ID` registers
+directly against a project id using its own `repo_path` as cwd, `approve`/`decline`
 refuse when `OAL_AGENT` is set, `harness_notify_sync` emits exactly one blocker per pending
-approval and one note per throttled `retry_at` (no re-toast on a second sweep). Version →
+approval and one note per throttled `retry_at` (no re-toast on a second sweep); liveness:
+`harness_dispatch_packet` records a pid, `harness_dispatch_heartbeat` heartbeats a running
+job or stops+clear-pids a withdrawn one, `harness_dispatch_reap` clear-pids and forgets the
+delegate on receipt. Version →
 0.13.0 in `manifest.json` and `skills/rix/SKILL.md`; README section "Rix × harness"; deploy
 once with the flash warning; shell restart (keepLoaded panel).
