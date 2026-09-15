@@ -837,6 +837,14 @@ JSON
   [[ $n_req2 == 1 ]] || tfail "second sweep must not re-request an already-requested packet (the harness's pending list still lists it)"
   pass "harness dispatch_once/reap: subscription and funded metered run detached; underfunded metered requests budget once"
 
+  # ---- extract_last_json prefers the last object with an "action" key ----------------
+  printf '%s\n' 'I will split it like so:' '{"action":"SPLIT","parent":"P0","children":[{"title":"a"},{"title":"b"}]}' 'Then I ran a tool:' '{"tool":"read_file","path":"x"}' >"$HD/reply-action-first.txt"
+  got=$(harness_extract_last_json "$HD/reply-action-first.txt") || tfail "extract: action-first reply must yield an object"
+  [[ $(jq -r .action <<<"$got") == SPLIT ]] || { echo "$got"; tfail "extract must prefer the last object carrying an action key over later non-patch objects"; }
+  printf '%s\n' '{"tool":"read_file"}' 'done' >"$HD/reply-no-action.txt"
+  got=$(harness_extract_last_json "$HD/reply-no-action.txt") && [[ $(jq -r '.tool' <<<"$got") == read_file ]] || tfail "extract: with no action-bearing object the last object is still returned"
+  pass "harness extract_last_json: the last object with an action key wins; otherwise the last object"
+
   # ---- keepalive: a launcher-owned idle rix session with no pid gets this loop's pid ----
   (
     settings_set harness_bin "$HD/fakebin/harness"

@@ -718,10 +718,17 @@ def main() -> int:
         candidates.append((end, value))
         i = end  # skip past this top-level span: nested { }/[ ] inside it are
         #          never re-tried as separate (falsely "top-level") candidates
-    for _end, value in reversed(candidates):
-        if isinstance(value, dict):
+    dicts = [v for _end, v in candidates if isinstance(v, dict)]
+    # A patch always has an "action"; an agent transcript is full of other JSON objects
+    # (tool calls, file listings) that come AFTER the real answer -- prefer the last
+    # object that looks like a patch, then the last object at all.
+    for value in reversed(dicts):
+        if "action" in value:
             sys.stdout.write(json.dumps(value))
             return 0
+    if dicts:
+        sys.stdout.write(json.dumps(dicts[-1]))
+        return 0
     return 1  # only arrays found (or nothing) -- never guess an array's element
 
 
@@ -951,8 +958,14 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
     return 0
   fi
   local where=$'\nWorking directory: '"$repo"$' (you are started there; every path below is relative to it; never work in any other checkout).'
+  local run_dir=$repo
   if [[ -n $command ]]; then
-    trailer=$'\n\nFirst run: harness brief --project '"$proj"' --session '"$sid"$'\n'"$where"$'\nDo not write the outbox receipt file yourself. Your FINAL message must be exactly one JSON object -- the patch -- with no prose before or after it and no markdown fence; the launcher extracts it and writes the receipt. A reply without a JSON object fails this packet.'
+    # An orchestration delegate reads the packet and answers with a patch; it has no
+    # business in the repo at all (a 4B model "orienting" itself re-created the kata under
+    # demo_repo/{src,tests} and poisoned every pytest oracle, 2026-09-15). Run it in an
+    # empty scratch directory: `harness brief`/`show` still work from anywhere.
+    run_dir="$HARNESS_STATE_DIR/orch/$proj/$node"; mkdir -p "$run_dir"
+    trailer=$'\n\nFirst run: harness brief --project '"$proj"' --session '"$sid"$'\nThis is a planning task: do NOT read, create, copy or modify any file and do not run tests -- everything you need is in this packet and in `harness brief`/`harness show`. Do not write the outbox receipt file yourself. Your FINAL message must be exactly one JSON object -- the patch, with an "action" key -- with no prose before or after it and no markdown fence; the launcher extracts it and writes the receipt. A reply without such an object fails this packet.'
   else
     trailer=$'\n\nFirst run: harness show --project '"$proj"' --node '"$node"$'\n'"$where"$'\nEdit ONLY the files listed under Touches, in place. Never create new files or directories, never copy or re-create the repo or its tests anywhere else, never search the filesystem for another copy: if a file in Touches is missing, stop and report it. When finished, run the oracle command from the working directory and print its output.'
   fi
@@ -972,7 +985,7 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
   # "$HARNESS_SESSION"` as the skill instructs, without the launcher having
   # to pass `--session` through cmd_delegate's own CLI surface.
   # cd in a subshell: cmd_delegate forks the detached agent from the current directory.
-  printf '%s%s\n' "$content" "$trailer" | ( cd "$repo" && HARNESS_SESSION="$sid" HARNESS_PROJECT="$proj" HARNESS_REPO="$repo" cmd_delegate ) >/dev/null 2>&1
+  printf '%s%s\n' "$content" "$trailer" | ( cd "$run_dir" && HARNESS_SESSION="$sid" HARNESS_PROJECT="$proj" HARNESS_REPO="$repo" cmd_delegate ) >/dev/null 2>&1
   local drc=$?
   OPTS=("${saved_opts[@]}")
   if (( drc != 0 )); then
