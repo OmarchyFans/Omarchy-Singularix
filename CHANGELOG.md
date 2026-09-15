@@ -3,6 +3,13 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.15.2
+
+- Delegates run inside the project's repo (`repo_path`), with the working directory named in the packet trailer; a delegate started from the dispatcher's own directory had searched the filesystem and written into another checkout.
+- Launcher-owned idle Rix sessions carry the dispatch loop's pid so they stay alive between jobs (an idle orchestrator went stale after 45 s and lost its packet); cleared when the loop exits.
+- Orchestration trailer: the final message must be exactly one JSON object; a reply without one fails the packet.
+- `harness register`: the harness CLI, not a possibly stale overview.json, decides which labels are already registered.
+
 ## 0.15.1
 
 - `harness_bin`: `none` (settings or `OAL_HARNESS_BIN`) means there is no harness and never falls back to PATH or the dev checkout; tests/run.sh sets it and a throwaway `HARNESS_DATA_DIR` from the first line. The `rix setup`/`create`/`delegate` tests had been reaching the real CLI through the new resync hook and relabelling the user's live `rix-1`/`rix-2` sessions (model, vendor, cost class) on every test run.
