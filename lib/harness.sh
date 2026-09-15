@@ -1237,7 +1237,10 @@ harness_keepalive_sessions() {
     label=$(jq -r '.label // empty' <<<"$sess"); pid=$(jq -r '.pid // empty' <<<"$sess")
     [[ -n $proj && -n $sid && -n $label ]] || continue
     harness_profile_for_label "$label" >/dev/null 2>&1 || continue
-    [[ -z $pid ]] || continue                     # a job's pid (or ours) is already there
+    # a live pid (a job's, or ours) is fine; a DEAD one (a previous dispatch loop that was
+    # killed without its exit trap, 2026-09-15) must be replaced or the session reads stale
+    # forever -- pid liveness is exactly what the harness checks
+    if [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null; then continue; fi
     [[ -f "$HARNESS_JOBS_DIR/$proj/$(jq -r '.assigned_nodes[0] // ""' <<<"$sess").json" ]] && continue
     (( OAL_DRY_RUN )) && { say "[dry-run] would: $bin session set --project $proj --session $sid --pid $$"; continue; }
     "$bin" session set --project "$proj" --session "$sid" --pid "$$" >/dev/null 2>&1 || true

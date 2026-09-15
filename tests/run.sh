@@ -851,13 +851,15 @@ JSON
     ov_backup=$(cat "$HARNESS_DATA_DIR/overview.json" 2>/dev/null || printf '{}')
     jq '.sessions = [
       {project:"p-sub", id:"s-nopid", label:"hns-sub",   worker:"rix", state:"idle", pid:null},
-      {project:"p-sub", id:"s-haspid", label:"hns-sub-2", worker:"rix", state:"idle", pid:4242},
+      {project:"p-sub", id:"s-haspid", label:"hns-sub-2", worker:"rix", state:"idle", pid:'"$$"'},
+      {project:"p-sub", id:"s-deadpid", label:"hns-sub-3", worker:"rix", state:"stale", pid:4242424},
       {project:"p-sub", id:"s-foreign", label:"someone-elses-rix", worker:"rix", state:"idle", pid:null}
     ]' <<<"$ov_backup" >"$HARNESS_DATA_DIR/overview.json"
     : >"$SESSADD"
     harness_keepalive_sessions "$HD/fakebin/harness" "$(cat "$HARNESS_DATA_DIR/overview.json")"
     grep -q -- "^session set --project p-sub --session s-nopid --pid $$" "$SESSADD" || { cat "$SESSADD"; tfail "keepalive must record the loop pid on a launcher-owned session with no pid"; }
-    grep -q -- "--session s-haspid" "$SESSADD" && tfail "keepalive must leave a session that already has a pid alone"
+    grep -q -- "--session s-haspid" "$SESSADD" && tfail "keepalive must leave a session whose pid is alive alone"
+    grep -q -- "^session set --project p-sub --session s-deadpid --pid $$" "$SESSADD" || { cat "$SESSADD"; tfail "keepalive must replace a DEAD pid (a killed dispatch loop) with this loop's pid"; }
     grep -q -- "--session s-foreign" "$SESSADD" && tfail "keepalive must not touch a rix session that is not one of this launcher's profiles"
     printf '%s' "$ov_backup" >"$HARNESS_DATA_DIR/overview.json"
   ) || exit 1
