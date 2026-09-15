@@ -559,6 +559,8 @@ echo "== harness: cost class, price estimate, dispatch loop, network-free status
   OPTS=(); CMD=(); OAL_SELF="$L"
   HD="$T/harness-test"; mkdir -p "$HD/fakebin" "$HD/inbox"
   export HARNESS_DATA_DIR="$HD/data"; mkdir -p "$HARNESS_DATA_DIR"
+  # a delegate runs INSIDE the project's repo (0.15.2): the fixtures' repo_path dirs must exist
+  mk_repos() { jq -r '.projects[]?.repo_path // empty' "$HARNESS_DATA_DIR/overview.json" 2>/dev/null | xargs -r mkdir -p; }
   SESSADD="$HD/session-add.log"; : >"$SESSADD"
   RECEIPTS="$HD/receipts.log"; : >"$RECEIPTS"
   CURLLOG="$HD/curl.log"; : >"$CURLLOG"
@@ -617,6 +619,10 @@ case "$1" in
     proj=""
     while (( $# )); do case "$1" in --project) proj=$2; shift 2 ;; *) shift ;; esac; done
     cat "__HD__/inbox/$proj.json" 2>/dev/null || echo '[]' ;;
+  sessions)
+    # the harness's own cross-project session list (what harness_session_registered asks
+    # first); a test seeds __HD__/sessions.json, otherwise "nothing registered"
+    cat "__HD__/sessions.json" 2>/dev/null || echo '[]' ;;
   cost)
     proj=""
     while (( $# )); do case "$1" in --project) proj=$2; shift 2 ;; *) shift ;; esac; done
@@ -803,7 +809,7 @@ JSON
   [[ $(jq -r '.pending_approvals[0].id' <<<"$s") == p-rich ]] || tfail "pending approval project id"
   [[ $(jq -r .serving_pid <<<"$s") == null && $(jq -r .dispatch_pid <<<"$s") == null ]] || tfail "no serve/dispatch pid files yet"
 
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   [[ $(wc -l <"$DELEGATE_LOG") == 2 ]] || { cat "$DELEGATE_LOG"; tfail "expected 2 delegate calls (subscription + funded metered)"; }
   grep -q "name=hns-sub-node"  "$DELEGATE_LOG" || tfail "subscription packet not delegated"
   grep -q "name=hns-rich-node" "$DELEGATE_LOG" || tfail "funded metered packet not delegated"
@@ -823,7 +829,7 @@ JSON
   grep -q "node=rich-node status=done" "$RECEIPTS" || tfail "rich receipt not done"
   [[ $(harness_jobs_running) == 0 ]] || tfail "job files must be removed once reaped"
 
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   [[ $(wc -l <"$DELEGATE_LOG") == 2 ]] || tfail "second sweep must not re-delegate claimed/finished packets"
   n_req2=$(grep -c "cost/request" "$CURLLOG" || true)
   [[ $n_req2 == 1 ]] || tfail "second sweep must not re-request an already-requested packet (the harness's pending list still lists it)"
@@ -844,9 +850,11 @@ JSON
   # overview.json already lists hns-sub registered on p-sub (s-sub): register must NOT
   # `session add` it again (that would mint "hns-sub-2") -- it resyncs the existing
   # session's role/model/vendor/cost class through `session set` instead.
+  # the fake CLI's own session list mirrors the overview fixture (s-sub = label hns-sub on p-sub)
+  echo '[{"project":"p-sub","id":"s-sub","label":"hns-sub","worker":"rix","state":"idle"}]' >"$HD/sessions.json"
   : >"$SESSADD"
   harness_register_rix hns-sub /tmp/proj-sub >/dev/null || tfail "register failed"
-  grep -q -- "^session add .*--label hns-sub$" "$SESSADD" && tfail "register re-added an already-registered label"
+  grep -q -- "^session add .*--label hns-sub --" "$SESSADD" && tfail "register re-added an already-registered label"
   grep -q -- "^session set --project p-sub --session s-sub" "$SESSADD" || { cat "$SESSADD"; tfail "register did not resync the existing p-sub session"; }
   grep -q -- "--cost-class subscription" "$SESSADD" || tfail "register cost class"
 
@@ -859,12 +867,26 @@ JSON
   # an already-registered label is resynced, never re-added as "<label>-2" (live bug 2026-09-14)
   ov_backup=$(cat "$HARNESS_DATA_DIR/overview.json" 2>/dev/null || printf '{}')
   jq '.sessions = ((.sessions // []) + [{project:"p-sub", id:"hns-sub-1", label:"hns-sub-1", worker:"rix", state:"idle"}])' <<<"$ov_backup" >"$HARNESS_DATA_DIR/overview.json"
+  echo '[{"project":"p-sub","id":"s-sub","label":"hns-sub","worker":"rix"},{"project":"p-sub","id":"hns-sub-1","label":"hns-sub-1","worker":"rix"}]' >"$HD/sessions.json"
   : >"$SESSADD"
   harness_register_rix hns-sub /tmp/proj-sub 2 >/dev/null || tfail "register --slots with one existing label failed"
   grep -q -- "--label hns-sub-1" "$SESSADD" && tfail "register must not re-add an already-registered label (would mint hns-sub-1-2)"
   grep -q -- "--label hns-sub-2" "$SESSADD" || tfail "register must still add the missing slot label"
   printf '%s' "$ov_backup" >"$HARNESS_DATA_DIR/overview.json"
   pass "harness register: existing labels are resynced, missing slots added"
+
+  # the harness CLI is the source of truth for "already registered": a STALE overview.json
+  # (serve stopped, `harness demo --fresh` ran) still lists hns-sub-1, the CLI says nothing
+  # is registered -> both slots must be added (seen live 2026-09-15: register skipped the
+  # add, then "unknown session" on the resync)
+  jq '.sessions = ((.sessions // []) + [{project:"p-sub", id:"hns-sub-1", label:"hns-sub-1", worker:"rix", state:"idle"}])' <<<"$ov_backup" >"$HARNESS_DATA_DIR/overview.json"
+  echo '[]' >"$HD/sessions.json"
+  : >"$SESSADD"
+  harness_register_rix hns-sub /tmp/proj-sub 2 >/dev/null || tfail "register --slots with a stale overview failed"
+  grep -q -- "^session add .*--label hns-sub-1 --" "$SESSADD" || tfail "register must trust the CLI over a stale overview.json and add hns-sub-1"
+  rm -f "$HD/sessions.json"
+  printf '%s' "$ov_backup" >"$HARNESS_DATA_DIR/overview.json"
+  pass "harness register: the harness CLI, not a stale overview.json, decides what is already registered"
 
   grep -qxF "p-poor:poor-node" "$HARNESS_STATE_DIR/requested.txt" || tfail "requested.txt should still list the underfunded packet before approval"
   harness_approve p-poor 0.0002 "go ahead" >/dev/null   # a harness binary is on PATH: this goes through the CLI, not curl
@@ -911,7 +933,7 @@ JSON
     sessions: [ {id:"s-throttle", project:"p-throttle", worker:"rix", label:"hns-free"} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   harness_dispatch_reap
   grep -q "node=t1 status=throttled" "$RECEIPTS" || { cat "$RECEIPTS"; tfail "rc-first: nonzero exit + a structured marker must be throttled"; }
   grep -q "node=t2 status=failed"    "$RECEIPTS" || { cat "$RECEIPTS"; tfail "rc-first: nonzero exit without a marker must be failed, not throttled"; }
@@ -931,7 +953,7 @@ JSON
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
 
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   [[ $(wc -l <"$DELEGATE_LOG") == 2 ]] || { cat "$DELEGATE_LOG"; tfail "concurrency: only harness_workers(2) jobs may launch per sweep"; }
   [[ $(harness_jobs_running) == 2 ]] || tfail "concurrency: 2 job files expected after the first sweep"
   s2=$(harness_status_json)
@@ -941,7 +963,7 @@ JSON
   [[ $(wc -l <"$RECEIPTS") == 2 ]] || { cat "$RECEIPTS"; tfail "concurrency: 2 receipts expected after reaping the first batch"; }
   [[ $(harness_jobs_running) == 0 ]] || tfail "concurrency: job files must be removed once reaped"
 
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   [[ $(wc -l <"$DELEGATE_LOG") == 4 ]] || { cat "$DELEGATE_LOG"; tfail "concurrency: the freed slots must launch the 2 remaining packets"; }
   harness_dispatch_reap
   [[ $(wc -l <"$RECEIPTS") == 4 ]] || { cat "$RECEIPTS"; tfail "concurrency: 4 total receipts expected"; }
@@ -959,7 +981,7 @@ JSON
     sessions: [ {id:"s-usage", project:"p-usage", worker:"rix", label:"hns-free"} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   harness_dispatch_reap
   grep -q "node=usage1 status=done usd=0.0042 tin=123 tout=45" "$RECEIPTS" || { cat "$RECEIPTS"; tfail "receipt must carry the worker's actual usage (--usd/--tokens-in/--tokens-out)"; }
   pass "harness reap: receipt carries the delegate's actual cost from usage --json"
@@ -1034,7 +1056,7 @@ JSON
     sessions: [ {id:"s-j1", project:"p-j1", worker:"rix", label:"hns-free"} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   JF1="$HARNESS_JOBS_DIR/p-j1/j1.json"
   [[ -f $JF1 ]] || tfail "dispatch: expected a job file for the claimed j1 packet"
   jf1=$(cat "$JF1")
@@ -1079,7 +1101,7 @@ JSON
     sessions: [ {id:"s-j2", project:"p-j2", worker:"rix", label:"hns-free"} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   JF2="$HARNESS_JOBS_DIR/p-j2/j2.json"
   [[ -f $JF2 ]] || tfail "j2 job file must exist after dispatch"
   slug2=$(jq -r '.slug' "$JF2")
@@ -1116,7 +1138,7 @@ JSON
     sessions: [ {id:"s-j3", project:"p-j3", worker:"rix", label:"hns-free"} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   JF3="$HARNESS_JOBS_DIR/p-j3/P0.2.1.json"
   [[ -f $JF3 ]] || tfail "j3 (dotted node name) job file must exist after dispatch"
   slug3=$(jq -r '.slug' "$JF3")
@@ -1137,7 +1159,7 @@ JSON
     sessions: [ {id:"s-j4", project:"p-j4", worker:"rix", label:"hns-free"} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   JF4="$HARNESS_JOBS_DIR/p-j4/P0.2.2.json"
   [[ -f $JF4 ]] || tfail "j4 job file must exist after dispatch"
   jq 'del(.slug)' "$JF4" >"$JF4.tmp" && mv -f "$JF4.tmp" "$JF4"   # simulate an older job file with no slug field
@@ -1266,7 +1288,7 @@ FAKE3
     sessions: [ {id:"s-split", project:"p-split", worker:"rix", label:"hns-orch", role:"orchestrator", tier:"orchestrator", model:"model-x", vendor:"local", ip_safe:true} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   grep -q "name=hns-P0" "$DELEGATE_LOG" || { cat "$DELEGATE_LOG"; tfail "an orchestrator session must claim and delegate the SPLIT packet"; }
   [[ -f ${PKT_SPLIT}.claimed ]] || tfail "the SPLIT packet must be claimed"
   harness_dispatch_reap
@@ -1291,7 +1313,7 @@ FAKE3
     sessions: [ {id:"s-split2", project:"p-split2", worker:"rix", label:"hns-free"} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   [[ $(wc -l <"$DELEGATE_LOG") == 0 ]] || { cat "$DELEGATE_LOG"; tfail "a non-orchestrator profile/session must not claim an orchestration packet (path-suffix .PM.md, no command field)"; }
   [[ -f $PKT_SPLIT2 ]] || tfail "the orchestration packet must remain unclaimed when skipped defensively"
   grep -q "not registered as orchestrator" "$OAL_EVENTS" || tfail "the defensive skip must emit an explanatory event"
@@ -1308,7 +1330,7 @@ FAKE3
     sessions: [ {id:"s-nojson", project:"p-nojson", worker:"rix", label:"hns-orch", role:"orchestrator", tier:"orchestrator", model:"model-x", vendor:"local", ip_safe:true} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   harness_dispatch_reap
   nojsonline=$(grep "node=P2 " "$RECEIPTS" | tail -n1)
   [[ -n $nojsonline ]] || { cat "$RECEIPTS"; tfail "a P2 receipt is expected"; }
@@ -1354,7 +1376,7 @@ FAKE3
     sessions: [ {id:"s-suffix", project:"p-suffix", worker:"rix", label:"hns-orch2", role:"orchestrator", tier:"orchestrator", model:"model-x", vendor:"local", ip_safe:true} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   grep -q "name=hns-P0 " "$DELEGATE_LOG" || { cat "$DELEGATE_LOG"; tfail "#21: the delegate name must use the BARE node id (hns-P0), not the suffixed inbox row value"; }
   [[ -f "$HARNESS_JOBS_DIR/p-suffix/P0.json" ]] || { ls "$HARNESS_JOBS_DIR/p-suffix" 2>&1; tfail "#21: the job file must be keyed by the bare node id (P0.json)"; }
   harness_dispatch_reap
@@ -1378,7 +1400,7 @@ FAKE3
     sessions: [ {id:"s-thr", project:"p-thr", worker:"rix", label:"hns-orch3", role:"orchestrator", tier:"orchestrator", model:"model-x", vendor:"local", ip_safe:true} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   harness_dispatch_reap
   thrline=$(grep "node=Pthr " "$RECEIPTS" | tail -n1)
   [[ -n $thrline ]] || { cat "$RECEIPTS"; tfail "#2: expected a Pthr receipt"; }
@@ -1396,7 +1418,7 @@ FAKE3
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
   printf 'Pthr2' >"$HD/receipt-fail-node"   # forces the fake's `receipt --status throttled` call for Pthr2 to fail
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   [[ -f ${PKT_THR2}.claimed ]] || tfail "#2 setup: the packet must be claimed before it can be un-claimed"
   harness_dispatch_reap
   rm -f "$HD/receipt-fail-node"
@@ -1404,10 +1426,10 @@ FAKE3
   [[ -f $PKT_THR2 && ! -f ${PKT_THR2}.claimed ]] || tfail "#2 belt-and-braces: a throttled receipt the harness refused must un-claim the packet"
   [[ -f "$HARNESS_STATE_DIR/backoff.s-thr2" ]] || tfail "#2 belt-and-braces: a refused throttled receipt must record a per-session backoff file"
   : >"$DELEGATE_LOG"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   [[ $(wc -l <"$DELEGATE_LOG") == 0 ]] || { cat "$DELEGATE_LOG"; tfail "#2 belt-and-braces: the backed-off session must not be re-dispatched onto before retry_at"; }
   echo 1 >"$HARNESS_STATE_DIR/backoff.s-thr2"   # force-expire (a long-past unix time)
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   grep -q "name=hns-Pthr2 " "$DELEGATE_LOG" || { cat "$DELEGATE_LOG"; tfail "#2 belt-and-braces: once the backoff expires, the session must be dispatchable again"; }
   harness_dispatch_reap
   pass "harness dispatch (#2 belt-and-braces): a throttled receipt the harness CLI refuses un-claims the packet and backs off the session until retry_at, then retries after it expires"
@@ -1502,7 +1524,7 @@ FAKE5
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
   n_req_before5=$(grep -c "cost/request" "$CURLLOG" || true)
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   [[ $(wc -l <"$DELEGATE_LOG") == 0 ]] || { cat "$DELEGATE_LOG"; tfail "#5: reserved_usd must be subtracted from remaining_usd -- this packet should not have been funded"; }
   n_req_after5=$(grep -c "cost/request" "$CURLLOG" || true)
   (( n_req_after5 > n_req_before5 )) || tfail "#5: a shortfall caused by reserved_usd must still POST a normal cost/request (it CAN be approved away)"
@@ -1518,7 +1540,7 @@ FAKE5
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
   n_req_before5b=$(grep -c "cost/request" "$CURLLOG" || true)
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   [[ $(wc -l <"$DELEGATE_LOG") == 0 ]] || { cat "$DELEGATE_LOG"; tfail "#5: a node that would exceed daily_cap_usd must not be dispatched"; }
   n_req_after5b=$(grep -c "cost/request" "$CURLLOG" || true)
   [[ $n_req_after5b == "$n_req_before5b" ]] || { tail -n5 "$CURLLOG"; tfail "#5: a daily-cap refusal must never POST cost/request -- a cap cannot be approved away"; }
@@ -1575,7 +1597,7 @@ FAKE5
     sessions: [ {id:"s-stale", project:"p-stale", worker:"rix", label:"hns-stale-orch"} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   [[ $(wc -l <"$DELEGATE_LOG") == 0 ]] || { cat "$DELEGATE_LOG"; tfail "#6/#7: the dispatch guard must never trust the profile's local harness_role field -- only the harness's own session record"; }
   [[ -f $PKT_STALE ]] || tfail "#6/#7: the orchestration packet must remain unclaimed"
   pass "harness dispatch (#6/#7): the orchestration guard trusts only the harness's own session tier/role, never a profile's (possibly stale) harness_role field"
@@ -1653,7 +1675,7 @@ FAKE5
     sessions: [ {id:"s-died", project:"p-died", worker:"rix", label:"hns-orch4", role:"orchestrator", tier:"orchestrator", model:"model-x", vendor:"local", ip_safe:true} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   harness_dispatch_reap
   diedline=$(grep "node=Pdied " "$RECEIPTS" | tail -n1)
   [[ -n $diedline ]] || { cat "$RECEIPTS"; tfail "#11: expected a Pdied receipt"; }
@@ -1680,7 +1702,7 @@ FAKE5
     sessions: [ {id:"s-nomodel", project:"p-nomodel", worker:"rix", label:"hns-nomodel"} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   grep -q "name=hns-nm-node model=$expected_model12" "$DELEGATE_LOG" || { cat "$DELEGATE_LOG"; tfail "#12: dispatch must resolve the model the same way harness_profile_model does (its own field, else its backend's) when the profile has no explicit model"; }
   harness_dispatch_reap
   pass "harness dispatch (#12): resolves a profile's model via harness_profile_model (its own field, else its backend's) at dispatch time too"
@@ -1695,7 +1717,7 @@ FAKE5
     sessions: [ {id:"s-mtime", project:"p-mtime", worker:"rix", label:"hns-free"} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   JFMT="$HARNESS_JOBS_DIR/p-mtime/mtime-node.json"
   [[ -f $JFMT ]] || tfail "#13 setup: mtime-node job file must exist"
   claimedmt=$(jq -r '.claimed' "$JFMT")
@@ -1732,7 +1754,7 @@ FAKE5
     sessions: [ {id:"s-env", project:"p-env", worker:"rix", label:"hns-free"} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   grep -q "^HARNESS_SESSION=s-env HARNESS_PROJECT=p-env$" "$HD/delegate-env.log" \
     || { cat "$HD/delegate-env.log"; tfail "#26: the delegate must inherit \$HARNESS_SESSION/\$HARNESS_PROJECT for this packet"; }
   grep -q "First run: harness show --project p-env --node env-node" "$HD/last-job-body.txt" \
@@ -1748,7 +1770,7 @@ FAKE5
     sessions: [ {id:"s-env2", project:"p-env2", worker:"rix", label:"hns-orch5", role:"orchestrator", tier:"orchestrator", model:"model-x", vendor:"local", ip_safe:true} ],
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
-  harness_dispatch_once || true
+  mk_repos; harness_dispatch_once || true
   grep -q "First run: harness brief --project p-env2 --session s-env2" "$HD/last-job-body.txt" \
     || { cat "$HD/last-job-body.txt"; tfail "#27: an orchestration packet's trailer must point at 'harness brief --project … --session …'"; }
   harness_dispatch_reap
