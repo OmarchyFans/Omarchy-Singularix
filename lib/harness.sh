@@ -68,7 +68,16 @@ harness_alive() { have curl && curl -sf -m 1 "$(harness_url)/api/status" >/dev/n
 # harness_session_registered PROJECT LABEL -> 0 when overview.json already lists a rix
 # session with that label on that project.
 harness_session_registered() {
-  jq -e --arg p "$1" --arg l "$2" '.sessions[]? | select(.project == $p and .worker == "rix" and .label == $l)' \
+  local p=$1 l=$2 bin rows
+  # Ask the harness itself when it is installed: overview.json is only refreshed while
+  # `harness serve` runs, so right after `harness demo --fresh` (or any edit made while serve
+  # was stopped) it still lists sessions that no longer exist -- register then skipped the
+  # add and the resync failed with "unknown session" (seen live 2026-09-15).
+  if bin=$(harness_bin 2>/dev/null) && rows=$("$bin" --json sessions 2>/dev/null) && [[ -n $rows ]]; then
+    jq -e --arg p "$p" --arg l "$l" '.[]? | select(.project == $p and .worker == "rix" and .label == $l)' <<<"$rows" >/dev/null 2>&1
+    return
+  fi
+  jq -e --arg p "$p" --arg l "$l" '.sessions[]? | select(.project == $p and .worker == "rix" and .label == $l)' \
     <<<"$(harness_overview_json)" >/dev/null 2>&1
 }
 
@@ -380,8 +389,21 @@ harness_resync_profile() {
     resolved=$(harness_profile_for_label "$label") || continue
     [[ $resolved == "$profile" ]] || continue
     harness_session_sync "$profile" "$proj" "$sid" || true
-  done < <(jq -c '.sessions[]? | select(.worker == "rix")' <<<"$(harness_overview_json)")
+  done < <(harness_rix_sessions_json "$bin")
   return 0
+}
+
+# harness_rix_sessions_json BIN -> one JSON object per registered rix session (project, id,
+# label, ...): the harness CLI's own list when it answers (overview.json is only refreshed
+# while serve runs and listed sessions that no longer existed right after `demo --fresh`),
+# else overview.json's sessions[].
+harness_rix_sessions_json() {
+  local bin=$1 rows
+  if [[ -n $bin ]] && rows=$("$bin" --json sessions 2>/dev/null) && [[ $rows == \[* ]]; then
+    jq -c '.[]? | select(.worker == "rix")' <<<"$rows"
+    return 0
+  fi
+  jq -c '.sessions[]? | select(.worker == "rix")' <<<"$(harness_overview_json)"
 }
 
 # harness_set_role PROFILE ROLE -- sets the profile's `harness_role` field
@@ -696,10 +718,17 @@ def main() -> int:
         candidates.append((end, value))
         i = end  # skip past this top-level span: nested { }/[ ] inside it are
         #          never re-tried as separate (falsely "top-level") candidates
-    for _end, value in reversed(candidates):
-        if isinstance(value, dict):
+    dicts = [v for _end, v in candidates if isinstance(v, dict)]
+    # A patch always has an "action"; an agent transcript is full of other JSON objects
+    # (tool calls, file listings) that come AFTER the real answer -- prefer the last
+    # object that looks like a patch, then the last object at all.
+    for value in reversed(dicts):
+        if "action" in value:
             sys.stdout.write(json.dumps(value))
             return 0
+    if dicts:
+        sys.stdout.write(json.dumps(dicts[-1]))
+        return 0
     return 1  # only arrays found (or nothing) -- never guess an array's element
 
 
@@ -919,10 +948,26 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
   # packets) delegate must run so it can orient itself before doing anything
   # else -- `harness brief` for an orchestration packet, `harness show` for a
   # plain work packet (see skills/rix/SKILL.md "pick up any task fresh").
+  # The delegate works INSIDE the project's repo: every path in the packet is relative to
+  # it, and a delegate started in some other directory went looking for the files and
+  # wrote into the wrong checkout (seen live 2026-09-15: the dispatcher's own cwd).
+  local repo; repo=$(harness_project_repo "$bin" "$proj")
+  if [[ -z $repo || ! -d $repo ]]; then
+    warn "harness: no repo_path for project $proj; not dispatching $node"
+    mv -f "$claimed" "$path" 2>/dev/null || true
+    return 0
+  fi
+  local where=$'\nWorking directory: '"$repo"$' (you are started there; every path below is relative to it; never work in any other checkout).'
+  local run_dir=$repo
   if [[ -n $command ]]; then
-    trailer=$'\n\nFirst run: harness brief --project '"$proj"' --session '"$sid"$'\nDo not write the outbox receipt file yourself; reply with exactly one JSON object (the patch) and nothing else after it -- the launcher writes the receipt.'
+    # An orchestration delegate reads the packet and answers with a patch; it has no
+    # business in the repo at all (a 4B model "orienting" itself re-created the kata under
+    # demo_repo/{src,tests} and poisoned every pytest oracle, 2026-09-15). Run it in an
+    # empty scratch directory: `harness brief`/`show` still work from anywhere.
+    run_dir="$HARNESS_STATE_DIR/orch/$proj/$node"; mkdir -p "$run_dir"
+    trailer=$'\n\nFirst run: harness brief --project '"$proj"' --session '"$sid"$'\nThis is a planning task: do NOT read, create, copy or modify any file and do not run tests -- everything you need is in this packet and in `harness brief`/`harness show`. Do not write the outbox receipt file yourself. Your FINAL message must be exactly one JSON object -- the patch, with an "action" key -- with no prose before or after it and no markdown fence; the launcher extracts it and writes the receipt. A reply without such an object fails this packet.'
   else
-    trailer=$'\n\nFirst run: harness show --project '"$proj"' --node '"$node"$'\nWhen finished, print the oracle command output; do not edit files outside touches.'
+    trailer=$'\n\nFirst run: harness show --project '"$proj"' --node '"$node"$'\n'"$where"$'\nEdit ONLY the files listed under Touches, in place. Never create new files or directories, never copy or re-create the repo or its tests anywhere else, never search the filesystem for another copy: if a file in Touches is missing, stop and report it. When finished, run the oracle command from the working directory and print its output.'
   fi
   local -a saved_opts=("${OPTS[@]}")
   OPTS=(--backend "$backend" --name "$name" --task-title "$node" --model "$model" --job-stdin)
@@ -939,7 +984,8 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
   # session, then the agent itself) can run `harness brief --session
   # "$HARNESS_SESSION"` as the skill instructs, without the launcher having
   # to pass `--session` through cmd_delegate's own CLI surface.
-  printf '%s%s\n' "$content" "$trailer" | HARNESS_SESSION="$sid" HARNESS_PROJECT="$proj" cmd_delegate >/dev/null 2>&1
+  # cd in a subshell: cmd_delegate forks the detached agent from the current directory.
+  printf '%s%s\n' "$content" "$trailer" | ( cd "$run_dir" && HARNESS_SESSION="$sid" HARNESS_PROJECT="$proj" HARNESS_REPO="$repo" cmd_delegate ) >/dev/null 2>&1
   local drc=$?
   OPTS=("${saved_opts[@]}")
   if (( drc != 0 )); then
@@ -1096,7 +1142,7 @@ harness_dispatch_reap() {
       # one that finished but replied with none -- two different failures,
       # two different messages).
       local rstatus="failed" summary="" patch_file="" retry_after=""
-      if [[ $status == done ]]; then
+      if [[ $status == "done" ]]; then
         local rawlog; rawlog=$(mktemp "$HARNESS_JOBS_DIR/.extract.XXXXXX")
         # The trailer told the delegate to reply with nothing after the patch, so
         # the patch is near the end -- cap what we scan to the last 2000 lines. A
@@ -1163,8 +1209,57 @@ harness_jobs_running() { find "$HARNESS_JOBS_DIR" -mindepth 2 -maxdepth 2 -name 
 # (default 4) new detached delegates, one per unclaimed packet, across every
 # rix session in overview.json whose label is (or is one --slots worker of) a
 # saved profile.
+# harness_project_repo BIN PROJECT -> the project's repo_path (from `harness --json ls`),
+# cached per process; empty when unknown.
+declare -A HARNESS_REPO_CACHE=()
+harness_project_repo() {
+  local bin=$1 proj=$2
+  if [[ -z ${HARNESS_REPO_CACHE[$proj]:-} ]]; then
+    HARNESS_REPO_CACHE[$proj]=$("$bin" --json ls 2>/dev/null | jq -r --arg id "$proj" '.[]? | select(.id == $id) | .repo_path // empty' 2>/dev/null | head -n1)
+    # overview.json knows it too (the harness writes repo_path per project)
+    [[ -n ${HARNESS_REPO_CACHE[$proj]} ]] || HARNESS_REPO_CACHE[$proj]=$(jq -r --arg id "$proj" '.projects[]? | select(.id == $id) | .repo_path // empty' <<<"$(harness_overview_json)" 2>/dev/null | head -n1)
+  fi
+  printf '%s' "${HARNESS_REPO_CACHE[$proj]:-}"
+}
+
+# harness_keepalive_sessions BIN OVERVIEW-JSON -- every launcher-owned rix session that is
+# not running a job gets this dispatch loop's pid recorded (`session set --pid`) when it has
+# none, so the harness's pid-liveness check keeps it alive while the launcher is here to
+# dispatch for it (CONTRACTS §9.1). Without this an idle Rix session went stale 45 s after
+# registration, the harness released its orchestration packet and handed the work elsewhere
+# (seen live 2026-09-15). A job's own pid replaces it while the job runs; the reaper clears
+# that, and the next sweep re-records ours.
+harness_keepalive_sessions() {
+  local bin=$1 overview=$2 sess proj sid label pid
+  while IFS= read -r sess; do
+    [[ -n $sess ]] || continue
+    proj=$(jq -r '.project // empty' <<<"$sess"); sid=$(jq -r '.id // empty' <<<"$sess")
+    label=$(jq -r '.label // empty' <<<"$sess"); pid=$(jq -r '.pid // empty' <<<"$sess")
+    [[ -n $proj && -n $sid && -n $label ]] || continue
+    harness_profile_for_label "$label" >/dev/null 2>&1 || continue
+    [[ -z $pid ]] || continue                     # a job's pid (or ours) is already there
+    [[ -f "$HARNESS_JOBS_DIR/$proj/$(jq -r '.assigned_nodes[0] // ""' <<<"$sess").json" ]] && continue
+    (( OAL_DRY_RUN )) && { say "[dry-run] would: $bin session set --project $proj --session $sid --pid $$"; continue; }
+    "$bin" session set --project "$proj" --session "$sid" --pid "$$" >/dev/null 2>&1 || true
+  done < <(jq -c '.sessions[]? | select(.worker == "rix")' <<<"$overview")
+}
+
+# On loop exit: forget our pid on every session that carries it (a session with no
+# launcher behind it must read stale, not alive -- state must not lie).
+harness_keepalive_clear() {
+  local bin; bin=$(harness_bin 2>/dev/null) || return 0
+  local sess proj sid pid
+  while IFS= read -r sess; do
+    [[ -n $sess ]] || continue
+    proj=$(jq -r '.project // empty' <<<"$sess"); sid=$(jq -r '.id // empty' <<<"$sess"); pid=$(jq -r '.pid // empty' <<<"$sess")
+    [[ -n $proj && -n $sid && $pid == "$$" ]] || continue
+    "$bin" session set --project "$proj" --session "$sid" --clear-pid >/dev/null 2>&1 || true
+  done < <(jq -c '.sessions[]? | select(.worker == "rix")' <<<"$(harness_overview_json)")
+}
+
 harness_dispatch_once() {
   local bin; bin=$(harness_bin) || return 1
+  harness_keepalive_sessions "$bin" "$(harness_overview_json)"
   harness_dispatch_heartbeat
   harness_dispatch_reap
   harness_prune_requested_stale
@@ -1202,7 +1297,7 @@ harness_dispatch_once() {
 
 # Every 3s until killed (started by harness_serve_start as its own process).
 harness_dispatch_loop() {
-  trap 'exit 0' TERM INT
+  trap 'harness_keepalive_clear; exit 0' TERM INT EXIT
   while :; do
     harness_dispatch_once || true
     harness_notify_sync || true
