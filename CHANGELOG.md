@@ -3,8 +3,9 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
-## 0.15.2
+## 0.16.0
 
+- Plan tab: Inspector and Sessions are now collapsible (header click, or `i`/`s`) so the Gantt can claim the freed height; a running row only shimmers/pulses when its assignee session's heartbeat is actually fresh (<45s), showing a static "no signal" instead of fake motion once it's stale.
 - Delegates run inside the project's repo (`repo_path`), with the working directory named in the packet trailer; a delegate started from the dispatcher's own directory had searched the filesystem and written into another checkout.
 - Launcher-owned idle Rix sessions carry the dispatch loop's pid so they stay alive between jobs (an idle orchestrator went stale after 45 s and lost its packet); cleared when the loop exits.
 - Orchestration trailer: the final message must be exactly one JSON object; a reply without one fails the packet.

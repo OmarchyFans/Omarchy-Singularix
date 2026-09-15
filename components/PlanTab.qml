@@ -86,6 +86,85 @@ Item {
   }
   readonly property var sessionById: sessionByIdMap()
 
+  // ---- "being worked on" heartbeat freshness --------------------------------
+  // A row's motion must mean an actually-live worker, never just "state ===
+  // running" left over from a session that died without releasing the node
+  // -- the user must be able to trust the motion. `stale_after` is the
+  // harness's own idle-session window (CHANGELOG 0.15.2: an idle Rix session
+  // goes stale after 45s without its dispatch-loop pid); reused here as the
+  // running-row liveness window too, since the contract doesn't name a
+  // separate constant for it.
+  readonly property int staleAfterSec: 45
+  property int nowTick: 0
+  Timer {
+    interval: 1000; repeat: true; triggeredOnStart: true
+    running: dash.opened && dash.tab === "plan" && tab.overviewLoaded
+    onTriggered: tab.nowTick++
+  }
+  // Seconds since a session's last_heartbeat -- accepts epoch seconds, epoch
+  // milliseconds (same "past year ~2033 is already ms" heuristic as
+  // fmtHHMM above) or an ISO string, since the contract doesn't pin the
+  // unit. -1 when absent/unparseable/in the future -- never invented.
+  function heartbeatAgeSec(s) {
+    if (!s || s.last_heartbeat === undefined || s.last_heartbeat === null || s.last_heartbeat === "") return -1
+    var raw = s.last_heartbeat
+    var ms
+    if (typeof raw === "number") {
+      if (!isFinite(raw) || raw <= 0) return -1
+      ms = raw > 2000000000 ? raw : raw * 1000
+    } else {
+      var p = Date.parse(String(raw))
+      if (isNaN(p)) return -1
+      ms = p
+    }
+    var _t = tab.nowTick // re-evaluate once a second while this tab is open
+    var age = (Date.now() - ms) / 1000
+    return age >= 0 ? Math.round(age) : -1
+  }
+  // Session for a queue row's assignee, preferring one that also names this
+  // row's project -- the same id can be registered in more than one project
+  // (see shortOrchestrator above), and reading the wrong project's
+  // heartbeat would be exactly the kind of untrustworthy motion this is
+  // meant to avoid. Falls back to the first id match when project isn't on
+  // either side.
+  function sessionForRow(row) {
+    if (!row || !row.assignee) return null
+    var sid = String(row.assignee)
+    var fallback = null
+    for (var i = 0; i < tab.sessions.length; i++) {
+      var s = tab.sessions[i]
+      if (s.id === undefined || String(s.id) !== sid) continue
+      if (row.project !== undefined && s.project !== undefined && String(s.project) === String(row.project)) return s
+      if (!fallback) fallback = s
+    }
+    return fallback
+  }
+  // A session counts as live when its own state hasn't already given up on
+  // it (not offline/error/stale) and its heartbeat is younger than
+  // staleAfterSec. Absent session or absent/unparseable heartbeat -> not
+  // live, so a row never animates on the strength of missing data.
+  function sessionLive(s) {
+    if (!s) return false
+    if (s.state === "offline" || s.state === "error" || s.state === "stale") return false
+    var age = tab.heartbeatAgeSec(s)
+    return age >= 0 && age < tab.staleAfterSec
+  }
+  function fmtAge(sec) {
+    if (sec === undefined || sec === null || sec < 0) return "?"
+    if (sec < 60) return sec + "s"
+    if (sec < 3600) return Math.floor(sec / 60) + "m"
+    return Math.floor(sec / 3600) + "h"
+  }
+  // Trailing "working · 12s" / "no signal · 2m" for a running row's state
+  // column -- "" for anything not running (nothing new to say there).
+  function rowFreshnessText(row) {
+    if (!row || row.state !== "running") return ""
+    var s = tab.sessionForRow(row)
+    var age = tab.heartbeatAgeSec(s)
+    if (tab.sessionLive(s)) return "working · " + tab.fmtAge(age)
+    return age >= 0 ? "no signal · " + tab.fmtAge(age) : "no signal"
+  }
+
   // {project: {node: waveIndex}}, from projects[].waves (optional, older
   // harness omits it -- every lookup below falls back to -1/"not in a wave").
   function waveIndexMap() {
@@ -374,6 +453,18 @@ Item {
   }
   function toggleCriticalOnly() { tab.criticalOnly = !tab.criticalOnly }
 
+  // ---- collapsible Inspector/Sessions sections (screen real estate for the
+  // Gantt) -- in-memory only, same as every other UI choice on this tab
+  // (filters etc. are plain properties too, nothing here persists to disk);
+  // PlanTab is instantiated once under keepLoaded so these survive a panel
+  // close/reopen for the life of the shell session. Sessions default
+  // collapsed (a scrolling chip lane the user rarely needs open), Inspector
+  // default expanded (its own height below is already shorter than before).
+  property bool inspectorCollapsed: false
+  property bool sessionsCollapsed: true
+  function toggleInspector() { tab.inspectorCollapsed = !tab.inspectorCollapsed }
+  function toggleSessions() { tab.sessionsCollapsed = !tab.sessionsCollapsed }
+
   // ---- filters --------------------------------------------------------------
   property string projectFilter: ""
   property string agentFilter: ""
@@ -580,6 +671,33 @@ Item {
     if (v !== "") parts.push("vendor: " + v)
     if (c !== "") parts.push("cost: " + c)
     return parts.join("  ·  ")
+  }
+
+  // "N sessions · X busy · Y idle · Z stale" for the collapsed sessions
+  // header. "stale" here buckets both a session the harness has already
+  // marked `state: "stale"` and a live-looking one whose heartbeat has
+  // simply aged out (state not caught up yet) -- either way its motion
+  // would be a lie, so it groups with the honest label. throttled/offline/
+  // error sessions aren't named as their own bucket; they still count
+  // toward the total N.
+  function sessionsSummaryText() {
+    var n = tab.sessions.length
+    var busy = 0, idle = 0, stale = 0
+    for (var i = 0; i < n; i++) {
+      var s = tab.sessions[i]
+      if (s.state === "stale" || !tab.sessionLive(s)) stale++
+      else if (s.state === "busy") busy++
+      else idle++
+    }
+    return n + " session" + (n === 1 ? "" : "s") + "  ·  " + busy + " busy  ·  " + idle + " idle  ·  " + stale + " stale"
+  }
+  readonly property string sessionsSummary: sessionsSummaryText()
+
+  // Collapsed-inspector one-liner: selected task's id + state + assignee.
+  function inspectorSummaryText() {
+    var r = tab.selectedRow
+    if (!r) return ""
+    return (r.node || r.title || "?") + "  ·  " + (r.state || "?") + "  ·  " + (r.assignee || "unassigned")
   }
 
   // ---- sessions grouped by profile (slots "rix-1"/"rix-2" -> "rix" x2) ------
@@ -796,10 +914,18 @@ Item {
     implicitHeight: Style.space(30)
 
     readonly property real trackLeft: Style.space(150)
-    readonly property real trackWidth: Math.max(Style.space(60), qrow.width - trackLeft - Style.space(90))
+    readonly property real stateColWidth: Style.space(130)
+    readonly property real trackWidth: Math.max(Style.space(60), qrow.width - trackLeft - stateColWidth)
     readonly property real scale: trackWidth / Math.max(1, maxEf)
     readonly property color rowStateColor: node ? tab.stateColor(node.state) : dash.dim
     readonly property string rowKey: node ? (String(node.project || "") + "::" + String(node.node || "")) : ""
+
+    // ---- "being worked on" honesty (running AND the assignee session's
+    // heartbeat is fresh) -- see tab.sessionLive above for the rule.
+    readonly property var assigneeSession: qrow.node ? tab.sessionForRow(qrow.node) : null
+    readonly property bool sessionLiveNow: tab.sessionLive(qrow.assigneeSession)
+    readonly property bool active: !!(qrow.node && qrow.node.state === "running") && qrow.sessionLiveNow
+    readonly property string freshnessText: tab.rowFreshnessText(qrow.node)
 
     // ---- roles/model policy (Wave 6): wave membership, model label, IP lock --
     readonly property int wave: tab.waveOf(qrow.node)
@@ -874,42 +1000,80 @@ Item {
           Behavior on width { NumberAnimation { duration: 350; easing.type: Easing.OutCubic } }
           Behavior on color { ColorAnimation { duration: 250 } }
 
-          Text {
+          // Diagonal-stripe shimmer across the filled bar, only while the row
+          // is honestly `active` (running + fresh heartbeat, see above) --
+          // this replaces the old always-on-while-running pulseCap, which
+          // used to animate even for a dead/stale session and so could not
+          // be trusted as "something is actually happening".
+          Item {
+            id: shimmerClip
+            visible: qrow.active && dash.opened && dash.tab === "plan"
+            anchors.fill: parent
+            clip: true
+            property real phase: 0
+            NumberAnimation on phase {
+              running: shimmerClip.visible
+              loops: Animation.Infinite
+              from: 0; to: 1; duration: 1600
+            }
+            Rectangle {
+              width: Style.space(22)
+              height: shimmerClip.height * 3
+              y: -shimmerClip.height
+              rotation: -25
+              x: -width + shimmerClip.phase * (shimmerClip.width + width * 2)
+              gradient: Gradient {
+                orientation: Gradient.Horizontal
+                GradientStop { position: 0.0; color: "transparent" }
+                GradientStop { position: 0.5; color: Qt.rgba(1, 1, 1, 0.35) }
+                GradientStop { position: 1.0; color: "transparent" }
+              }
+            }
+          }
+          Item {
             anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
             anchors.leftMargin: Style.spacing.xs; anchors.rightMargin: Style.spacing.xs
-            textFormat: Text.PlainText; elide: Text.ElideRight
-            text: qrow.node ? ((qrow.node.assignee || "") + (qrow.rowShortModel !== "" ? "  ·  " + qrow.rowShortModel : "")) : ""
-            color: "#f5f5f5"; font.family: dash.fontFamily; font.pixelSize: Style.font.caption; font.bold: true
+            height: Style.space(14)
+            Row {
+              anchors.fill: parent
+              spacing: Style.spacing.xxs
+              Rectangle {
+                id: activeDot
+                visible: qrow.active && dash.opened && dash.tab === "plan"
+                width: Style.space(6); height: Style.space(6); radius: width / 2
+                anchors.verticalCenter: parent.verticalCenter
+                color: "#f5f5f5"
+                SequentialAnimation on opacity {
+                  running: activeDot.visible
+                  loops: Animation.Infinite
+                  NumberAnimation { to: 1.0; duration: 500 }
+                  NumberAnimation { to: 0.3; duration: 500 }
+                }
+              }
+              Text {
+                width: parent.width - (activeDot.visible ? activeDot.width + parent.spacing : 0)
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText; elide: Text.ElideRight
+                text: qrow.node ? ((qrow.node.assignee || "") + (qrow.rowShortModel !== "" ? "  ·  " + qrow.rowShortModel : "")) : ""
+                color: "#f5f5f5"; font.family: dash.fontFamily; font.pixelSize: Style.font.caption; font.bold: true
+              }
+            }
           }
           Text {
             visible: !!(qrow.node && qrow.node.evidence_missing)
             anchors.right: parent.right; anchors.rightMargin: -Style.space(2); anchors.top: parent.top; anchors.topMargin: -Style.space(6)
             text: "⚠"; color: dash.warnColor; font.pixelSize: Style.font.caption; font.bold: true
           }
-          Rectangle {
-            id: pulseCap
-            // Gated on panel visibility too (matches wavePulseBorder below):
-            // an Infinite SequentialAnimation must not keep ticking, burning
-            // CPU, while the Plan tab isn't even the one on screen.
-            visible: !!(qrow.node && qrow.node.state === "running") && dash.opened && dash.tab === "plan"
-            width: Style.space(4); height: parent.height
-            anchors.right: parent.right
-            radius: width / 2
-            color: "#ffffff"; opacity: 0.4
-            SequentialAnimation on opacity {
-              running: pulseCap.visible
-              loops: Animation.Infinite
-              NumberAnimation { to: 0.9; duration: 500 }
-              NumberAnimation { to: 0.25; duration: 500 }
-            }
-          }
           // Wave-0 outline pulse (§17.5): a subtle border-opacity breathe,
           // ~1.2s period, only while the harness snapshot is live and fresh
           // and the Plan tab is actually the visible panel -- otherwise this
           // Infinite SequentialAnimation runs forever off-screen for nothing.
+          // Excluded once a row is running: the shimmer above is then the
+          // only motion, so it always means "fresh heartbeat" and never
+          // fights the wave pulse visually.
           Rectangle {
             id: wavePulseBorder
-            visible: qrow.wave === 0 && qrow.wavesLive && dash.opened && dash.tab === "plan"
+            visible: qrow.wave === 0 && qrow.wavesLive && dash.opened && dash.tab === "plan" && (!qrow.node || qrow.node.state !== "running")
             anchors.fill: parent
             anchors.margins: -2
             radius: parent.radius + 2
@@ -927,12 +1091,14 @@ Item {
         }
       }
       Text {
-        width: Style.space(90); height: parent.height
+        width: qrow.stateColWidth; height: parent.height
         leftPadding: Style.spacing.md
         verticalAlignment: Text.AlignVCenter
+        elide: Text.ElideRight; textFormat: Text.PlainText
         opacity: qrow.waveOpacity
-        text: qrow.node ? (String(qrow.node.state || "") + (qrow.wave === 1 ? "  ·  next" : "")) : ""
-        color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+        text: qrow.node ? (String(qrow.node.state || "") + (qrow.wave === 1 ? "  ·  next" : "") + (qrow.freshnessText !== "" ? "  ·  " + qrow.freshnessText : "")) : ""
+        color: (qrow.node && qrow.node.state === "running" && !qrow.sessionLiveNow) ? dash.warnColor : dash.dim
+        font.family: dash.fontFamily; font.pixelSize: Style.font.caption
       }
     }
   }
@@ -1290,79 +1456,135 @@ Item {
     PanelSeparator { width: parent.width; foreground: dash.foreground }
   }
 
-  // Sessions lane: always one line -- a horizontally-scrolling Flickable
-  // of per-profile group chips (rix-1/rix-2 collapse into "rix (2)"),
-  // never wrapped, so it stays a single row at 1280x800.
+  // Sessions lane: a collapsible header (chevron + "Sessions" + summary) over
+  // a horizontally-scrolling Flickable of per-profile group chips (rix-1/
+  // rix-2 collapse into "rix (2)"), never wrapped, so the body stays a
+  // single row at 1280x800. Collapsed by default -- the chip lane is the
+  // section the user reaches for least often, and freeing it gives the
+  // Gantt (`board` below, anchored to this Rectangle's top) the room.
   Rectangle {
     id: sessionsLane
     anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-    height: Style.space(60)
+    readonly property real headerH: Style.space(22)
+    readonly property real bodyH: Style.space(60)
+    height: Style.space(16) + headerH + (tab.sessionsCollapsed ? 0 : Style.spacing.xs + bodyH)
+    clip: true
     color: Qt.rgba(dash.foreground.r, dash.foreground.g, dash.foreground.b, 0.04)
-    Flickable {
-      anchors.fill: parent; anchors.margins: Style.space(8)
-      contentWidth: chipsRow.implicitWidth; contentHeight: height
-      clip: true; boundsBehavior: Flickable.StopAtBounds
-      Row {
-        id: chipsRow
-        height: parent.height; spacing: Style.spacing.sm
-        Repeater { model: tab.sessionGroupsList; delegate: SessionGroupChip { required property var modelData; groupData: modelData } }
-        Text {
-          visible: tab.sessionGroupsList.length === 0
-          anchors.verticalCenter: parent.verticalCenter
-          text: "No sessions registered with the harness."
-          color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+    Behavior on height { NumberAnimation { duration: 150; easing.type: Easing.OutCubic } }
+
+    Column {
+      anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+      anchors.margins: Style.space(8)
+      spacing: Style.spacing.xs
+
+      MouseArea {
+        width: parent.width; height: sessionsLane.headerH
+        cursorShape: Qt.PointingHandCursor
+        onClicked: tab.toggleSessions()
+        Row {
+          anchors.fill: parent; spacing: Style.spacing.xs
+          Text { anchors.verticalCenter: parent.verticalCenter; text: tab.sessionsCollapsed ? "▸" : "▾"; color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true }
+          Text { anchors.verticalCenter: parent.verticalCenter; text: "Sessions"; color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true }
+          Text { anchors.verticalCenter: parent.verticalCenter; textFormat: Text.PlainText; text: "·  " + tab.sessionsSummary; color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption }
+        }
+      }
+
+      Flickable {
+        visible: !tab.sessionsCollapsed
+        width: parent.width; height: sessionsLane.bodyH
+        contentWidth: chipsRow.implicitWidth; contentHeight: height
+        clip: true; boundsBehavior: Flickable.StopAtBounds
+        Row {
+          id: chipsRow
+          height: parent.height; spacing: Style.spacing.sm
+          Repeater { model: tab.sessionGroupsList; delegate: SessionGroupChip { required property var modelData; groupData: modelData } }
+          Text {
+            visible: tab.sessionGroupsList.length === 0
+            anchors.verticalCenter: parent.verticalCenter
+            text: "No sessions registered with the harness."
+            color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+          }
         }
       }
     }
   }
 
+  // Collapsible inspector: a one-line header (chevron + "Inspector" + a
+  // collapsed-state summary of the selected task) over the existing detail
+  // body. Collapsing it (or having nothing selected) leaves the Gantt
+  // (`board` below, anchored to this Rectangle's top) with the freed height.
   Rectangle {
     id: inspector
     anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: sessionsLane.top
-    height: tab.selectedRow ? (tab.selectedRowPolicyLine() !== "" ? Style.space(112) : Style.space(96)) : 0
+    height: tab.selectedRow ? (tab.inspectorCollapsed ? Style.space(38) : (tab.selectedRowPolicyLine() !== "" ? Style.space(136) : Style.space(120))) : 0
     visible: height > 1
     clip: true
     color: Qt.rgba(dash.foreground.r, dash.foreground.g, dash.foreground.b, 0.05)
     Behavior on height { NumberAnimation { duration: 150; easing.type: Easing.OutCubic } }
 
-    Row {
-      anchors.fill: parent; anchors.margins: Style.space(10)
-      spacing: Style.spacing.controlGap
+    Column {
+      anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+      anchors.margins: Style.space(10)
+      spacing: Style.spacing.xs
       visible: tab.selectedRow !== null
-      Column {
-        width: parent.width - assignBtn.width - ganttBtn.width - closeBtn.width - parent.spacing * 3
-        spacing: Style.spacing.xxs
-        Text {
-          textFormat: Text.PlainText; elide: Text.ElideRight; width: parent.width
-          text: tab.selectedRow ? (tab.selectedRow.title || tab.selectedRow.node) + "  ·  " + tab.selectedRow.state : ""
-          color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.body; font.bold: true
-        }
-        Text {
-          textFormat: Text.PlainText; elide: Text.ElideRight; width: parent.width
-          text: tab.selectedRow ? "oracle: " + (tab.selectedRow.oracle_type || "—") + "  ·  blockers-first: " + (tab.selectedRow.blockers_first ? "yes" : "no") + "  ·  assignee: " + (tab.selectedRow.assignee || "unassigned") : ""
-          color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
-        }
-        Text {
-          visible: text !== ""
-          textFormat: Text.PlainText; elide: Text.ElideRight; width: parent.width
-          text: tab.selectedRow ? tab.selectedRowPolicyLine() : ""
-          color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
-        }
-        Text {
-          textFormat: Text.PlainText; elide: Text.ElideRight; width: parent.width
-          text: tab.selectedRow ? "blockers: " + tab.blockersLine(tab.selectedRow) : ""
-          color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
-        }
-        Text {
-          visible: tab.selectedRow && tab.evidenceLine(tab.selectedRow) !== ""
-          textFormat: Text.PlainText; elide: Text.ElideRight; width: parent.width
-          text: tab.selectedRow ? "evidence: " + tab.evidenceLine(tab.selectedRow) : ""
-          color: dash.okColor; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+
+      MouseArea {
+        width: parent.width; height: Style.space(20)
+        cursorShape: Qt.PointingHandCursor
+        onClicked: tab.toggleInspector()
+        Row {
+          anchors.fill: parent; spacing: Style.spacing.xs
+          Text { anchors.verticalCenter: parent.verticalCenter; text: tab.inspectorCollapsed ? "▸" : "▾"; color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true }
+          Text { anchors.verticalCenter: parent.verticalCenter; text: "Inspector"; color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true }
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width - Style.space(80)
+            elide: Text.ElideRight; textFormat: Text.PlainText
+            text: tab.inspectorCollapsed ? ("·  " + tab.inspectorSummaryText()) : ""
+            color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+          }
         }
       }
-      Button { id: assignBtn; text: "Assign to Rix"; bordered: true; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: tab.assignSelected() }
-      Button { id: ganttBtn; text: "Open in Gantt"; bordered: true; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: if (tab.selectedRow) Qt.openUrlExternally(tab.harnessUrl + "#node=" + encodeURIComponent(tab.selectedRow.node)) }
-      Button { id: closeBtn; text: "✕"; bordered: true; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: tab.selectedRow = null }
+
+      Row {
+        width: parent.width
+        spacing: Style.spacing.controlGap
+        visible: !tab.inspectorCollapsed
+        Column {
+          width: parent.width - assignBtn.width - ganttBtn.width - closeBtn.width - parent.spacing * 3
+          spacing: Style.spacing.xxs
+          Text {
+            textFormat: Text.PlainText; elide: Text.ElideRight; width: parent.width
+            text: tab.selectedRow ? (tab.selectedRow.title || tab.selectedRow.node) + "  ·  " + tab.selectedRow.state : ""
+            color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.body; font.bold: true
+          }
+          Text {
+            textFormat: Text.PlainText; elide: Text.ElideRight; width: parent.width
+            text: tab.selectedRow ? "oracle: " + (tab.selectedRow.oracle_type || "—") + "  ·  blockers-first: " + (tab.selectedRow.blockers_first ? "yes" : "no") + "  ·  assignee: " + (tab.selectedRow.assignee || "unassigned") : ""
+            color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+          }
+          Text {
+            visible: text !== ""
+            textFormat: Text.PlainText; elide: Text.ElideRight; width: parent.width
+            text: tab.selectedRow ? tab.selectedRowPolicyLine() : ""
+            color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+          }
+          Text {
+            textFormat: Text.PlainText; elide: Text.ElideRight; width: parent.width
+            text: tab.selectedRow ? "blockers: " + tab.blockersLine(tab.selectedRow) : ""
+            color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+          }
+          Text {
+            visible: tab.selectedRow && tab.evidenceLine(tab.selectedRow) !== ""
+            textFormat: Text.PlainText; elide: Text.ElideRight; width: parent.width
+            text: tab.selectedRow ? "evidence: " + tab.evidenceLine(tab.selectedRow) : ""
+            color: dash.okColor; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+          }
+        }
+        Button { id: assignBtn; text: "Assign to Rix"; bordered: true; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: tab.assignSelected() }
+        Button { id: ganttBtn; text: "Open in Gantt"; bordered: true; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: if (tab.selectedRow) Qt.openUrlExternally(tab.harnessUrl + "#node=" + encodeURIComponent(tab.selectedRow.node)) }
+        Button { id: closeBtn; text: "✕"; bordered: true; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: tab.selectedRow = null }
+      }
     }
   }
 
