@@ -81,7 +81,9 @@ agent_provision() { # agent_provision <name>
     fi
     echo "terminal:"
     echo "  backend: local"      # never nest Docker inside the Docker runtime
-    echo "  cwd: ."
+    # a delegate dispatched for a harness packet works in one exact directory (the project
+    # repo, or an empty scratch dir for a planning packet): pin it, absolute
+    if [[ -n ${OAL_DELEGATE_CWD:-} ]]; then echo "  cwd: $(jq -Rn --arg v "$OAL_DELEGATE_CWD" '$v')"; else echo "  cwd: ."; fi
     echo "skills:"
     echo "  disabled: []"
     echo "hooks_auto_accept: true"   # shell hooks (if any) run without a consent prompt
