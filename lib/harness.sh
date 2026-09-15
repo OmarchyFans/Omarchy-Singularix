@@ -965,9 +965,9 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
     # demo_repo/{src,tests} and poisoned every pytest oracle, 2026-09-15). Run it in an
     # empty scratch directory: `harness brief`/`show` still work from anywhere.
     run_dir="$HARNESS_STATE_DIR/orch/$proj/$node"; mkdir -p "$run_dir"
-    trailer=$'\n\nFirst run: harness brief --project '"$proj"' --session '"$sid"$'\nThis is a planning task: do NOT read, create, copy or modify any file and do not run tests -- everything you need is in this packet and in `harness brief`/`harness show`. Do not write the outbox receipt file yourself. Your FINAL message must be exactly one JSON object -- the patch, with an "action" key -- with no prose before or after it and no markdown fence; the launcher extracts it and writes the receipt. A reply without such an object fails this packet.'
+    trailer=$'\n\nFirst run: '"$bin"' brief --project '"$proj"' --session '"$sid"$'\n(the harness CLI is that exact path; it is not on PATH -- never search the filesystem for it)\nThis is a planning task: do NOT read, create, copy or modify any file and do not run tests -- everything you need is in this packet and in `harness brief`/`harness show`. Do not write the outbox receipt file yourself. Your FINAL message must be exactly one JSON object -- the patch, with an "action" key -- with no prose before or after it and no markdown fence; the launcher extracts it and writes the receipt. A reply without such an object fails this packet.'
   else
-    trailer=$'\n\nFirst run: harness show --project '"$proj"' --node '"$node"$'\n'"$where"$'\nEdit ONLY the files listed under Touches, in place. Never create new files or directories, never copy or re-create the repo or its tests anywhere else, never search the filesystem for another copy: if a file in Touches is missing, stop and report it. When finished, run the oracle command from the working directory and print its output.'
+    trailer=$'\n\nFirst run: '"$bin"' show --project '"$proj"' --node '"$node"$'\n(the harness CLI is that exact path; it is not on PATH -- never search the filesystem for it)\n'"$where"$'\nEdit ONLY the files listed under Touches, in place. Never create new files or directories, never copy or re-create the repo or its tests anywhere else, never search the filesystem for another copy: if a file in Touches is missing, stop and report it. When finished, run the oracle command from the working directory and print its output.'
   fi
   local -a saved_opts=("${OPTS[@]}")
   OPTS=(--backend "$backend" --name "$name" --task-title "$node" --model "$model" --job-stdin)
@@ -985,7 +985,9 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
   # "$HARNESS_SESSION"` as the skill instructs, without the launcher having
   # to pass `--session` through cmd_delegate's own CLI surface.
   # cd in a subshell: cmd_delegate forks the detached agent from the current directory.
-  printf '%s%s\n' "$content" "$trailer" | ( cd "$run_dir" && HARNESS_SESSION="$sid" HARNESS_PROJECT="$proj" HARNESS_REPO="$repo" cmd_delegate ) >/dev/null 2>&1
+  # OAL_DELEGATE_CWD pins the Hermes terminal tool's working directory (lib/agents/hermes.sh
+  # writes it into config.yaml) -- a relative `cwd: .` follows the agent process, not us.
+  printf '%s%s\n' "$content" "$trailer" | ( cd "$run_dir" && HARNESS_SESSION="$sid" HARNESS_PROJECT="$proj" HARNESS_REPO="$repo" OAL_DELEGATE_CWD="$run_dir" cmd_delegate ) >/dev/null 2>&1
   local drc=$?
   OPTS=("${saved_opts[@]}")
   if (( drc != 0 )); then
