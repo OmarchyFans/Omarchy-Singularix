@@ -620,9 +620,11 @@ case "$1" in
     while (( $# )); do case "$1" in --project) proj=$2; shift 2 ;; *) shift ;; esac; done
     cat "__HD__/inbox/$proj.json" 2>/dev/null || echo '[]' ;;
   sessions)
-    # the harness's own cross-project session list (what harness_session_registered asks
-    # first); a test seeds __HD__/sessions.json, otherwise "nothing registered"
-    cat "__HD__/sessions.json" 2>/dev/null || echo '[]' ;;
+    # the harness's own cross-project session list (what harness_session_registered and
+    # harness_resync_profile ask first); a test may seed __HD__/sessions.json, otherwise
+    # it mirrors the overview fixture's sessions[] like the real CLI mirrors project.json
+    if [[ -f "__HD__/sessions.json" ]]; then cat "__HD__/sessions.json"
+    else jq -c '.sessions // []' "$HARNESS_DATA_DIR/overview.json" 2>/dev/null || echo '[]'; fi ;;
   cost)
     proj=""
     while (( $# )); do case "$1" in --project) proj=$2; shift 2 ;; *) shift ;; esac; done
@@ -834,6 +836,24 @@ JSON
   n_req2=$(grep -c "cost/request" "$CURLLOG" || true)
   [[ $n_req2 == 1 ]] || tfail "second sweep must not re-request an already-requested packet (the harness's pending list still lists it)"
   pass "harness dispatch_once/reap: subscription and funded metered run detached; underfunded metered requests budget once"
+
+  # ---- keepalive: a launcher-owned idle rix session with no pid gets this loop's pid ----
+  (
+    settings_set harness_bin "$HD/fakebin/harness"
+    ov_backup=$(cat "$HARNESS_DATA_DIR/overview.json" 2>/dev/null || printf '{}')
+    jq '.sessions = [
+      {project:"p-sub", id:"s-nopid", label:"hns-sub",   worker:"rix", state:"idle", pid:null},
+      {project:"p-sub", id:"s-haspid", label:"hns-sub-2", worker:"rix", state:"idle", pid:4242},
+      {project:"p-sub", id:"s-foreign", label:"someone-elses-rix", worker:"rix", state:"idle", pid:null}
+    ]' <<<"$ov_backup" >"$HARNESS_DATA_DIR/overview.json"
+    : >"$SESSADD"
+    harness_keepalive_sessions "$HD/fakebin/harness" "$(cat "$HARNESS_DATA_DIR/overview.json")"
+    grep -q -- "^session set --project p-sub --session s-nopid --pid $$" "$SESSADD" || { cat "$SESSADD"; tfail "keepalive must record the loop pid on a launcher-owned session with no pid"; }
+    grep -q -- "--session s-haspid" "$SESSADD" && tfail "keepalive must leave a session that already has a pid alone"
+    grep -q -- "--session s-foreign" "$SESSADD" && tfail "keepalive must not touch a rix session that is not one of this launcher's profiles"
+    printf '%s' "$ov_backup" >"$HARNESS_DATA_DIR/overview.json"
+  ) || exit 1
+  pass "harness keepalive: idle launcher-owned rix sessions carry the dispatch loop's pid; others untouched"
 
   # ---- harness_bin never falls back to a real CLI when told there is none --------------
   (

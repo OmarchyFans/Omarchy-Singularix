@@ -389,8 +389,21 @@ harness_resync_profile() {
     resolved=$(harness_profile_for_label "$label") || continue
     [[ $resolved == "$profile" ]] || continue
     harness_session_sync "$profile" "$proj" "$sid" || true
-  done < <(jq -c '.sessions[]? | select(.worker == "rix")' <<<"$(harness_overview_json)")
+  done < <(harness_rix_sessions_json "$bin")
   return 0
+}
+
+# harness_rix_sessions_json BIN -> one JSON object per registered rix session (project, id,
+# label, ...): the harness CLI's own list when it answers (overview.json is only refreshed
+# while serve runs and listed sessions that no longer existed right after `demo --fresh`),
+# else overview.json's sessions[].
+harness_rix_sessions_json() {
+  local bin=$1 rows
+  if [[ -n $bin ]] && rows=$("$bin" --json sessions 2>/dev/null) && [[ $rows == \[* ]]; then
+    jq -c '.[]? | select(.worker == "rix")' <<<"$rows"
+    return 0
+  fi
+  jq -c '.sessions[]? | select(.worker == "rix")' <<<"$(harness_overview_json)"
 }
 
 # harness_set_role PROFILE ROLE -- sets the profile's `harness_role` field
