@@ -1787,7 +1787,7 @@ FAKE5
   mk_repos; harness_dispatch_once || true
   grep -q "^HARNESS_SESSION=s-env HARNESS_PROJECT=p-env$" "$HD/delegate-env.log" \
     || { cat "$HD/delegate-env.log"; tfail "#26: the delegate must inherit \$HARNESS_SESSION/\$HARNESS_PROJECT for this packet"; }
-  grep -q "First run: harness show --project p-env --node env-node" "$HD/last-job-body.txt" \
+  grep -qE "First run: (harness|/[^ ]+/harness) show --project p-env --node env-node" "$HD/last-job-body.txt" \
     || { cat "$HD/last-job-body.txt"; tfail "#27: a plain work packet's trailer must point at 'harness show --project … --node …'"; }
   harness_dispatch_reap
 
