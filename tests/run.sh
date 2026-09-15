@@ -16,6 +16,11 @@ export XDG_CONFIG_HOME="$T/config" XDG_DATA_HOME="$T/data" XDG_STATE_HOME="$T/st
 export OAL_SENTINEL_BIN=oal-test-no-sentinel   # never the real Sentinel install; the sentinel block uses a stub
 export OAL_OFFLINE=1 OAL_UI_STUBS="$ROOT/tests/ui-stubs.sh" OAL_ANSWERS="$T/answers" OAL_ASKED="$T/asked"
 export EDITOR="$T/fake-editor"
+# Never the real harness: every test that wants one sets settings `harness_bin` to a fake;
+# without that, `none` makes harness_bin fail instead of falling back to PATH or the dev
+# checkout (which wrote test data into the live ~/.session-harness on 2026-09-14). The data
+# dir is a throwaway too, so even a real CLI could not find a live project.
+export OAL_HARNESS_BIN=none HARNESS_DATA_DIR="$T/harness-data"; mkdir -p "$HARNESS_DATA_DIR"
 printf '#!/bin/bash\nprintf "# Job\\nWrite release notes for the last tag.\\n" >"$1"\n' >"$EDITOR"; chmod +x "$EDITOR"
 L="$ROOT/bin/omarchy-agent-launcher"
 pass() { echo "  ok   $*"; }; tfail() { echo "  FAIL $*"; exit 1; }
@@ -824,6 +829,17 @@ JSON
   [[ $n_req2 == 1 ]] || tfail "second sweep must not re-request an already-requested packet (the harness's pending list still lists it)"
   pass "harness dispatch_once/reap: subscription and funded metered run detached; underfunded metered requests budget once"
 
+  # ---- harness_bin never falls back to a real CLI when told there is none --------------
+  (
+    settings_set harness_bin none
+    harness_bin >/dev/null 2>&1 && tfail "harness_bin must fail on the 'none' sentinel, not fall back"
+    settings_set harness_bin ""
+    OAL_HARNESS_BIN=none harness_bin >/dev/null 2>&1 && tfail "OAL_HARNESS_BIN=none must fail, not fall back"
+    settings_set harness_bin "$HD/fakebin/harness"
+    [[ $(OAL_HARNESS_BIN=none harness_bin) == "$HD/fakebin/harness" ]] || tfail "an explicit settings harness_bin wins over OAL_HARNESS_BIN=none"
+  ) || exit 1
+  pass "harness_bin: 'none' (settings or OAL_HARNESS_BIN) means no harness, never a fallback to PATH/dev checkout"
+
   # ---- register (incl. --slots), approve, decline; requested.txt pruned on approve ---
   # overview.json already lists hns-sub registered on p-sub (s-sub): register must NOT
   # `session add` it again (that would mint "hns-sub-2") -- it resyncs the existing
@@ -961,6 +977,7 @@ JSON
     [[ $(jq -r .bin <<<"$s2") == "" ]] || tfail "bin must be empty when the harness CLI cannot be found"
     after=$(wc -l <"$CURLLOG")
     [[ $before == "$after" ]] || tfail "status --json must never call curl"
+    settings_set harness_bin "$HD/fakebin/harness"   # settings.json is shared, not subshell-scoped: put the fake back
   ) || exit 1
   pass "harness status --json is network-free with no harness installed"
 

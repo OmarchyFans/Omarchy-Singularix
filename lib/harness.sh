@@ -30,9 +30,19 @@ HARNESS_STATE_DIR="$OAL_STATE/harness"
 HARNESS_JOBS_DIR="$HARNESS_STATE_DIR/jobs"
 
 # ------------------------------------------------------------------ basics ----
+# Resolution: settings.json `harness_bin` (a path, or the word `none` = there is no harness,
+# never fall back) -> $OAL_HARNESS_BIN (same two forms; tests/run.sh sets `none` so a
+# best-effort hook such as harness_resync_profile can never reach the real CLI and the
+# user's live ~/.session-harness -- which it did, relabelling live sessions, on 2026-09-14)
+# -> `harness` on PATH -> the dev checkout.
 harness_bin() {
   local b; b=$(settings_get harness_bin "")
+  if [[ $b == none ]]; then return 1; fi
   if [[ -n $b && -x $b ]]; then printf '%s' "$b"; return 0; fi
+  if [[ -n ${OAL_HARNESS_BIN:-} ]]; then
+    [[ $OAL_HARNESS_BIN == none ]] && return 1
+    [[ -x $OAL_HARNESS_BIN ]] && { printf '%s' "$OAL_HARNESS_BIN"; return 0; }
+  fi
   if have harness; then command -v harness; return 0; fi
   b="$HOME/Work/session-harness/.venv/bin/harness"
   if [[ -x $b ]]; then printf '%s' "$b"; return 0; fi
