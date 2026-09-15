@@ -1801,7 +1801,7 @@ FAKE5
     queue: [], events: [], generated_at: $t
   }' >"$HARNESS_DATA_DIR/overview.json"
   mk_repos; harness_dispatch_once || true
-  grep -q "First run: harness brief --project p-env2 --session s-env2" "$HD/last-job-body.txt" \
+  grep -qE "First run: (harness|/[^ ]+/harness) brief --project p-env2 --session s-env2" "$HD/last-job-body.txt" \
     || { cat "$HD/last-job-body.txt"; tfail "#27: an orchestration packet's trailer must point at 'harness brief --project … --session …'"; }
   harness_dispatch_reap
   pass "harness dispatch (#26/#27): the delegate inherits \$HARNESS_SESSION/\$HARNESS_PROJECT, and the trailer names harness show (work packet) or harness brief (orchestration packet) as the first command"
