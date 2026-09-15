@@ -1142,7 +1142,7 @@ harness_dispatch_reap() {
       # one that finished but replied with none -- two different failures,
       # two different messages).
       local rstatus="failed" summary="" patch_file="" retry_after=""
-      if [[ $status == done ]]; then
+      if [[ $status == "done" ]]; then
         local rawlog; rawlog=$(mktemp "$HARNESS_JOBS_DIR/.extract.XXXXXX")
         # The trailer told the delegate to reply with nothing after the patch, so
         # the patch is near the end -- cap what we scan to the last 2000 lines. A
