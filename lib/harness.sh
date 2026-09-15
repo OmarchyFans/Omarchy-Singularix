@@ -954,7 +954,7 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
   if [[ -n $command ]]; then
     trailer=$'\n\nFirst run: harness brief --project '"$proj"' --session '"$sid"$'\n'"$where"$'\nDo not write the outbox receipt file yourself. Your FINAL message must be exactly one JSON object -- the patch -- with no prose before or after it and no markdown fence; the launcher extracts it and writes the receipt. A reply without a JSON object fails this packet.'
   else
-    trailer=$'\n\nFirst run: harness show --project '"$proj"' --node '"$node"$'\n'"$where"$'\nWhen finished, print the oracle command output; do not edit files outside touches.'
+    trailer=$'\n\nFirst run: harness show --project '"$proj"' --node '"$node"$'\n'"$where"$'\nEdit ONLY the files listed under Touches, in place. Never create new files or directories, never copy or re-create the repo or its tests anywhere else, never search the filesystem for another copy: if a file in Touches is missing, stop and report it. When finished, run the oracle command from the working directory and print its output.'
   fi
   local -a saved_opts=("${OPTS[@]}")
   OPTS=(--backend "$backend" --name "$name" --task-title "$node" --model "$model" --job-stdin)
