@@ -3,6 +3,10 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.15.1
+
+- `harness_bin`: `none` (settings or `OAL_HARNESS_BIN`) means there is no harness and never falls back to PATH or the dev checkout; tests/run.sh sets it and a throwaway `HARNESS_DATA_DIR` from the first line. The `rix setup`/`create`/`delegate` tests had been reaching the real CLI through the new resync hook and relabelling the user's live `rix-1`/`rix-2` sessions (model, vendor, cost class) on every test run.
+
 ## 0.15.0
 
 - Plan and Projects are now one tab, "Projects": a selectable project list (progress, status, orchestrator, concurrency, kanban phase) sits above the Gantt; picking a row filters the board.
