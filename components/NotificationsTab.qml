@@ -34,8 +34,23 @@ Item {
     var m = /\$([0-9]+(?:\.[0-9]+)?)/.exec((b && b.message) || "")
     return m ? m[1] : "0"
   }
-  function approve(b) { dash.act([dash.launcher, "harness", "approve", tab.approvalProject(b), tab.approvalUsd(b)]) }
-  function decline(b) { dash.act([dash.launcher, "harness", "decline", tab.approvalProject(b)]) }
+  // the blocker's ref is "harness:<project>[:<request_id>]:approval:<at>" (lib/harness.sh
+  // harness_notify_sync): pass the request id through so Approve/Decline hit that request
+  function approvalRequest(b) {
+    var ref = String((b && b.ref) || "")
+    var m = ref.match(/^harness:[^:]+:([0-9a-f]{6,}):approval:/)
+    return m ? m[1] : ""
+  }
+  function approve(b) {
+    var argv = [dash.launcher, "harness", "approve", tab.approvalProject(b), tab.approvalUsd(b)]
+    var rid = tab.approvalRequest(b); if (rid !== "") argv.push("--request", rid)
+    dash.act(argv)
+  }
+  function decline(b) {
+    var argv = [dash.launcher, "harness", "decline", tab.approvalProject(b)]
+    var rid = tab.approvalRequest(b); if (rid !== "") argv.push("--request", rid)
+    dash.act(argv)
+  }
   function loadSetting() { if (!settingProc.running) { settingProc.command = [dash.launcher, "settings", "get", "notify_blockers"]; settingProc.running = true } }
   Process {
     id: settingProc

@@ -3,6 +3,10 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.16.2
+
+- `harness status` (text): pending approvals print project, node, estimate and request id (were `null — $?`).
+
 ## 0.16.1
 
 - `harness run`: a foreground supervisor for `harness serve --all` + the dispatch loop, meant to be a systemd unit's `ExecStart`. Fixes a live bug (2026-09-16): `harness serve` backgrounded both with `setsid nohup … &` from whatever shell called it, so closing that terminal or ending that session killed both — the Gantt froze silently and sessions went stale.

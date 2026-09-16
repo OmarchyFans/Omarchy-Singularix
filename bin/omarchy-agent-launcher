@@ -838,7 +838,7 @@ cmd_harness() {
            + (if .bin == "" then " · CLI not found" else "" end) + " · " + (.projects|tostring) + " project(s)"
            + " · jobs " + (.jobs.running|tostring) + "/" + (.jobs.slots|tostring)
            + " · supervised " + (if .supervised then "yes" + (if .unit_active then " (active)" else " (not active)" end) else "no" end)' <<<"$s"
-    jq -r '.pending_approvals[]? | "  pending approval: project \(.id) — $" + (.pending_approval.estimate_usd // .pending_approval.usd // "?" | tostring) + " — " + (.pending_approval.reason // "")' <<<"$s"
+    jq -r '.pending_approvals[]? | "  pending approval: \(.project)" + (if .node then " \(.node)" else "" end) + " — $" + ((.estimate_usd // "?") | tostring) + (if .request_id then " — request \(.request_id)" else "" end) + " — " + (.reason // "")' <<<"$s"
   }
   case "$sub" in
     status)  _harness_print_status ;;
