@@ -3,6 +3,11 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.17.1
+
+- Money honesty, second half. Hermes writes a delegate's token row to its `state.db` as its **last** act, after the reply. On 2026-09-16 two DeepSeek runs (P0.9/P0.10) wrote their own receipt, the harness closed the nodes and withdrew the packets, and the reaper read usage (nothing yet) and deleted the delegate's home before that final write landed -- Hermes logged "state.db was replaced underneath the gateway" and $0 was booked for metered work. The withdrawal sweep now waits (bounded, `HARNESS_EXIT_GRACE_SEC`, default 20s) for the delegate's tmux session to end on its own before reading usage, and `harness_job_forget` gives a killed pane up to 5s to flush before its home is removed. Test: `harness_wait_delegate_exit` polls until dead, gives up at `max_sec`, ignores an empty slug.
+- The two runs above were booked by hand at the harness's pre-run estimate ($0.003183 each) with the evidence saying so; measured figures for them no longer exist.
+
 ## 0.17.0
 
 - Agent tmux status line and window name show `<name> · <model> @ <backend>` / `<model>@<backend>` and the task title instead of tmux's default window index, cwd and hostname (the user asked which model `oal-hns-p0-9` was running).

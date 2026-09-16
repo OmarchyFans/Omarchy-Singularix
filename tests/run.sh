@@ -1291,6 +1291,25 @@ JSON
   grep -q "harness:p-mh:mh:cancelled" "$OAL_EVENTS" || tfail "money honesty: the withdrawn note must still be emitted alongside the late receipt"
   pass "harness_dispatch_heartbeat: a withdrawn packet whose delegate already has usage gets a late receipt (--usd/--tokens) before being forgotten"
 
+  # ---- money honesty #2: usage is read only AFTER the delegate has exited -----------
+  #      Hermes writes its token row to state.db as its last act; live 2026-09-16 the
+  #      sweep read usage (nothing yet) and removed the home before that write landed.
+  #      harness_wait_delegate_exit must poll session_alive until it says dead (bounded).
+  ALIVE_CALLS=0
+  session_alive() { ALIVE_CALLS=$((ALIVE_CALLS + 1)); (( ALIVE_CALLS <= 3 )); }
+  sleep() { :; }
+  harness_wait_delegate_exit hns-wait 10
+  (( ALIVE_CALLS == 4 )) || tfail "wait_delegate_exit: expected to poll until session_alive reports dead (4 calls), got $ALIVE_CALLS"
+  ALIVE_CALLS=0
+  session_alive() { ALIVE_CALLS=$((ALIVE_CALLS + 1)); return 0; }   # never exits
+  harness_wait_delegate_exit hns-wait 3
+  (( ALIVE_CALLS == 3 )) || tfail "wait_delegate_exit: must give up after max_sec polls (3), got $ALIVE_CALLS"
+  ALIVE_CALLS=0
+  harness_wait_delegate_exit "" 3
+  (( ALIVE_CALLS == 0 )) || tfail "wait_delegate_exit: an empty slug must not poll"
+  unset -f sleep session_alive; source "$ROOT/lib/common.sh"   # restore the real helpers
+  pass "harness_wait_delegate_exit: polls session_alive until the delegate is gone, bounded by max_sec, no-op for an empty slug"
+
   # ---- harness_dispatch_reap: a finished job -> receipt written, then session set
   #      --clear-pid, and its stage dir removed ---------------------------------------
   : >"$DELEGATE_LOG"; : >"$RECEIPTS"; : >"$SESSADD"

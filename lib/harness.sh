@@ -1209,6 +1209,17 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
 
 # Forget a finished or cancelled delegate: its tmux server, staged home, profile and
 # job file. Transient `hns-*` agents must not pile up in the launcher's agent list.
+# harness_wait_delegate_exit <slug> [max_sec]: block (bounded, default
+# $HARNESS_EXIT_GRACE_SEC or 20s) while the delegate's tmux session is still
+# alive, so its runtime can finish writing token accounting before anyone
+# reads usage or removes its home. Returns 0 either way; the caller decides.
+harness_wait_delegate_exit() {
+  local slug=$1 max=${2:-${HARNESS_EXIT_GRACE_SEC:-20}} i=0
+  [[ -n $slug && $max =~ ^[0-9]+$ ]] || return 0
+  while (( i < max )) && session_alive "$slug"; do sleep 1; i=$((i + 1)); done
+  return 0
+}
+
 harness_job_forget() { # <slug>
   local slug=$1
   [[ -n $slug && $slug == hns-* ]] || return 0
@@ -1224,6 +1235,7 @@ harness_job_forget() { # <slug>
   mkdir -p "$OAL_STATE/stopping" 2>/dev/null || true
   : >"$OAL_STATE/stopping/$slug" 2>/dev/null || true
   session_kill "$slug" 2>/dev/null || true
+  harness_wait_delegate_exit "$slug" 5   # let the killed pane's runtime finish flushing before its home goes
   # Keep the delegate's run logs: they are the only evidence of what it did (live
   # 2026-09-16 a delegate failed three oracles under the new systemd unit and nothing was
   # left to read). $HARNESS_STATE_DIR/runs/<slug>/<run>.log; the 60 newest slugs survive.
@@ -1264,6 +1276,14 @@ harness_dispatch_heartbeat() {
       # its usage (spent_usd stayed 0 live). If usage_json still has anything for this
       # slug, send a late receipt for it before forgetting -- skip only when there is
       # truly nothing to book (a genuine mid-job reassignment with no output yet).
+      # Hermes applies its token accounting to <home>/state.db as its LAST act, after
+      # the reply is out -- and a delegate that wrote its own receipt is usually still
+      # finishing when the harness withdraws the packet. Live 2026-09-16 (P0.9/P0.10 on
+      # DeepSeek): the sweep read usage and deleted the home BEFORE that write landed;
+      # Hermes logged "state.db was replaced underneath the gateway", the token row never
+      # existed, and $0 was booked for a metered run. Wait (bounded) for the delegate to
+      # exit on its own before reading anything.
+      harness_wait_delegate_exit "$slug"
       local usage_row usd_actual tok_in tok_out
       usage_row=$(declare -F usage_json >/dev/null && usage_json | jq -c --arg n "$slug" '.agents[]? | select(.name == $n)' 2>/dev/null)
       usd_actual=$(jq -r '.cost_usd // empty' <<<"$usage_row" 2>/dev/null)
