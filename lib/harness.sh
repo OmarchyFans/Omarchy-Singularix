@@ -1567,7 +1567,9 @@ harness_notify_sync() {
     local id rid key at line
     id=$(jq -r '.project // empty' <<<"$row"); rid=$(jq -r '.request_id // empty' <<<"$row")
     [[ -n $id ]] || continue
-    key="$id:${rid:-single}"
+    # key: "<project>" for the legacy singular view (no request id -- same key the panel
+    # and older notified.txt entries used), "<project>:<request_id>" per open request
+    key="$id"; [[ -n $rid ]] && key="$id:$rid"
     at=$(jq -r '.at // .estimate_usd // "pending"' <<<"$row")
     line=$(grep -F "approval${tab}${key}${tab}" "$nf" 2>/dev/null | head -n1 || true)
     if [[ -n $line ]] && [[ $(cut -f3 <<<"$line") == "$at" ]]; then
@@ -1581,7 +1583,38 @@ harness_notify_sync() {
     vendor=$(jq -r '.vendor // "?"' <<<"$row"); reason=$(jq -r '.reason // ""' <<<"$row"); node=$(jq -r '.node // ""' <<<"$row")
     event_emit "$agent" blocker "Approve \$$estimate for $model via $vendor on $id${node:+ ($node)}: $reason" \
       --source harness --level blocker --ref "harness:$key:approval:$at" --key "approval-$key"
-    printf 'approval%s%s%s%s\n' "$tab" "$key" "$tab" "$at" >>"$tmp"
+    printf 'approval%s%s%s%s%s%s\n' "$tab" "$key" "$tab" "$at" "$tab" "$agent" >>"$tmp"
   done < <(jq -c '.[]?' <<<"$rows")
+
+  # an approval that was open last time and is gone now (approved or declined): clear its
+  # blocker on the same agent that carried it
+  local old
+  while IFS= read -r old; do
+    [[ -n $old ]] || continue
+    local okey; okey=$(cut -f2 <<<"$old")
+    grep -qF "approval${tab}${okey}${tab}" "$tmp" 2>/dev/null && continue
+    local cleared_agent; cleared_agent=$(cut -f4 <<<"$old"); [[ -n $cleared_agent ]] || cleared_agent=rix
+    event_emit "$cleared_agent" blocker_cleared "harness: approval on ${okey%%:*} resolved" --source harness --key "approval-$okey"
+  done < <(grep "^approval${tab}" "$nf" 2>/dev/null || true)
+
+  # a throttled session (rate-limited subscription): one note per retry_at
+  local sess
+  while IFS= read -r sess; do
+    [[ -n $sess ]] || continue
+    local sid label retry line
+    sid=$(jq -r '.id // empty' <<<"$sess")
+    [[ -n $sid ]] || continue
+    label=$(jq -r '.label // empty' <<<"$sess"); [[ -n $label ]] || label=rix
+    retry=$(jq -r '.retry_at // empty' <<<"$sess"); [[ -n $retry ]] || retry="unknown"
+    line=$(grep -F "throttled${tab}${sid}${tab}" "$nf" 2>/dev/null | head -n1 || true)
+    if [[ -n $line ]] && [[ $(cut -f3 <<<"$line") == "$retry" ]]; then
+      printf '%s\n' "$line" >>"$tmp"
+    else
+      event_emit "$label" note "harness: $sid throttled, retrying at $retry" --source harness --level warn --ref "harness:$sid:throttled:$retry"
+      printf 'throttled%s%s%s%s\n' "$tab" "$sid" "$tab" "$retry" >>"$tmp"
+    fi
+  done < <(jq -c '.sessions[]? | select(.state == "throttled")' <<<"$overview")
+
   mv -f "$tmp" "$nf"
+  return 0
 }
