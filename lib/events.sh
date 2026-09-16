@@ -12,7 +12,7 @@ OAL_EVENTS="$OAL_STATE/events.jsonl"
 OAL_BLOCKERS="$OAL_STATE/blockers.json"
 OAL_EVENTS_LOCK="$OAL_STATE/events.lock"
 OAL_EVENTS_MAX_BYTES=${OAL_EVENTS_MAX_BYTES:-2097152}
-OAL_PLUGIN_ID="fans.omarchy.agent-launcher"
+OAL_PLUGIN_ID="fans.omarchy.singularix"
 
 # ---- settings -----------------------------------------------------------------
 settings_get() { # settings_get <key> <default>

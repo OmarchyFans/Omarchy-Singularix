@@ -28,9 +28,9 @@ UPD_SELF="$(readlink -f -- "${BASH_SOURCE[0]}")"
 UPD_DIR="$(cd -- "$(dirname -- "$UPD_SELF")/.." && pwd)"
 
 # ---- this plugin -------------------------------------------------------------
-UPD_ID="fans.omarchy.agent-launcher"
-UPD_NAME="Agent Launcher"
-UPD_REPO="OmarchyFans/omarchy-fans-agent-launcher"            # GitHub owner/repo the plugin is published from
+UPD_ID="fans.omarchy.singularix"
+UPD_NAME="Singularix"
+UPD_REPO="OmarchyFans/Omarchy-Singularix"                    # GitHub owner/repo the plugin is published from
 UPD_BRANCH="main"        # branch whose manifest.json is "the published version"
 UPD_SLUG="omarchy-agent-launcher"            # cache lives in ~/.cache/<slug>/update-check.json
 UPD_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-agent-launcher/settings.json"        # JSON file; "update_check": false turns the check off

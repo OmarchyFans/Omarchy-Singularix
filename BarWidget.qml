@@ -10,9 +10,9 @@ import qs.Ui
 // shows how many blockers need the user, read from blockers.json.
 BarWidget {
   id: root
-  moduleName: "fans.omarchy.agent-launcher"
+  moduleName: "fans.omarchy.singularix"
 
-  readonly property string pluginId: "fans.omarchy.agent-launcher"
+  readonly property string pluginId: "fans.omarchy.singularix"
   readonly property string launcher: Qt.resolvedUrl("bin/omarchy-agent-launcher").toString().replace(/^file:\/\//, "")
   readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")) + "/omarchy-agent-launcher"
   property int blockerCount: 0

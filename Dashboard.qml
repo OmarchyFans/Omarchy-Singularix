@@ -30,7 +30,7 @@ Item {
   id: dash
   property var shell: null
   property var manifest: null
-  readonly property string pluginId: "fans.omarchy.agent-launcher"
+  readonly property string pluginId: "fans.omarchy.singularix"
   readonly property bool opened: window.visible
   property bool closingFromHost: false
 
@@ -315,8 +315,8 @@ Item {
               Text {
                 width: parent.width; wrapMode: Text.Wrap; textFormat: Text.PlainText
                 text: dash.updateAvailable
-                      ? "Agent Launcher " + dash.updateInfo.latest + " is available (you have " + dash.version + ")"
-                      : "Finish updating Agent Launcher: the dashboard is " + dash.version + ", its helper is " + (dash.updateInfo ? dash.updateInfo.cli : "")
+                      ? "Singularix " + dash.updateInfo.latest + " is available (you have " + dash.version + ")"
+                      : "Finish updating Singularix: the dashboard is " + dash.version + ", its helper is " + (dash.updateInfo ? dash.updateInfo.cli : "")
                 color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.body; font.bold: true
               }
               Repeater {

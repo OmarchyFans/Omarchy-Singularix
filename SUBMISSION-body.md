@@ -1,6 +1,6 @@
 ### Repository URL
 
-https://github.com/OmarchyFans/omarchy-fans-agent-launcher
+https://github.com/OmarchyFans/Omarchy-Singularix
 
 ### Category
 

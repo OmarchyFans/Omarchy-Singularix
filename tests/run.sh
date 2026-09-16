@@ -1310,6 +1310,38 @@ JSON
   unset -f sleep session_alive; source "$ROOT/lib/common.sh"   # restore the real helpers
   pass "harness_wait_delegate_exit: polls session_alive until the delegate is gone, bounded by max_sec, no-op for an empty slug"
 
+  # ---- money honesty #3: a withdrawn delegate that is STILL RUNNING must not block the
+  #      sweep (other jobs' heartbeats keep flowing) -- it gets a bounded grace stamped on
+  #      its job file and is booked + forgotten once the pane ends or the grace expires.
+  : >"$DELEGATE_LOG"; : >"$SESSADD"; : >"$RECEIPTS"
+  PKT_MG="$HD/pkt-mg.md"; printf 'mg body\n' >"$PKT_MG"
+  printf '[{"node":"mg","path":"%s"}]' "$PKT_MG" >"$HD/inbox/p-mg.json"
+  jq -n --arg t "$(date -Is)" '{
+    projects: [ {id:"p-mg", repo_path:"/tmp/proj-mg"} ],
+    sessions: [ {id:"s-mg", project:"p-mg", worker:"rix", label:"hns-free"} ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+  mk_repos; harness_dispatch_once || true
+  JF_MG="$HARNESS_JOBS_DIR/p-mg/mg.json"
+  [[ -f $JF_MG ]] || tfail "grace: expected a job file for mg"
+  slug_mg=$(jq -r '.slug' "$JF_MG")
+  usage_json() { jq -nc --arg n "$slug_mg" '{agents:[{name:$n, cost_usd:0.05, prompt:500, output:50}]}'; }
+  session_alive() { return 0; }   # the delegate's pane is still up
+  sleep() { :; }
+  mv -f "${PKT_MG}.claimed" "${PKT_MG}.claimed.cancelled"
+  harness_dispatch_heartbeat
+  [[ -f $JF_MG ]] || tfail "grace: a still-running withdrawn delegate must not be forgotten on the first sweep"
+  jq -e '.withdrawn_seen' "$JF_MG" >/dev/null 2>&1 || tfail "grace: the first sweep must stamp withdrawn_seen on the job file"
+  ! grep -q "node=mg " "$RECEIPTS" || { cat "$RECEIPTS"; tfail "grace: no receipt while the delegate is still running inside the grace period"; }
+  harness_dispatch_heartbeat
+  [[ -f $JF_MG ]] || tfail "grace: a second sweep inside the grace period must still leave the job alone"
+  jq --argjson t "$(( $(date +%s) - 100 ))" '.withdrawn_seen = $t' "$JF_MG" >"$JF_MG.tmp" && mv -f "$JF_MG.tmp" "$JF_MG"   # grace expired
+  harness_dispatch_heartbeat
+  [[ ! -f $JF_MG ]] || tfail "grace: once the grace period is over the job must be booked and forgotten even if the pane is still alive"
+  grep -q "node=mg status=done usd=0.05 tin=500 tout=50" "$RECEIPTS" || { cat "$RECEIPTS"; tfail "grace: the late receipt must be written after the grace period"; }
+  unset -f usage_json session_alive sleep; source "$ROOT/lib/usage.sh"; source "$ROOT/lib/common.sh"
+  pass "harness_dispatch_heartbeat: a withdrawn delegate that is still running gets a bounded, non-blocking grace (withdrawn_seen); booked and forgotten once it ends or the grace expires"
+
   # ---- harness_dispatch_reap: a finished job -> receipt written, then session set
   #      --clear-pid, and its stage dir removed ---------------------------------------
   : >"$DELEGATE_LOG"; : >"$RECEIPTS"; : >"$SESSADD"

@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "id": "fans.omarchy.agent-launcher",
-  "name": "Agent Launcher",
-  "version": "0.17.1",
+  "id": "fans.omarchy.singularix",
+  "name": "Singularix",
+  "version": "0.18.0",
   "author": "omarchy.fans",
   "license": "MIT",
-  "description": "Agent Dashboard for Omarchy with Rix, a chief-of-staff agent on your local GPU that manages every agent you spin up (Hermes Agent, OpenClaw; local, Docker, or Omarchy.Fans Cloud) and hands work to bigger models: API keys, browser sign-in, or OpenAI-compatible GPU endpoints. Shows input and output tokens and USD, in total and per task.",
+  "description": "Singularix.ai technology, now available locally as a shell plugin on Omarchy. An Agent Dashboard with Rix, a chief-of-staff agent on your local GPU that manages every agent you spin up (Hermes Agent, OpenClaw; local, Docker, or Omarchy.Fans Cloud) and hands work to bigger models: API keys, browser sign-in, or OpenAI-compatible GPU endpoints. Shows input and output tokens and USD, in total and per task.",
   "kinds": [
     "panel",
     "bar-widget"
@@ -15,10 +15,11 @@
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
-    "displayName": "Agent Launcher",
-    "description": "Bar button that opens the persistent Agent Dashboard (right click: quick agent switcher) with a badge when an agent needs you.",
+    "displayName": "Singularix",
+    "description": "Bar button that opens the persistent Singularix dashboard (right click: quick agent switcher) with a badge when an agent needs you.",
     "category": "AI",
     "aliases": [
+      "singularix",
       "agent-launcher",
       "agents"
     ],

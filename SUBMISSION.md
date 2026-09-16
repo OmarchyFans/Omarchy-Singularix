@@ -5,7 +5,7 @@ or with the GitHub CLI after `gh auth login`:
 
 ```bash
 gh issue create --repo omacom/omarchy-plugin-marketplace \
-  --title "[Plugin]: Agent Launcher" --body-file SUBMISSION-body.md
+  --title "[Plugin]: Singularix" --body-file SUBMISSION-body.md
 ```
 
 `SUBMISSION-body.md` must keep these six headings, in this order:
@@ -13,7 +13,7 @@ gh issue create --repo omacom/omarchy-plugin-marketplace \
 ```markdown
 ### Repository URL
 
-https://github.com/OmarchyFans/omarchy-fans-agent-launcher
+https://github.com/OmarchyFans/Omarchy-Singularix
 
 ### Category
 

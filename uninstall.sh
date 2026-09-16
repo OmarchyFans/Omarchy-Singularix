@@ -1,9 +1,9 @@
 #!/bin/bash
 # Reverses install.sh: removes the symlink, the keybinding block, and the menu
 # entries. Saved agents, secrets, and the plugin itself are left alone
-# (`omarchy plugin remove fans.omarchy.agent-launcher` removes the plugin).
+# (`omarchy plugin remove fans.omarchy.singularix` removes the plugin).
 set -euo pipefail
-MARK="fans.omarchy.agent-launcher"
+MARK="fans.omarchy.singularix"
 L="$HOME/.local/bin/omarchy-agent-launcher"; [[ -L $L ]] && { rm -f "$L"; echo "  removed $L"; }
 B="$HOME/.config/hypr/bindings.lua"
 if [[ -f $B ]] && grep -q "$MARK" "$B"; then

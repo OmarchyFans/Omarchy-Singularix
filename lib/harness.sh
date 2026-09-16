@@ -1281,9 +1281,23 @@ harness_dispatch_heartbeat() {
       # finishing when the harness withdraws the packet. Live 2026-09-16 (P0.9/P0.10 on
       # DeepSeek): the sweep read usage and deleted the home BEFORE that write landed;
       # Hermes logged "state.db was replaced underneath the gateway", the token row never
-      # existed, and $0 was booked for a metered run. Wait (bounded) for the delegate to
-      # exit on its own before reading anything.
-      harness_wait_delegate_exit "$slug"
+      # existed, and $0 was booked for a metered run. A still-running delegate gets a
+      # bounded grace ($HARNESS_EXIT_GRACE_SEC, default 20s) to exit on its own before
+      # anything is read -- WITHOUT blocking this sweep (other jobs' heartbeats must keep
+      # flowing: stale_after_sec is 45s and several withdrawals can land at once). The
+      # first sweep stamps `withdrawn_seen` on the job file and moves on; later sweeps
+      # skip it until the pane is gone or the grace has run out.
+      if [[ -n $slug ]] && session_alive "$slug"; then
+        local seen now_s grace; now_s=$(date +%s)
+        grace=${HARNESS_EXIT_GRACE_SEC:-20}; [[ $grace =~ ^[0-9]+$ ]] || grace=20
+        seen=$(jq -r '.withdrawn_seen // empty' <<<"$job")
+        if [[ -z $seen ]]; then
+          jq --argjson t "$now_s" '.withdrawn_seen = $t' <<<"$job" >"$jf.tmp" 2>/dev/null && mv -f "$jf.tmp" "$jf"
+          continue
+        elif (( now_s - seen < grace )); then
+          continue
+        fi
+      fi
       local usage_row usd_actual tok_in tok_out
       usage_row=$(declare -F usage_json >/dev/null && usage_json | jq -c --arg n "$slug" '.agents[]? | select(.name == $n)' 2>/dev/null)
       usd_actual=$(jq -r '.cost_usd // empty' <<<"$usage_row" 2>/dev/null)

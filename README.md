@@ -1,8 +1,10 @@
 <p align="center">
-  <img src="docs/img/banner.svg" alt="Omarchy Agent Launcher" width="960">
+  <img src="docs/img/banner.svg" alt="Omarchy Singularix" width="960">
 </p>
 
 <h1 align="center">Your desktop, staffed.</h1>
+
+<p align="center"><b>Singularix</b> — Singularix.ai technology, now available locally as a shell plugin on Omarchy.</p>
 
 <p align="center">
   <b>One key. A chief of staff named Rix. A team of AI agents that runs for free on your own GPU and calls in the big models only when you say so.</b><br>
@@ -10,7 +12,7 @@
 </p>
 
 <p align="center">
-  <code>omarchy plugin add https://github.com/OmarchyFans/omarchy-fans-agent-launcher</code>
+  <code>omarchy plugin add https://github.com/OmarchyFans/Omarchy-Singularix</code>
 </p>
 
 <p align="center">
@@ -103,9 +105,9 @@ convenience: machines and GPUs we run for you, sold under omarchy.fans' terms.
 <h2 id="get-it-in-a-minute"><img src="docs/img/h-get-it-in-a-minute.svg" alt="Get it in a minute" height="44"></h2>
 
 ```bash
-omarchy plugin add https://github.com/OmarchyFans/omarchy-fans-agent-launcher
-omarchy plugin enable fans.omarchy.agent-launcher
-~/.config/omarchy/plugins/fans.omarchy.agent-launcher/install.sh   # optional: keybinding and menu entry (asks first)
+omarchy plugin add https://github.com/OmarchyFans/Omarchy-Singularix
+omarchy plugin enable fans.omarchy.singularix
+~/.config/omarchy/plugins/fans.omarchy.singularix/install.sh   # optional: keybinding and menu entry (asks first)
 ```
 
 `omarchy plugin add` clones the repo and lands it **disabled** so you can read
@@ -411,8 +413,8 @@ restart the shell, which a keepLoaded panel needs. *Later* hides that version.
 By hand:
 
 ```bash
-omarchy plugin update fans.omarchy.agent-launcher
-~/.config/omarchy/plugins/fans.omarchy.agent-launcher/install.sh
+omarchy plugin update fans.omarchy.singularix
+~/.config/omarchy/plugins/fans.omarchy.singularix/install.sh
 omarchy restart shell
 ```
 
@@ -440,8 +442,8 @@ See [docs/update-alerts.md](docs/update-alerts.md) for how it is built.
 ### Remove
 
 ```bash
-omarchy plugin remove fans.omarchy.agent-launcher
-~/.config/omarchy/plugins/fans.omarchy.agent-launcher/uninstall.sh   # keybinding, rule, menu entries, CLI symlink
+omarchy plugin remove fans.omarchy.singularix
+~/.config/omarchy/plugins/fans.omarchy.singularix/uninstall.sh   # keybinding, rule, menu entries, CLI symlink
 ```
 
 Saved agents and secrets stay in `~/.config/omarchy-agent-launcher/` and
@@ -451,7 +453,7 @@ agent first if it has a container or a VM.
 ## Contributing
 
 Issues and pull requests are welcome at
-[github.com/OmarchyFans/omarchy-fans-agent-launcher](https://github.com/OmarchyFans/omarchy-fans-agent-launcher).
+[github.com/OmarchyFans/omarchy-fans-agent-launcher](https://github.com/OmarchyFans/Omarchy-Singularix).
 Run `tests/run.sh` (stubbed UI, no network with `OAL_OFFLINE=1`) before opening
 a PR; `omarchy plugin validate .` checks the manifest.
 

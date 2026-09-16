@@ -14,7 +14,7 @@
 set -euo pipefail
 REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$REPO/bin/omarchy-agent-launcher"
-MARK="fans.omarchy.agent-launcher"
+MARK="fans.omarchy.singularix"
 YES=0; [[ ${1:-} == --yes ]] && YES=1
 ask() { (( YES )) && return 0; read -rp "$1 [y/N] " a; [[ $a == [yY]* ]]; }
 

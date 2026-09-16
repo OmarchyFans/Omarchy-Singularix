@@ -3,6 +3,11 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.18.0
+
+- **Singularix.** The plugin is now called Singularix: Singularix.ai technology, available locally as a shell plugin on Omarchy. The GitHub repository moved to `OmarchyFans/Omarchy-Singularix` (the old URL redirects; the update banner and README point at the new one). Bar widget display name and alias `singularix` added; the `agent-launcher`/`agents` aliases and every command, path and keybinding keep working.
+- Withdrawal grace is non-blocking: a withdrawn delegate that is still running gets `withdrawn_seen` stamped on its job file and is left alone for `HARNESS_EXIT_GRACE_SEC` (20s) while every other job's heartbeat keeps flowing (0.17.1 waited inline, which could hold the sweep past the harness's 45s stale limit when several withdrawals landed at once). Booked and forgotten once its pane ends or the grace expires.
+
 ## 0.17.1
 
 - Money honesty, second half. Hermes writes a delegate's token row to its `state.db` as its **last** act, after the reply. On 2026-09-16 two DeepSeek runs (P0.9/P0.10) wrote their own receipt, the harness closed the nodes and withdrew the packets, and the reaper read usage (nothing yet) and deleted the delegate's home before that final write landed -- Hermes logged "state.db was replaced underneath the gateway" and $0 was booked for metered work. The withdrawal sweep now waits (bounded, `HARNESS_EXIT_GRACE_SEC`, default 20s) for the delegate's tmux session to end on its own before reading usage, and `harness_job_forget` gives a killed pane up to 5s to flush before its home is removed. Test: `harness_wait_delegate_exit` polls until dead, gives up at `max_sec`, ignores an empty slug.
