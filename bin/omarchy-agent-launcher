@@ -876,6 +876,7 @@ cmd_harness() {
            + " · jobs " + (.jobs.running|tostring) + "/" + (.jobs.slots|tostring)
            + " · supervised " + (if .supervised then "yes" + (if .unit_active then " (active)" else " (not active)" end) else "no" end)' <<<"$s"
     jq -r '.pending_approvals[]? | "  pending approval: \(.project)" + (if .node then " \(.node)" else "" end) + " — $" + ((.estimate_usd // "?") | tostring) + (if .request_id then " — request \(.request_id)" else "" end) + " — " + (.reason // "")' <<<"$s"
+    jq -r 'if (.on_sandbox | type) == "object" then "  on sandbox: the orchestrator is running on your cloud sandbox" + (if .on_sandbox.since then " (since \(.on_sandbox.since))" else "" end) + " — take it back: omarchy-digital-twin handoff local" else empty end' <<<"$s"
   }
   case "$sub" in
     status)  _harness_print_status ;;

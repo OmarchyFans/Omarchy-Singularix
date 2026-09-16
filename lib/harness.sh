@@ -30,6 +30,25 @@ HARNESS_STATE_DIR="$OAL_STATE/harness"
 HARNESS_JOBS_DIR="$HARNESS_STATE_DIR/jobs"
 HARNESS_SERVICE_UNIT="omarchy-agent-launcher-harness.service"
 
+# The digital-twin plugin drops this marker while it has moved the orchestrator
+# to the cloud sandbox, running against the same project graph; a second
+# orchestrator started here would fight it. The twin already blocks our systemd
+# unit with a ConditionPathExists=! drop-in, but the ad hoc (non-unit) serve and
+# the foreground `harness run` would still start one, so they check the marker
+# too. The twin removes it on take-back (`omarchy-digital-twin handoff local`).
+# Marker holds JSON {"since": iso, "unit_was_active": bool}.
+HARNESS_TWIN_MARKER="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-digital-twin/harness-on-sandbox"
+harness_on_sandbox() { [[ -e $HARNESS_TWIN_MARKER ]]; }
+harness_on_sandbox_since() { harness_on_sandbox && jq -r '.since // empty' "$HARNESS_TWIN_MARKER" 2>/dev/null || true; }
+# Shared guard for every laptop start path. Returns 1 (and explains) when the
+# twin has the orchestrator on the sandbox, so a caller does `|| return 1`.
+harness_refuse_if_on_sandbox() {
+  harness_on_sandbox || return 0
+  local since; since=$(harness_on_sandbox_since)
+  warn "the harness is running on your sandbox${since:+ (since $since)}; take the work back first: omarchy-digital-twin handoff local"
+  return 1
+}
+
 # ------------------------------------------------------------------ basics ----
 # Resolution: settings.json `harness_bin` (a path, or the word `none` = there is no harness,
 # never fall back) -> $OAL_HARNESS_BIN (same two forms; tests/run.sh sets `none` so a
@@ -97,6 +116,7 @@ harness_pid_alive() { [[ -s $1 ]] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/nu
 # (which owns both children and the same pid files), rather than spawning
 # ad hoc processes that die with the calling shell (live 2026-09-16).
 harness_serve_start() {
+  harness_refuse_if_on_sandbox || return 1
   mkdir -p "$HARNESS_STATE_DIR"
   if harness_service_enabled; then
     say "harness: $HARNESS_SERVICE_UNIT is installed and enabled; starting it via systemd instead of an ad hoc process"
@@ -167,6 +187,7 @@ harness_serve_stop() {
 # exits 0; if `harness serve` dies on its own, harness_run exits non-zero so
 # Restart=on-failure brings it back.
 harness_run() {
+  harness_refuse_if_on_sandbox || return 1
   mkdir -p "$HARNESS_STATE_DIR"
   if harness_pid_alive "$HARNESS_STATE_DIR/serve.pid" || harness_pid_alive "$HARNESS_STATE_DIR/dispatch.pid"; then
     warn "harness run: already running (serve.pid or dispatch.pid is alive); refusing to start a second copy"
@@ -1627,15 +1648,19 @@ harness_status_json() {
   [[ $roles == \[* ]] || roles='[]'
   local orchestrator; orchestrator=$(jq -c '[.projects[]? | select(.orchestrator != null and .id != null) | {key: .id, value: .orchestrator}] | from_entries' <<<"$overview" 2>/dev/null)
   [[ $orchestrator == \{* ]] || orchestrator='{}'
+  # on_sandbox: false, or the twin's marker JSON ({since, unit_was_active}) when
+  # the orchestrator has been handed to the cloud sandbox. File-only, no network.
+  local on_sandbox=false
+  if harness_on_sandbox; then on_sandbox=$(jq -c '{since: (.since // null), unit_was_active: (.unit_was_active // null)}' "$HARNESS_TWIN_MARKER" 2>/dev/null); [[ $on_sandbox == \{* ]] || on_sandbox='{"since":null,"unit_was_active":null}'; fi
   jq -nc --argjson alive "$alive" --arg url "$url" --arg data_dir "$ddir" --arg bin "$bin" --arg overview_path "$ov" \
     --argjson serving_pid "${serving_pid:-null}" --argjson dispatch_pid "${dispatch_pid:-null}" \
     --argjson projects "$projects" --argjson pending_approvals "$pending" \
     --argjson jobs_running "$running" --argjson jobs_slots "$slots" \
     --argjson roles "$roles" --argjson orchestrator "$orchestrator" \
-    --argjson supervised "$supervised" --argjson unit_active "$unit_active" \
+    --argjson supervised "$supervised" --argjson unit_active "$unit_active" --argjson on_sandbox "$on_sandbox" \
     '{alive:$alive, url:$url, data_dir:$data_dir, bin:$bin, overview_path:$overview_path, serving_pid:$serving_pid, dispatch_pid:$dispatch_pid,
       projects:$projects, pending_approvals:$pending_approvals, jobs:{running:$jobs_running, slots:$jobs_slots},
-      roles:$roles, orchestrator:$orchestrator, supervised:$supervised, unit_active:$unit_active}'
+      roles:$roles, orchestrator:$orchestrator, supervised:$supervised, unit_active:$unit_active, on_sandbox:$on_sandbox}'
 }
 
 # harness_pending_approvals_json -> [{project, estimate_usd, model, vendor,

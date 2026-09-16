@@ -923,6 +923,23 @@ JSON
   ) || exit 1
   pass "harness keepalive: idle launcher-owned rix sessions carry the dispatch loop's pid; others untouched"
 
+  # ---- digital-twin marker: laptop starts refuse while the orchestrator runs on the sandbox ----
+  (
+    tm="$XDG_STATE_HOME/omarchy-digital-twin/harness-on-sandbox"
+    mkdir -p "$(dirname "$tm")"
+    printf '{"since":"2026-09-16T00:00:00Z","unit_was_active":true}' >"$tm"
+    harness_on_sandbox || tfail "harness_on_sandbox must detect the twin marker"
+    out=$(harness_serve_start 2>&1) && tfail "harness_serve_start must refuse while the marker exists"
+    grep -q "running on your sandbox" <<<"$out" && grep -q "handoff local" <<<"$out" || { echo "$out"; tfail "serve refusal message"; }
+    out=$(harness_run 2>&1) && tfail "harness_run must refuse while the marker exists"
+    grep -q "handoff local" <<<"$out" || { echo "$out"; tfail "run refusal message"; }
+    jq -e '(.on_sandbox|type)=="object" and .on_sandbox.since=="2026-09-16T00:00:00Z" and .on_sandbox.unit_was_active==true' <<<"$(harness_status_json)" >/dev/null || tfail "status --json must report on_sandbox from the marker"
+    rm -f "$tm"
+    harness_on_sandbox && tfail "with the marker gone, harness_on_sandbox must be false"
+    jq -e '.on_sandbox==false' <<<"$(harness_status_json)" >/dev/null || tfail "status on_sandbox must be false after take-back"
+  ) || exit 1
+  pass "harness twin marker: serve/run refuse on the sandbox, status shows it, cleared on take-back"
+
   # ---- forgetting a delegate keeps its run log under the state dir, drops a
   #      stopping-marker for the exit trap, and both notify subcommands read it back ------
   (
