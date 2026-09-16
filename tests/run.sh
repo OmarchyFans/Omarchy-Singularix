@@ -875,6 +875,28 @@ JSON
   ) || exit 1
   pass "harness_job_forget keeps the delegate's run logs as evidence"
 
+  # ---- a delegate refusal backs the session off (no 3-second claim loop) ---------------
+  (
+    settings_set harness_bin "$HD/fakebin/harness"
+    ov_backup=$(cat "$HARNESS_DATA_DIR/overview.json" 2>/dev/null || printf '{}')
+    jq '.projects = [{id:"p-ref", repo_path:"/tmp/proj-ref"}] | .sessions = [{project:"p-ref", id:"s-ref", label:"hns-sub", worker:"rix", state:"idle", role:"coding", tier:"coding"}]' <<<"$ov_backup" >"$HARNESS_DATA_DIR/overview.json"
+    mkdir -p /tmp/proj-ref "$HD/inbox"
+    printf '%s\n' "# refuse me" >"$HD/inbox/pkt-ref.md"
+    jq -n --arg p "$HD/inbox/pkt-ref.md" '[{node:"REF1", path:$p}]' >"$HD/inbox/p-ref.json"
+    cmd_delegate() { cat >/dev/null; return 3; }
+    rm -f "$HARNESS_STATE_DIR"/backoff.s-ref
+    harness_dispatch_once || true
+    [[ -f $HD/inbox/pkt-ref.md ]] || tfail "refused packet must be un-claimed"
+    [[ -f $HARNESS_STATE_DIR/backoff.s-ref ]] || tfail "a delegate refusal must record a back-off for the session"
+    n1=$(grep -c "did not start" "$OAL_EVENTS" || true)
+    harness_dispatch_once || true
+    n2=$(grep -c "did not start" "$OAL_EVENTS" || true)
+    [[ $n1 == "$n2" ]] || tfail "while backed off the packet must not be re-claimed and re-refused every sweep"
+    rm -f "$HARNESS_STATE_DIR"/backoff.s-ref "$HD/inbox/p-ref.json" "$HD/inbox/pkt-ref.md"
+    printf '%s' "$ov_backup" >"$HARNESS_DATA_DIR/overview.json"
+  ) || exit 1
+  pass "harness dispatch: a delegate refusal un-claims and backs the session off instead of looping"
+
   # ---- harness_bin never falls back to a real CLI when told there is none --------------
   (
     settings_set harness_bin none
