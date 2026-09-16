@@ -150,6 +150,13 @@ SOUL
       warn "skill not found locally, skipped: $skill"
     fi
   done < <(profile_skills "$name")
+
+  # cmd_session re-runs agent_provision on every restart/first run of its
+  # chat/restart loop (not on a plain "chat" resume); piggyback on that to
+  # refresh the tmux status line/window name if the profile's model or
+  # backend changed since the server was created. No-op if the session isn't
+  # up yet (e.g. provisioning ahead of the first tmux attach).
+  declare -F tmux_apply_status >/dev/null && tmux_apply_status "$name"
 }
 
 # A Hermes home signed in to <provider> whose credentials <name> may inherit:

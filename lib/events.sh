@@ -37,7 +37,8 @@ blockers_apply() { # blockers_apply <event-json>
   cur=$(blockers_json)
   new=$(jq -c --argjson e "$ev" '
     ($e.agent + "/" + $e.key) as $id
-    | if $e.level == "blocker" then .[$id] = {t:$e.t, ts:$e.ts, agent:$e.agent, key:$e.key, kind:$e.kind, task:$e.task, message:$e.message, ref:$e.ref}
+    | if $e.level == "blocker" then .[$id] = {t:$e.t, ts:$e.ts, agent:$e.agent, key:$e.key, kind:$e.kind, task:$e.task, message:$e.message, ref:$e.ref,
+        why:($e.why // ""), recommend:($e.recommend // ""), detail:($e.detail // ""), actions:($e.actions // []), node:($e.node // ""), project:($e.project // "")}
       elif $e.kind == "blocker_cleared" then (if $e.key != "" then del(.[$id]) else with_entries(select(.value.agent != $e.agent)) end)
       elif $e.kind == "signed_in" then del(.[$e.agent + "/signin"])
       elif $e.kind == "session_started" then del(.[$e.agent + "/exit"]) | del(.[$e.agent + "/prepare"])
@@ -49,23 +50,44 @@ blockers_apply() { # blockers_apply <event-json>
 
 # ---- emit ---------------------------------------------------------------------
 # event_emit <agent> <kind> <message> [--task T] [--level info|warn|blocker] [--key K] [--code N] [--source S] [--ref R]
+#   [--why TEXT] [--recommend TEXT] [--detail TEXT] [--node N] [--project P]
+#   [--action LABEL=ARGV_JSON]...  (repeatable; ARGV_JSON is a JSON array of argv
+#   for "omarchy-agent-launcher …", e.g. ["harness","approve","p1","0.03","--request","abc"])
+# All of --why/--recommend/--detail/--action/--node/--project are optional --
+# existing 4-arg callers (event_emit agent kind message) are unaffected.
 event_emit() {
   local agent=$1 kind=$2 message=$3; shift 3
   local task="" level=info key="" code=0 source=launcher ref=""
+  local why="" recommend="" detail="" node="" project=""
+  local -a action_objs=()
   while (($#)); do
     case "$1" in
       --task) task=$2; shift 2 ;; --level) level=$2; shift 2 ;; --key) key=$2; shift 2 ;;
       --code) code=$2; shift 2 ;; --source) source=$2; shift 2 ;; --ref) ref=$2; shift 2 ;;
+      --why) why=$2; shift 2 ;; --recommend) recommend=$2; shift 2 ;; --detail) detail=$2; shift 2 ;;
+      --node) node=$2; shift 2 ;; --project) project=$2; shift 2 ;;
+      --action)
+        local kv=$2; shift 2
+        [[ $kv == *=* ]] || { warn "event: --action needs LABEL=ARGV_JSON"; return 2; }
+        local a_label=${kv%%=*} a_argv=${kv#*=}
+        jq -e 'type == "array"' >/dev/null 2>&1 <<<"$a_argv" || { warn "event: --action argv must be a JSON array"; return 2; }
+        action_objs+=("$(jq -nc --arg label "$a_label" --argjson argv "$a_argv" '{label:$label, argv:$argv}')")
+        ;;
       *) warn "event: unknown option $1"; return 2 ;;
     esac
   done
   [[ $level == info || $level == warn || $level == blocker ]] || { warn "event: level must be info, warn, or blocker"; return 2; }
   [[ $level == blocker && -z $key ]] && key=$(slugify "$message")
+  local actions_json="[]"
+  (( ${#action_objs[@]} )) && actions_json=$(printf '%s\n' "${action_objs[@]}" | jq -sc '.')
   local t ts line
   t=$(date +%s%3N); ts=$(date -Is)
   line=$(jq -nc --argjson t "$t" --arg ts "$ts" --arg agent "$agent" --arg kind "$kind" --arg level "$level" \
     --arg key "$key" --arg task "$task" --arg message "$message" --argjson code "${code:-0}" --arg source "$source" --arg ref "$ref" \
-    '{t:$t, ts:$ts, agent:$agent, kind:$kind, level:$level, key:$key, task:$task, message:$message, code:$code, source:$source, ref:$ref}')
+    --arg why "$why" --arg recommend "$recommend" --arg detail "$detail" --argjson actions "$actions_json" \
+    --arg node "$node" --arg project "$project" \
+    '{t:$t, ts:$ts, agent:$agent, kind:$kind, level:$level, key:$key, task:$task, message:$message, code:$code, source:$source, ref:$ref,
+      why:$why, recommend:$recommend, detail:$detail, actions:$actions, node:$node, project:$project}')
   mkdir -p "$OAL_STATE"
   {
     flock -w 5 9 || true
@@ -85,3 +107,23 @@ event_emit() {
 
 # Recent events as a JSON array (bad lines skipped). events_recent [n]
 events_recent() { [[ -f $OAL_EVENTS ]] || { printf '[]'; return; }; tail -n "${1:-2000}" "$OAL_EVENTS" | jq -R 'fromjson? // empty' | jq -sc .; }
+
+# session_exit_notify NAME -- called from cmd_session's HUP/TERM trap
+# (bin/omarchy-agent-launcher) when the agent's tmux session ends. A FRESH marker at
+# $OAL_STATE/stopping/<name> (harness_job_forget, lib/harness.sh, writes one right before
+# it kills a transient hns-* delegate on purpose: job done/failed/throttled, or its node
+# reassigned) downgrades this to an info note instead of the default "killed from
+# outside" blocker; a marker older than 60s is stale (some other kill) and ignored --
+# harness_job_forget prunes markers past that age too, so none pile up. A single real
+# function, not duplicated logic, so tests/run.sh can register the exact same trap body
+# standalone and exercise this directly (no tmux/hermes needed).
+session_exit_notify() {
+  local name=$1 m="$OAL_STATE/stopping/$name"
+  if [[ -f $m ]] && (( $(date +%s) - $(stat -c %Y "$m" 2>/dev/null || echo 0) < 60 )); then
+    rm -f "$m"
+    event_emit "$name" session_exited "Session ended; cleaned up by the launcher" --code 129 \
+      --recommend "omarchy-agent-launcher notify runlog $name"
+  else
+    event_emit "$name" session_exited "Session was killed from outside (tmux session ended); Chat starts it again" --level blocker --key exit --code 129
+  fi
+}

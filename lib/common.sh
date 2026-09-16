@@ -30,11 +30,20 @@ show_cmd() { printf '  $ %q' "$1"; printf ' %q' "${@:2}"; printf '\n'; }
 
 # ---- agent windows ---------------------------------------------------------
 # Every agent session runs inside a tmux session named oal-<name>, shown in a
-# terminal window titled "Agent · <name>" with app-id org.omarchy.agent (the
-# class Omarchy's own `omarchy agent` uses, so users' window rules apply).
-# Closing the window only detaches: the sign-in prompt or the chat keeps
-# running, and opening the agent again focuses the window or reattaches.
-window_title() { printf 'Agent · %s' "$1"; }
+# terminal window titled "Agent · <name> · <model> @ <backend>" with app-id
+# org.omarchy.agent (the class Omarchy's own `omarchy agent` uses, so users'
+# window rules apply). Closing the window only detaches: the sign-in prompt
+# or the chat keeps running, and opening the agent again focuses the window
+# or reattaches.
+# The model/backend suffix is folded in here (not appended separately at the
+# call sites) because window_address()/window_address_by_title() and bin's
+# own window lookup all match a window by recomputing this same string, and
+# tmux is pinned to drive the terminal's live title to this exact value
+# (see open_agent_window) so a user's own tmux title-format config can never
+# hide the window from that lookup. One edge case this reintroduces: if a
+# profile's model/backend changes while its window is still open, the next
+# open won't find that old window by title (a fresh one opens instead).
+window_title() { printf 'Agent · %s · %s @ %s' "$1" "$(tmux_model_short "$(profile_get "$1" model)")" "$(tmux_backend_short "$1")"; }
 tmux_session() { printf 'oal-%s' "$1"; }
 # Each agent gets its own tmux server on a socket under the launcher's state
 # directory. Session names are global on the default server, so anything else
@@ -47,6 +56,66 @@ tmux_for() { # tmux_for <name> <tmux args...>
   local name=$1; shift
   mkdir -p "$(dirname "$(tmux_socket "$name")")"
   tmux -S "$(tmux_socket "$name")" "$@"
+}
+
+# ---- tmux status line: which model an agent is running -------------------
+# The tmux default status line only shows window index + cwd basename and
+# the hostname (e.g. "1:demo_repo" ... "on milton"), which is the same on
+# every agent. These fill it in with the profile's model and backend/provider
+# instead, on the agent's own private server only (never the user's default
+# tmux server) so the user's tmux theme colours are left untouched.
+#
+# Strip a leading vendor path ("anthropic/claude-sonnet-5" -> "claude-sonnet-5"),
+# a ".gguf" extension, and a trailing quantisation suffix ("-Q4_K_M", "-f16").
+tmux_model_short() { # tmux_model_short <model>
+  local m=$1
+  m=${m##*/}
+  m=${m%.gguf}
+  m=$(sed -E 's/-[Qq][0-9]+(_[A-Za-z0-9]+)*$//; s/-[Ff]16$//' <<<"$m")
+  printf '%s' "$m"
+}
+# Backend/provider label for the status line: the resolved backend id if the
+# profile has one (endpoint backends, or "local"), else its provider id.
+tmux_backend_short() { # tmux_backend_short <name>
+  local name=$1 backend; backend=$(profile_get "$name" backend)
+  [[ -n $backend ]] || backend=$(profile_get "$name" provider)
+  printf '%s' "${backend:-?}"
+}
+tmux_status_left() { # tmux_status_left <name> -> "<name> · <model> @ <backend>"
+  local name=$1 model; model=$(tmux_model_short "$(profile_get "$name" model)")
+  printf '%s · %s @ %s' "$(tmux_escape_format "$name")" "$(tmux_escape_format "${model:-?}")" "$(tmux_escape_format "$(tmux_backend_short "$name")")"
+}
+# <task title (harness delegates) or job title> · %H:%M (tmux expands %H:%M
+# itself: status-right is run through strftime, and both status strings go
+# through tmux's own format parser, so a literal "#" or "%" in free text
+# (a job title, in particular) must be doubled or it is read as a tmux
+# format/command substitution, not shown as-is).
+tmux_escape_format() { sed 's/#/##/g; s/%/%%/g' <<<"$1"; }
+tmux_status_right() { # tmux_status_right <name>
+  local name=$1 tt; tt=$(profile_get "$name" task_title)
+  [[ -n $tt ]] || tt=$(job_title "$name")
+  printf '%s · %%H:%%M' "$(tmux_escape_format "${tt:-$name}")"
+}
+tmux_window_name() { # tmux_window_name <name> -> "<model>@<backend>"
+  local name=$1 model; model=$(tmux_model_short "$(profile_get "$name" model)")
+  printf '%s@%s' "${model:-$name}" "$(tmux_backend_short "$name")"
+}
+# Push the status line + window name onto a name's tmux server, if its
+# session is already up. Safe to call whenever (a no-op otherwise); called
+# both right after the session is created (open_agent_window, below) and
+# again whenever `session` (re)starts an agent's chat, so a long-lived server
+# picks up a profile change (agent_provision in lib/agents/hermes.sh).
+tmux_apply_status() { # tmux_apply_status <name>
+  have tmux || return 0
+  session_alive "$1" || return 0
+  local name=$1 session; session=$(tmux_session "$name")
+  tmux_for "$name" \
+    set-option -t "$session" status-left "$(tmux_status_left "$name")" \
+    ";" set-option status-right "$(tmux_status_right "$name")" \
+    ";" set-option status-left-length 60 \
+    ";" set-option status-right-length 60 \
+    ";" rename-window "$(tmux_window_name "$name")" \
+    >/dev/null 2>&1 || true
 }
 window_address() {
   have hyprctl || return 0
@@ -89,7 +158,12 @@ open_agent_window() { # open_agent_window <name>
     # which would hide the window from window_address and make every Chat open a
     # duplicate. Pin the title on this agent's private server only.
     inner=(tmux -S "$(tmux_socket "$name")" new-session -A -s "$(tmux_session "$name")" -- "$OAL_SELF" session "$name"
-           ";" set-option -g set-titles on ";" set-option -g set-titles-string "$(window_title "$name")")
+           ";" set-option -g set-titles on ";" set-option -g set-titles-string "$(window_title "$name")"
+           ";" set-option -t "$(tmux_session "$name")" status-left "$(tmux_status_left "$name")"
+           ";" set-option status-right "$(tmux_status_right "$name")"
+           ";" set-option status-left-length 60
+           ";" set-option status-right-length 60
+           ";" rename-window "$(tmux_window_name "$name")")
   else
     warn "tmux not found; the session will not survive closing its window (omarchy pkg add tmux)"
     inner=("$OAL_SELF" session "$name")

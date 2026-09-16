@@ -177,6 +177,56 @@ fi
 out=$("$L" --dry-run switch 2>&1) || tfail "switch dry-run"; grep -q "issue-triage" <<<"$out" || tfail "switch rows"
 pass "events, blockers, status, settings, rotation, stop, switch"
 
+echo "== event_emit: why/recommend/detail/actions/node/project, backward compat with the old 4-arg form"
+event_emit rich-test note "plain 4-arg call still works" >/dev/null 2>&1 || tfail "event_emit: old 4-arg call form must still work"
+grep -q '"agent":"rich-test".*"kind":"note".*"message":"plain 4-arg call still works"' "$OAL_EVENTS" || tfail "event_emit: plain call missing"
+"$L" event rich-test blocker "Approve \$0.03 for x via y on p1 (n1)" --key rt-1 --project p1 --node n1 \
+  --why "only session is metered" --recommend "approve or decline" --detail "full reason here" \
+  --action 'Approve $0.03=["harness","approve","p1","0.03","--request","abc"]' \
+  --action 'Decline=["harness","decline","p1","--request","abc"]' >/dev/null || tfail "event with rich fields"
+grep -q '"key":"rt-1".*"why":"only session is metered".*"recommend":"approve or decline".*"detail":"full reason here".*"actions":\[{"label":"Approve \$0.03","argv":\["harness","approve","p1","0.03","--request","abc"\]}' "$OAL_EVENTS" \
+  || { grep '"key":"rt-1"' "$OAL_EVENTS"; tfail "event_emit: rich fields not stored on the event line"; }
+jq -e '."rich-test/rt-1" | .why == "only session is metered" and .recommend == "approve or decline" and .detail == "full reason here"
+       and (.actions | length) == 2 and .actions[0].argv == ["harness","approve","p1","0.03","--request","abc"]
+       and .node == "n1" and .project == "p1"' "$S/blockers.json" >/dev/null \
+  || { cat "$S/blockers.json"; tfail "event_emit: rich fields not carried into blockers.json"; }
+"$L" event rich-test blocker_cleared "" --key rt-1 >/dev/null
+"$L" event rich-test note "bad action" --action 'onlylabel' >/dev/null 2>&1 && tfail "event: --action without LABEL=ARGV_JSON must be refused"
+pass "event_emit: why/recommend/detail/actions/node/project stored on events and blockers; old 4-arg form unaffected"
+
+echo "== cmd_session exit trap: harness_job_forget's marker downgrades 'killed from outside' to an info note; without one it stays a blocker"
+# Registers the EXACT one-line trap bin/omarchy-agent-launcher's cmd_session does (calling
+# the real session_exit_notify from lib/events.sh, not a re-implementation of its logic),
+# standalone (no tmux/hermes needed): a background bash process registers it, gets
+# signalled, and we read what it logged. Live 2026-09-16: every hns-* delegate the harness
+# reaper cleaned up (job done/failed/throttled, or reassigned) alarmed the user with
+# "killed from outside" for a cleanup the launcher did on purpose.
+TRAPTEST="$T/traptest.sh"
+cat >"$TRAPTEST" <<'EOF'
+#!/bin/bash
+source "$1/lib/events.sh"
+name=$2
+trap 'trap - HUP TERM; session_exit_notify "$name"; exit 129' HUP TERM
+sleep 5
+EOF
+chmod +x "$TRAPTEST"
+"$TRAPTEST" "$ROOT" hns-extkill >/dev/null 2>&1 & tp=$!
+sleep 0.3; kill -HUP "$tp" 2>/dev/null; wait "$tp" 2>/dev/null || true
+grep -qE '"agent":"hns-extkill".*"kind":"session_exited".*"level":"blocker"' "$OAL_EVENTS" \
+  || tfail "an external kill with no stopping-marker must still raise a blocker"
+mkdir -p "$OAL_STATE/stopping"; : >"$OAL_STATE/stopping/hns-selfkill"
+"$TRAPTEST" "$ROOT" hns-selfkill >/dev/null 2>&1 & tp=$!
+sleep 0.3; kill -HUP "$tp" 2>/dev/null; wait "$tp" 2>/dev/null || true
+grep -qE '"agent":"hns-selfkill".*"kind":"session_exited".*"level":"info"' "$OAL_EVENTS" \
+  || tfail "a fresh stopping-marker must downgrade the exit event to an info note"
+[[ ! -f "$OAL_STATE/stopping/hns-selfkill" ]] || tfail "the trap must consume (rm) the marker it acted on"
+mkdir -p "$OAL_STATE/stopping"; : >"$OAL_STATE/stopping/hns-stalekill"; touch -d '-90 seconds' "$OAL_STATE/stopping/hns-stalekill"
+"$TRAPTEST" "$ROOT" hns-stalekill >/dev/null 2>&1 & tp=$!
+sleep 0.3; kill -HUP "$tp" 2>/dev/null; wait "$tp" 2>/dev/null || true
+grep -qE '"agent":"hns-stalekill".*"kind":"session_exited".*"level":"blocker"' "$OAL_EVENTS" \
+  || tfail "a stale (>60s) marker must not suppress a later external kill"
+pass "cmd_session exit trap: a fresh stopping-marker downgrades to info and is consumed; no marker or a stale one stays a blocker"
+
 echo "== kanban mirror (sqlite fixture)"
 if command -v sqlite3 >/dev/null; then
   profile_write kb hermes local ollama none qwen3:8b http://localhost:11434/v1 interactive ""
@@ -581,6 +631,13 @@ case "$1" in
   session)
     printf '%s\n' "$*" >>"__SESSADD__"
     sub=$2
+    # A test may force `session add` to be refused (mirrors the harness's own IP-table
+    # refusal of a non-IP-safe vendor registering as orchestrator) to exercise the
+    # launcher's own event_emit "register refused" surfacing.
+    if [[ $sub == add && -f "__HD__/session-add-fail" ]]; then
+      echo "error: forced session-add failure for test" >&2
+      exit 1
+    fi
     sid="" role="" tier=""
     args=("$@"); i=2
     while (( i < ${#args[@]} )); do
@@ -866,14 +923,23 @@ JSON
   ) || exit 1
   pass "harness keepalive: idle launcher-owned rix sessions carry the dispatch loop's pid; others untouched"
 
-  # ---- forgetting a delegate keeps its run log under the state dir ---------------------
+  # ---- forgetting a delegate keeps its run log under the state dir, drops a
+  #      stopping-marker for the exit trap, and both notify subcommands read it back ------
   (
-    mkdir -p "$(stage_dir hns-keep-log)/runs"; echo "delegate said hello" >"$(stage_dir hns-keep-log)/runs/20260101-000000.log"
+    mkdir -p "$(stage_dir hns-keep-log)/runs"
+    printf 'delegate said hello\nhermes --resume abc123\n' >"$(stage_dir hns-keep-log)/runs/20260101-000000.log"
+    rm -f "$OAL_STATE/stopping/hns-keep-log"
     harness_job_forget hns-keep-log
     [[ -d $(stage_dir hns-keep-log) ]] && tfail "forget must remove the staged agent"
     grep -q "delegate said hello" "$HARNESS_STATE_DIR/runs/hns-keep-log/20260101-000000.log" || tfail "forget must keep the delegate's run log in the state dir"
+    [[ -f "$OAL_STATE/stopping/hns-keep-log" ]] || tfail "forget must drop a stopping-marker before it kills the delegate's session"
   ) || exit 1
-  pass "harness_job_forget keeps the delegate's run logs as evidence"
+  out=$("$L" notify runlog hns-keep-log 2>&1) || tfail "notify runlog on a forgotten (profile-less) delegate must still succeed"
+  grep -q "delegate said hello" <<<"$out" || { echo "$out"; tfail "notify runlog: expected the forgotten delegate's log content"; }
+  out=$("$L" notify runinfo hns-keep-log 2>&1) || tfail "notify runinfo failed"
+  [[ $(jq -r '.resume' <<<"$out") == "hermes --resume abc123" ]] || { echo "$out"; tfail "notify runinfo: expected a parsed hermes --resume line"; }
+  [[ -n $(jq -r '.log' <<<"$out") ]] || { echo "$out"; tfail "notify runinfo: expected a non-empty log path"; }
+  pass "harness_job_forget keeps the delegate's run logs as evidence, drops a stopping-marker; notify runlog/runinfo read a forgotten delegate back"
 
   # ---- a delegate refusal backs the session off (no 3-second claim loop) ---------------
   (
@@ -949,6 +1015,19 @@ JSON
   rm -f "$HD/sessions.json"
   printf '%s' "$ov_backup" >"$HARNESS_DATA_DIR/overview.json"
   pass "harness register: the harness CLI, not a stale overview.json, decides what is already registered"
+
+  echo "== harness register: a refused session add surfaces as an event (why/recommend), not just a console warn"
+  profile_write hns-regfail hermes local anthropic api-key claude-sonnet-5 - interactive ""
+  : >"$HD/session-add-fail"
+  harness_register_rix hns-regfail /tmp/proj-regfail 1 p-poor >/dev/null 2>&1 && tfail "register must propagate the harness CLI's refusal"
+  grep -q '"agent":"hns-regfail".*"kind":"note".*"level":"warn"' "$OAL_EVENTS" || { cat "$OAL_EVENTS"; tfail "register refused: expected an event, not just a console warn"; }
+  reg_line=$(grep '"agent":"hns-regfail"' "$OAL_EVENTS" | tail -n1)
+  [[ -n $(jq -r '.why' <<<"$reg_line") ]] || { echo "$reg_line"; tfail "register refused: event must carry a why"; }
+  [[ -n $(jq -r '.recommend' <<<"$reg_line") ]] || { echo "$reg_line"; tfail "register refused: event must carry a recommend"; }
+  [[ $(jq -r '.project' <<<"$reg_line") == p-poor ]] || { echo "$reg_line"; tfail "register refused: event must carry its project"; }
+  rm -f "$HD/session-add-fail"
+  "$L" remove hns-regfail --yes >/dev/null 2>&1 || true
+  pass "harness register: a refused session add emits an event with why/recommend/project"
 
   grep -qxF "p-poor:poor-node" "$HARNESS_STATE_DIR/requested.txt" || tfail "requested.txt should still list the underfunded packet before approval"
   harness_approve p-poor 0.0002 "go ahead" >/dev/null   # a harness binary is on PATH: this goes through the CLI, not curl
@@ -1090,6 +1169,37 @@ JSON
   n_throttle1=$(grep -c "throttled, retrying at 2026-01-01T00:05:00Z" "$OAL_EVENTS" || true)
   [[ $n_throttle1 == 1 ]] || tfail "notify_sync: expected exactly one throttled note, got $n_throttle1"
 
+  # the cost-approval blocker must explain itself (why/recommend/project) and carry
+  # Approve/Decline actions whose argv the panel can run as-is
+  blk=$(blockers_json | jq -c '.["hns-est/approval-p-rich"]')
+  [[ $(jq -r '.why' <<<"$blk") == *metered* ]] || { echo "$blk"; tfail "notify_sync: approval blocker must carry a why"; }
+  [[ -n $(jq -r '.recommend' <<<"$blk") ]] || { echo "$blk"; tfail "notify_sync: approval blocker must carry a recommend"; }
+  [[ $(jq -r '.project' <<<"$blk") == p-rich ]] || { echo "$blk"; tfail "notify_sync: approval blocker must carry its project"; }
+  [[ $(jq '.actions | length' <<<"$blk") == 2 ]] || { echo "$blk"; tfail "notify_sync: approval blocker must carry two actions"; }
+  jq -e '.actions[0].argv[0:2] == ["harness","approve"] and .actions[1].argv[0:2] == ["harness","decline"]' <<<"$blk" >/dev/null \
+    || { echo "$blk"; tfail "notify_sync: actions must run harness approve/decline"; }
+  jq -e '(.actions[0].argv | index("--request")) == null and (.actions[1].argv | index("--request")) == null' <<<"$blk" >/dev/null \
+    || { echo "$blk"; tfail "notify_sync: a pending_approval with no request id must not fabricate --request"; }
+  # throttled note: same treatment
+  throttled_line=$(grep '"message":"harness: s-rich throttled, retrying at 2026-01-01T00:05:00Z"' "$OAL_EVENTS" | tail -n1)
+  [[ -n $throttled_line ]] || tfail "notify_sync: throttled note not found"
+  [[ -n $(jq -r '.why' <<<"$throttled_line") ]] || { echo "$throttled_line"; tfail "notify_sync: throttled note must carry a why"; }
+  [[ -n $(jq -r '.recommend' <<<"$throttled_line") ]] || { echo "$throttled_line"; tfail "notify_sync: throttled note must carry a recommend"; }
+
+  # a project whose pending approval carries a request id (the keyed pending_approvals map,
+  # not the legacy singular view) must have that id echoed into both actions' argv
+  jq '.projects += [{id:"p-rid", repo_path:"/tmp/proj-rid", pending_approvals:{"req-abc":{node:"n9", estimate_usd:0.09, model:"m", vendor:"v", reason:"needs a request id", at:"2026-01-01T00:00:00Z"}}}]
+      | .sessions += [{id:"s-rid", project:"p-rid", worker:"rix", label:"hns-rid"}]' \
+    "$HARNESS_DATA_DIR/overview.json" >"$HD/overview-rid.json"
+  mv -f "$HD/overview-rid.json" "$HARNESS_DATA_DIR/overview.json"
+  harness_notify_sync
+  blk2=$(blockers_json | jq -c '.["hns-rid/approval-p-rid:req-abc"]')
+  [[ $(jq -r '.node' <<<"$blk2") == n9 ]] || { echo "$blk2"; tfail "notify_sync: request-id fixture must carry its node"; }
+  jq -e '.actions[0].argv == ["harness","approve","p-rid","0.09","--request","req-abc"]
+         and .actions[1].argv == ["harness","decline","p-rid","--request","req-abc"]' <<<"$blk2" >/dev/null \
+    || { echo "$blk2"; tfail "notify_sync: a request id must be echoed into both actions' argv"; }
+  pass "harness_notify_sync: approval blocker carries why/recommend/actions; a request id is echoed into the actions' argv; throttled note carries why/recommend"
+
   harness_notify_sync
   harness_notify_sync
   [[ $(blockers_json | jq '[.[] | select(.key=="approval-p-rich")] | length') == 1 ]] || tfail "notify_sync: rerun must stay idempotent (still exactly one blocker)"
@@ -1152,6 +1262,34 @@ JSON
   [[ ! -d $(stage_dir "$slug1") ]] || tfail "harness_job_forget must remove the transient stage dir"
   [[ ! -f $(profile_path "$slug1") ]] || tfail "harness_job_forget must remove the transient profile"
   pass "harness_dispatch_heartbeat: withdrawn packet -> job forgotten, session cleared, cancelled event, stage/profile removed"
+
+  # ---- money honesty (live 2026-09-16, a metered DeepSeek run): a delegate that wrote its
+  #      OWN receipt (the work-packet body used to tell it to) can already be usage_json-
+  #      tracked by the time the harness closes the node and withdraws the claimed packet
+  #      -- heartbeat must still book that usage with a late receipt before forgetting the
+  #      delegate, not just log a plain "withdrawn" note and drop it on the floor --------
+  : >"$DELEGATE_LOG"; : >"$SESSADD"; : >"$RECEIPTS"
+  PKT_MH="$HD/pkt-mh.md"; printf 'mh body\n' >"$PKT_MH"
+  printf '[{"node":"mh","path":"%s"}]' "$PKT_MH" >"$HD/inbox/p-mh.json"
+  jq -n --arg t "$(date -Is)" '{
+    projects: [ {id:"p-mh", repo_path:"/tmp/proj-mh"} ],
+    sessions: [ {id:"s-mh", project:"p-mh", worker:"rix", label:"hns-free"} ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+  mk_repos; harness_dispatch_once || true
+  JF_MH="$HARNESS_JOBS_DIR/p-mh/mh.json"
+  [[ -f $JF_MH ]] || tfail "money honesty: expected a job file for mh"
+  slug_mh=$(jq -r '.slug' "$JF_MH")
+  usage_json() { jq -nc --arg n "$slug_mh" '{agents:[{name:$n, cost_usd:0.09, prompt:900, output:150}]}'; }
+  mv -f "${PKT_MH}.claimed" "${PKT_MH}.claimed.cancelled"
+  : >"$SESSADD"
+  harness_dispatch_heartbeat
+  unset -f usage_json; source "$ROOT/lib/usage.sh"   # restore the real usage.sh function
+  [[ ! -f $JF_MH ]] || tfail "money honesty: job file must still be removed once its usage is booked"
+  grep -q "node=mh status=done usd=0.09 tin=900 tout=150" "$RECEIPTS" \
+    || { cat "$RECEIPTS"; tfail "money honesty: a late usage receipt must be written before the delegate is forgotten"; }
+  grep -q "harness:p-mh:mh:cancelled" "$OAL_EVENTS" || tfail "money honesty: the withdrawn note must still be emitted alongside the late receipt"
+  pass "harness_dispatch_heartbeat: a withdrawn packet whose delegate already has usage gets a late receipt (--usd/--tokens) before being forgotten"
 
   # ---- harness_dispatch_reap: a finished job -> receipt written, then session set
   #      --clear-pid, and its stage dir removed ---------------------------------------

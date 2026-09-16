@@ -286,6 +286,8 @@ Item {
           else if (dash.tab === "plan" && (t === "f" || t === "F")) { if (dash.planTabRef) dash.planTabRef.toggleCriticalOnly() }
           else if (dash.tab === "plan" && (t === "o" || t === "O")) { if (dash.planTabRef) dash.planTabRef.cycleRoleFilter() }
           else if (dash.tab === "plan" && (t === "m" || t === "M")) { if (dash.planTabRef) dash.planTabRef.cycleModelFilter() }
+          else if (dash.tab === "notifications" && (t === "d" || t === "D")) { if (dash.currentTab && typeof dash.currentTab.dismissSelected === "function") dash.currentTab.dismissSelected() }
+          else if (dash.tab === "notifications" && t === "H") { if (dash.currentTab && typeof dash.currentTab.handToRixSelected === "function") dash.currentTab.handToRixSelected() }
           else if (dash.tab === "plan" && (t === "i" || t === "I")) { if (dash.planTabRef) dash.planTabRef.toggleInspector() }
           else if (dash.tab === "plan" && (t === "s" || t === "S")) { if (dash.planTabRef) dash.planTabRef.toggleSessions() }
         }

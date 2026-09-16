@@ -470,6 +470,11 @@ harness_register_rix() {
           # IP-unsafe vendor registering as orchestrator -- surface its stderr as-is
           # rather than pre-judging the vendor list here.
           warn "harness session add failed for project $p ($label): ${sess_err:-no output}"
+          event_emit "$profile" note "harness: register refused for $label on $p" --source harness --level warn \
+            --ref "harness:$p:$label:register_refused" --project "$p" \
+            --why "The harness declined to register this session: ${sess_err:-no output}" \
+            --recommend "Check $profile's backend sign-in/API key and budget, then run harness register again." \
+            --detail "${sess_err:-no output}"
           rc=1
         fi
       fi
@@ -1034,7 +1039,9 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
       touch "$skipf"
       if ! grep -qxF "$skipkey" "$skipf"; then
         event_emit "$profile" note "harness: $node is an orchestration packet ($command) but $profile's harness session is not registered as orchestrator; skipping" \
-          --source harness --level warn --ref "$ref:skipped"
+          --source harness --level warn --ref "$ref:skipped" --project "$proj" --node "$node" \
+          --why "Only a session registered as orchestrator may claim an orchestration packet ($command); $profile's session is not one." \
+          --recommend "Register $profile as orchestrator (harness register --role orchestrator) or leave this to a session that already is -- it will pick the packet up on its own next sweep."
         printf '%s\n' "$skipkey" >>"$skipf"
       fi
       return 0
@@ -1045,18 +1052,28 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
   model=$(harness_profile_model "$profile")   # #12: same fallback (profile model, else its backend's) used everywhere else
   vendor=$(harness_profile_vendor "$profile")
   if [[ -z $backend ]]; then
-    event_emit "$profile" note "harness: profile $profile has no backend; cannot dispatch $node" --source harness --level warn --ref "$ref:failed"
+    event_emit "$profile" note "harness: profile $profile has no backend; cannot dispatch $node" --source harness --level warn --ref "$ref:failed" \
+      --project "$proj" --node "$node" \
+      --why "$profile has no backend configured, so the harness has nothing to run this node on." \
+      --recommend "Set a backend for $profile (Agents tab), or assign $node to a different session."
     return 0
   fi
   local class; class=$(harness_cost_class "$profile" 2>/dev/null)
   case "$class" in
     free|subscription|metered) ;;
-    *) event_emit "$profile" note "harness: cost class for $profile is unresolvable; refusing $node" --source harness --level warn --ref "$ref:unresolvable"; return 0 ;;
+    *) event_emit "$profile" note "harness: cost class for $profile is unresolvable; refusing $node" --source harness --level warn --ref "$ref:unresolvable" \
+         --project "$proj" --node "$node" \
+         --why "$profile's backend/vendor doesn't map to a known cost class (free, subscription, or metered), so the harness can't tell whether this needs your approval." \
+         --recommend "Check $profile's backend and vendor settings."
+       return 0 ;;
   esac
   local estimate="0"
   if [[ $class == metered ]]; then
     if ! estimate=$(harness_estimate_usd "$profile" "$path"); then
-      event_emit "$profile" note "harness: no known price for $model; refusing $node (metered, unknown cost)" --source harness --level warn --ref "$ref:failed"
+      event_emit "$profile" note "harness: no known price for $model; refusing $node (metered, unknown cost)" --source harness --level warn --ref "$ref:failed" \
+        --project "$proj" --node "$node" \
+        --why "$model is metered but has no known price, so the harness can't estimate what $node would cost." \
+        --recommend "Add a price for $model, or approve this node manually with --approved-usd."
       return 0
     fi
     # #5: `cost --json`'s remaining_usd alone overstates what is actually free
@@ -1075,7 +1092,9 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
       touch "$capf"
       if ! grep -qxF "$capkey" "$capf"; then
         event_emit "$profile" note "harness: $node would push project $proj over its daily cap (\$$cap; already spent \$$dspent today) -- refusing, not requesting (a cap can't be approved away)" \
-          --source harness --level warn --ref "$ref:dailycap"
+          --source harness --level warn --ref "$ref:dailycap" --project "$proj" --node "$node" \
+          --why "Project $proj already spent \$$dspent of its \$$cap daily cap; $node would push it over." \
+          --recommend "Raise the daily cap for $proj if this work is worth it today, or wait until the cap resets."
         printf '%s\n' "$capkey" >>"$capf"
       fi
       return 0
@@ -1088,7 +1107,9 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
       if ! grep -qxF "$key" "$reqf"; then
         harness_cost_request "$proj" "$node" "$model" "$backend" "$estimate" "harness dispatch: $node needs \$$estimate" "$profile"
         printf '%s\n' "$key" >>"$reqf"
-        event_emit "$profile" note "harness: requested \$$estimate for $node (project $proj, \$$avail remaining after reservations)" --source harness --ref "$ref:requested"
+        event_emit "$profile" note "harness: requested \$$estimate for $node (project $proj, \$$avail remaining after reservations)" --source harness --ref "$ref:requested" \
+          --project "$proj" --node "$node" \
+          --recommend "An Approve/Decline blocker for this request follows shortly; nothing to do until it appears."
       fi
       return 0
     fi
@@ -1132,7 +1153,7 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
     run_dir="$HARNESS_STATE_DIR/orch/$proj/$node"; mkdir -p "$run_dir"
     trailer=$'\n\nFirst run: '"$bin"' brief --project '"$proj"' --session '"$sid"$'\n(the harness CLI is that exact path; it is not on PATH -- never search the filesystem for it)\nThis is a planning task: do NOT read, create, copy or modify any file and do not run tests -- everything you need is in this packet and in `harness brief`/`harness show`. Do not write the outbox receipt file yourself. Your FINAL message must be exactly one JSON object -- the patch, with an "action" key -- with no prose before or after it and no markdown fence; the launcher extracts it and writes the receipt. A reply without such an object fails this packet.'
   else
-    trailer=$'\n\nFirst run: '"$bin"' show --project '"$proj"' --node '"$node"$'\n(the harness CLI is that exact path; it is not on PATH -- never search the filesystem for it)\n'"$where"$'\nEdit ONLY the files listed under Touches, in place. Never create new files or directories, never copy or re-create the repo or its tests anywhere else, never search the filesystem for another copy: if a file in Touches is missing, stop and report it. When finished, run the oracle command from the working directory and print its output.'
+    trailer=$'\n\nFirst run: '"$bin"' show --project '"$proj"' --node '"$node"$'\n(the harness CLI is that exact path; it is not on PATH -- never search the filesystem for it)\n'"$where"$'\nEdit ONLY the files listed under Touches, in place. Never create new files or directories, never copy or re-create the repo or its tests anywhere else, never search the filesystem for another copy: if a file in Touches is missing, stop and report it. When finished, run the oracle command from the working directory and print its output. Do not write the outbox receipt file yourself -- the launcher writes it, with your token usage, when you finish; print the oracle output instead.'
   fi
   local -a saved_opts=("${OPTS[@]}")
   OPTS=(--backend "$backend" --name "$name" --task-title "$node" --model "$model" --job-stdin)
@@ -1158,7 +1179,10 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
   if (( drc != 0 )); then
     warn "harness: delegate refused to start $node (exit $drc)"
     mv -f "$claimed" "$path" 2>/dev/null || true   # un-claim so a future sweep can retry
-    event_emit "$profile" note "harness: $node did not start (delegate exit $drc); retrying in 5 min" --source harness --level warn --ref "$ref:failed:$(date +%s)"
+    event_emit "$profile" note "harness: $node did not start (delegate exit $drc); retrying in 5 min" --source harness --level warn --ref "$ref:failed:$(date +%s)" \
+      --project "$proj" --node "$node" \
+      --why "The delegate for $node exited immediately (code $drc) instead of starting the job -- usually a sign-in, budget, or config problem with $profile." \
+      --recommend "Check $profile's backend sign-in and budget; the harness retries $node in 5 minutes on its own, no action required if this was transient."
     harness_record_backoff "$sid" 300   # not every 3 s: a refusal needs a human or a fix, not a hot loop
     return 0
   fi
@@ -1180,7 +1204,7 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
   if [[ -n $pid ]]; then "$bin" session set --project "$proj" --session "$sid" --pid "$pid" >/dev/null 2>&1 || true
   else "$bin" heartbeat --project "$proj" --session "$sid" >/dev/null 2>&1 || true; fi
   HARNESS_SLOTS_LEFT=$(( ${HARNESS_SLOTS_LEFT:-1} - 1 ))
-  event_emit "$profile" note "harness: started $node ($name)" --source harness --ref "$ref:start"
+  event_emit "$profile" note "harness: started $node ($name)" --source harness --ref "$ref:start" --project "$proj" --node "$node"
 }
 
 # Forget a finished or cancelled delegate: its tmux server, staged home, profile and
@@ -1188,6 +1212,17 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
 harness_job_forget() { # <slug>
   local slug=$1
   [[ -n $slug && $slug == hns-* ]] || return 0
+  # We are about to kill this delegate's tmux session ourselves (job done/failed/
+  # throttled, or the harness withdrew its node): the killed session's own `cmd_session`
+  # exit trap (bin/omarchy-agent-launcher) would otherwise read this as an external kill
+  # and raise a blocker ("killed from outside") for a cleanup WE did (live 2026-09-16, the
+  # user asked why every reaped hns-* delegate alarmed them). Drop a marker it can check
+  # instead. Prune markers older than 60s first -- session_kill is a no-op once the pane
+  # already exited on its own, so a marker for that slug would otherwise sit around and
+  # wrongly wave off a later, genuine external kill of a same-named node's next delegate.
+  find "$OAL_STATE/stopping" -maxdepth 1 -type f -mmin +1 -delete 2>/dev/null || true
+  mkdir -p "$OAL_STATE/stopping" 2>/dev/null || true
+  : >"$OAL_STATE/stopping/$slug" 2>/dev/null || true
   session_kill "$slug" 2>/dev/null || true
   # Keep the delegate's run logs: they are the only evidence of what it did (live
   # 2026-09-16 a delegate failed three oracles under the new systemd unit and nothing was
@@ -1211,17 +1246,44 @@ harness_dispatch_heartbeat() {
   [[ -d $HARNESS_JOBS_DIR ]] || return 0
   local jf
   while IFS= read -r -d '' jf; do
-    local job proj node sid profile slug bin claimed
+    local job proj node sid profile slug bin claimed model vendor
     job=$(cat "$jf" 2>/dev/null) || continue
     proj=$(jq -r '.project // empty' <<<"$job"); node=$(jq -r '.node // empty' <<<"$job")
     sid=$(jq -r '.session // empty' <<<"$job"); profile=$(jq -r '.profile // empty' <<<"$job")
     slug=$(jq -r '.slug // empty' <<<"$job"); bin=$(jq -r '.bin // empty' <<<"$job")
     claimed=$(jq -r '.claimed // empty' <<<"$job")
+    model=$(jq -r '.model // empty' <<<"$job"); vendor=$(jq -r '.vendor // empty' <<<"$job")
     [[ -n $proj && -n $sid && -n $bin ]] || continue
     if [[ -n $claimed && ! -f $claimed ]]; then
+      # Money honesty (live 2026-09-16, a metered DeepSeek run): a delegate can finish and
+      # write its OWN receipt -- the work-packet body still told it to at the time; the
+      # trailer now tells it not to (harness_dispatch_packet, below) -- before this sweep
+      # notices anything. The harness accepts that receipt, closes the node, and withdraws
+      # the claimed packet as part of that; this branch used to see only "claimed file
+      # gone" and call it a plain withdrawal, forgetting the delegate without ever booking
+      # its usage (spent_usd stayed 0 live). If usage_json still has anything for this
+      # slug, send a late receipt for it before forgetting -- skip only when there is
+      # truly nothing to book (a genuine mid-job reassignment with no output yet).
+      local usage_row usd_actual tok_in tok_out
+      usage_row=$(declare -F usage_json >/dev/null && usage_json | jq -c --arg n "$slug" '.agents[]? | select(.name == $n)' 2>/dev/null)
+      usd_actual=$(jq -r '.cost_usd // empty' <<<"$usage_row" 2>/dev/null)
+      tok_in=$(jq -r '.prompt // empty' <<<"$usage_row" 2>/dev/null)
+      tok_out=$(jq -r '.output // empty' <<<"$usage_row" 2>/dev/null)
+      if [[ ( -n $usd_actual && $usd_actual != null ) || ( -n $tok_in && $tok_in != null ) || ( -n $tok_out && $tok_out != null ) ]]; then
+        local -a largs=(receipt --project "$proj" --session "$sid" --node "$node" --status done --evidence "usage after withdrawal")
+        [[ -n $model ]] && largs+=(--model "$model")
+        [[ -n $vendor ]] && largs+=(--vendor "$vendor")
+        [[ -n $usd_actual && $usd_actual != null ]] && largs+=(--usd "$usd_actual")
+        [[ -n $tok_in && $tok_in != null ]] && largs+=(--tokens-in "$tok_in")
+        [[ -n $tok_out && $tok_out != null ]] && largs+=(--tokens-out "$tok_out")
+        "$bin" "${largs[@]}" >/dev/null 2>&1 || warn "harness late usage receipt failed for $node"
+      fi
       harness_job_forget "$slug"
       "$bin" session set --project "$proj" --session "$sid" --clear-pid >/dev/null 2>&1 || true
-      event_emit "$profile" note "harness: $node withdrawn by the harness; delegate stopped" --source harness --ref "harness:$proj:$node:cancelled"
+      event_emit "$profile" note "harness: $node withdrawn by the harness; delegate stopped" --source harness --ref "harness:$proj:$node:cancelled" \
+        --project "$proj" ${node:+--node "$node"} \
+        --why "The harness released, cancelled, or reassigned $node while $profile's delegate was working on it." \
+        --recommend "No action needed unless this repeats -- then check for a stale session or a reassignment loop on $proj."
       rm -f "$jf"
       continue
     fi
@@ -1374,7 +1436,11 @@ harness_dispatch_reap() {
     fi
     "$bin" session set --project "$proj" --session "$sid" --clear-pid >/dev/null 2>&1 || true
     harness_prune_requested_key "$proj" "$node"
-    event_emit "$profile" note "harness: $node $status" --source harness --ref "harness:$proj:$node:$status"
+    local status_recommend=""
+    [[ $status == failed ]] && status_recommend="Check $HARNESS_STATE_DIR/runs/${slug:-$name}/ for its run log (the Notifications card's View run log button opens it) to see what went wrong."
+    [[ $status == throttled ]] && status_recommend="$model via $vendor hit a rate limit; the harness will re-solve $node onto another eligible session or retry once it clears."
+    event_emit "$profile" note "harness: $node $status" --source harness --ref "harness:$proj:$node:$status" \
+      --project "$proj" --node "$node" ${status_recommend:+--recommend "$status_recommend"}
     harness_job_forget "$(jq -r '.slug // empty' <<<"$job")"
     rm -f "$jf"
   done < <(find "$HARNESS_JOBS_DIR" -mindepth 2 -maxdepth 2 -name '*.json' -print0 2>/dev/null)
@@ -1599,8 +1665,21 @@ harness_notify_sync() {
     [[ -n $agent ]] || agent=rix
     estimate=$(jq -r '.estimate_usd // "?"' <<<"$row"); model=$(jq -r '.model // "?"' <<<"$row")
     vendor=$(jq -r '.vendor // "?"' <<<"$row"); reason=$(jq -r '.reason // ""' <<<"$row"); node=$(jq -r '.node // ""' <<<"$row")
+    # Buttons run exactly what the panel/CLI would (harness approve/decline PROJECT USD
+    # [--request ID]) so NotificationsTab.qml can fire them without re-deriving argv from
+    # the blocker's key/ref/message text.
+    local approve_argv decline_argv
+    approve_argv=$(jq -nc --arg p "$id" --arg u "$estimate" --arg r "$rid" \
+      '["harness","approve",$p,$u] + (if $r != "" then ["--request",$r] else [] end)')
+    decline_argv=$(jq -nc --arg p "$id" --arg r "$rid" \
+      '["harness","decline",$p] + (if $r != "" then ["--request",$r] else [] end)')
     event_emit "$agent" blocker "Approve \$$estimate for $model via $vendor on $id${node:+ ($node)}: $reason" \
-      --source harness --level blocker --ref "harness:$key:approval:$at" --key "approval-$key"
+      --source harness --level blocker --ref "harness:$key:approval:$at" --key "approval-$key" \
+      --project "$id" ${node:+--node "$node"} \
+      --why "The only session eligible for $id${node:+ ($node)} right now is metered ($model via $vendor); the harness needs your approval before it can spend to run this." \
+      --recommend "Approve \$$estimate if you want this done on $model now; Decline to let a free or subscription backend (or the local model) try instead." \
+      --detail "$reason" \
+      --action "Approve \$$estimate=$approve_argv" --action "Decline=$decline_argv"
     printf 'approval%s%s%s%s%s%s\n' "$tab" "$key" "$tab" "$at" "$tab" "$agent" >>"$tmp"
   done < <(jq -c '.[]?' <<<"$rows")
 
@@ -1628,7 +1707,9 @@ harness_notify_sync() {
     if [[ -n $line ]] && [[ $(cut -f3 <<<"$line") == "$retry" ]]; then
       printf '%s\n' "$line" >>"$tmp"
     else
-      event_emit "$label" note "harness: $sid throttled, retrying at $retry" --source harness --level warn --ref "harness:$sid:throttled:$retry"
+      event_emit "$label" note "harness: $sid throttled, retrying at $retry" --source harness --level warn --ref "harness:$sid:throttled:$retry" \
+        --why "$label's subscription hit its rate limit; work assigned to this session is paused until it clears." \
+        --recommend "Wait until $retry, or register another backend so work keeps moving on this project meanwhile."
       printf 'throttled%s%s%s%s\n' "$tab" "$sid" "$tab" "$retry" >>"$tmp"
     fi
   done < <(jq -c '.sessions[]? | select(.state == "throttled")' <<<"$overview")

@@ -3,6 +3,14 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.17.0
+
+- Agent tmux status line and window name show `<name> · <model> @ <backend>` / `<model>@<backend>` and the task title instead of tmux's default window index, cwd and hostname (the user asked which model `oal-hns-p0-9` was running).
+
+- Notifications: every row now explains itself. `event_emit`/`omarchy-agent-launcher event` gained `--why`, `--recommend`, `--detail`, `--node`/`--project`, and repeatable `--action LABEL=ARGV_JSON`; the harness's own notes (cost approvals, throttled sessions, refused/failed dispatch, daily cap, no known price, withdrawn packets, register refusals) now carry them. Click a notification (or press Enter on it) to expand what it is, why it matters, and what's recommended; buttons are named by effect with a tooltip saying so — **Dismiss** (clears a blocker or hides a warning; sends nothing to the agent), **Hand to Rix** (creates a task for Rix and opens its chat — does not dismiss), **Approve $X / Decline** (run the emitter's own argv when given), **Open in Projects** (deep-links to the project/node), **Chat**. The ambiguous "Resolve" button is gone.
+- A `hns-*` harness delegate the reaper cleans up on purpose (job done/failed/throttled, or its node reassigned) no longer raises a "killed from outside" blocker — a marker written right before the launcher kills its own tmux session downgrades that to an info note; a genuine external kill still alarms you. A forgotten delegate's notification offers **View run log** (its saved run log, `omarchy-agent-launcher notify runlog <slug>`) instead of a dead Chat button.
+- Money honesty: a delegate that already produced usage before its packet was withdrawn (the harness closed the node from the delegate's own receipt before the launcher's reaper got to it) now still gets a late usage receipt booked — this used to drop the real cost/tokens on the floor. The work-packet trailer now also tells delegates not to write their own receipt.
+
 ## 0.16.3
 
 - Metered dispatch: the delegate may spend what the human approved and is free (remaining minus reservations), not the dispatcher's own packet estimate; `cmd_delegate` re-estimated the fuller job text and refused every 3 s. A delegate refusal now backs the session off 5 minutes instead of re-claiming in a hot loop.

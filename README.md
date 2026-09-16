@@ -142,7 +142,7 @@ Enter to open the selected agent's chat, `r` to refresh, Esc to close.
 | **Agents** | every saved agent with a status pill (running / blocked / done / idle), its job, last event, task count, tokens and USD so far, and **Chat**, Stop, Edit job, Remove |
 | **New agent** | the one-page setup form |
 | **Events** | the event log: filter by agent, task, level, or text; click a column header to sort |
-| **Notifications** | open blockers with Chat and Resolve, recent warnings, and the desktop-notification toggle |
+| **Notifications** | open blockers ("NEEDS YOU") and recent warnings; click a row (or press Enter on it) to expand what it is, why it matters, and what's recommended, with buttons named by effect — Dismiss, Hand to Rix, Approve/Decline, Open in Projects, Chat — plus the desktop-notification toggle |
 | **Projects** | every registered project with its waterfall phase, percent complete, and open blocker count; double-click jumps to its events |
 
 ### The New agent page

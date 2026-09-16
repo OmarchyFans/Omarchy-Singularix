@@ -109,7 +109,8 @@ while (($#)); do
     -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --version) echo "omarchy-agent-launcher $OAL_VERSION"; exit 0 ;;
     --name|--agent|--runtime|--provider|--auth|--model|--base-url|--mode|--skill|--job-file|--task|--level|--key|--ctx|--kv|--slots|\
-    --backend|--parent|--role|--task-title|--id|--kind|--label|--url|--size|--input-per-m|--output-per-m|--approved-usd|--request|--project|--session)
+    --backend|--parent|--role|--task-title|--id|--kind|--label|--url|--size|--input-per-m|--output-per-m|--approved-usd|--request|--project|--session|\
+    --ref|--why|--recommend|--detail|--node|--action)
                OPTS+=("$1" "${2:-}"); shift ;;   # valued options (create, delegate, backends add, local-server, harness)
     --*)       OPTS+=("$1") ;;                    # create's flags
     *)         CMD+=("$1") ;;
@@ -374,7 +375,18 @@ cmd_session() {
   load_profile_adapters "$name"
   # If the tmux session is killed from outside (kill-session, a closed pane, a
   # logout), the agent goes with it silently; say so where the user looks.
-  trap 'trap - HUP TERM; event_emit "$name" session_exited "Session was killed from outside (tmux session ended); Chat starts it again" --level blocker --key exit --code 129; exit 129' HUP TERM
+  # BUT: the harness reaper kills its own transient hns-* delegates on purpose
+  # (job done/failed/throttled, or the node was reassigned) -- harness.sh's
+  # harness_job_forget writes a marker at $OAL_STATE/stopping/<name> right
+  # before it calls session_kill, so this trap can tell "we did this" from a
+  # genuine external kill and downgrade to an info note instead of a blocker
+  # (live 2026-09-16: every reaped hns-* delegate alarmed the user for no
+  # reason). A marker older than 60s is ignored (stale: some other kill) --
+  # harness_job_forget also prunes markers past that age so they never pile up. The actual
+  # marker-check/event logic lives in session_exit_notify (lib/events.sh), not here --
+  # this trap is just a one-line call to it, kept thin on purpose so
+  # tests/run.sh can register the exact same body standalone.
+  trap 'trap - HUP TERM; session_exit_notify "$name"; exit 129' HUP TERM
   local resume=0
   while :; do
     title "$name  ·  $(agent_label "$(profile_get "$name" agent)") on $(runtime_label "$(profile_get "$name" runtime)")"
@@ -779,6 +791,31 @@ cmd_result() {
 # In a --popup terminal the window closes on success; hold it so the result stays readable.
 popup_hold() { [[ ${OAL_POPUP:-0} == 1 ]] && { hr; read -rp "Press Enter to close…" _; }; return 0; }
 
+# notify runlog|runinfo SLUG -- read a (possibly already-forgotten) hns-* harness
+# delegate's run log. cmd_result needs a live saved profile and just fails with "no
+# saved agent" once harness_job_forget has removed it; harness_job_forget keeps the
+# newest 60 slugs' logs under $HARNESS_STATE_DIR/runs/<slug>/ for exactly this. Backs
+# the Notifications tab's "View run log"/"Resume" buttons for a finished delegate.
+cmd_notify() {
+  local sub=${CMD[1]:-} slug=${CMD[2]:-}
+  [[ -n $slug ]] || fail "usage: omarchy-agent-launcher notify runlog|runinfo SLUG"
+  local dir="$HARNESS_STATE_DIR/runs/$slug"
+  [[ -d $dir ]] || dir="$(stage_dir "$slug")/runs"   # not yet reaped: still under its live stage dir
+  local latest; latest=$(ls -1t "$dir"/*.log 2>/dev/null | head -n1)
+  case "$sub" in
+    runlog)
+      [[ -n $latest ]] || { say "no run log found for $slug"; popup_hold; return 1; }
+      say "# $slug · $(basename "$latest" .log)"
+      LC_ALL=C sed -E 's/\x1B\[[0-9;?]*[ -\/]*[@-~]//g; s/\r$//' "$latest"
+      popup_hold ;;
+    runinfo)
+      local resume=""
+      [[ -n $latest ]] && resume=$(LC_ALL=C sed -E 's/\x1B\[[0-9;?]*[ -\/]*[@-~]//g; s/\r$//' "$latest" | grep -oE 'hermes --resume [A-Za-z0-9_.-]+' | tail -n1)
+      jq -nc --arg log "${latest:-}" --arg resume "$resume" '{log:$log, resume:$resume}' ;;
+    *) fail "usage: omarchy-agent-launcher notify runlog|runinfo SLUG" ;;
+  esac
+}
+
 cmd_backends() {
   local id=${CMD[2]:-}
   case "${CMD[1]:-list}" in
@@ -914,15 +951,26 @@ cmd_harness() {
   esac
 }
 
-cmd_event() { # event <agent> <kind> <message> [--task T] [--level L] [--key K]
+cmd_event() { # event <agent> <kind> <message> [--task T] [--level L] [--key K] [--ref R]
+              # [--why W] [--recommend R] [--detail D] [--node N] [--project P] [--action LABEL=ARGV_JSON]...
   local agent=${CMD[1]:-} kind=${CMD[2]:-} message=${CMD[3]:-}
-  [[ -n $agent && -n $kind && ( -n $message || $kind == blocker_cleared ) ]] || fail "usage: omarchy-agent-launcher event <agent> <kind> \"<message>\" [--task T] [--level info|warn|blocker] [--key K]"
+  [[ -n $agent && -n $kind && ( -n $message || $kind == blocker_cleared ) ]] || fail "usage: omarchy-agent-launcher event <agent> <kind> \"<message>\" [--task T] [--level info|warn|blocker] [--key K] [--ref R] [--why W] [--recommend R] [--detail D] [--node N] [--project P] [--action LABEL=ARGV_JSON]"
   local -a extra=()
   local v
   v=$(opt_value --task) && extra+=(--task "$v")
   v=$(opt_value --level) && extra+=(--level "$v")
   v=$(opt_value --key) && extra+=(--key "$v")
+  v=$(opt_value --ref) && extra+=(--ref "$v")
+  v=$(opt_value --why) && extra+=(--why "$v")
+  v=$(opt_value --recommend) && extra+=(--recommend "$v")
+  v=$(opt_value --detail) && extra+=(--detail "$v")
+  v=$(opt_value --node) && extra+=(--node "$v")
+  v=$(opt_value --project) && extra+=(--project "$v")
   [[ $kind == blocker ]] && ! opt_value --level >/dev/null && extra+=(--level blocker)
+  local i   # --action is repeatable: opt_value only finds the first, so scan OPTS directly
+  for ((i=0; i<${#OPTS[@]}; i++)); do
+    [[ ${OPTS[i]} == --action ]] && extra+=(--action "${OPTS[i+1]:-}")
+  done
   event_emit "$agent" "$kind" "$message" --source cli "${extra[@]}"
 }
 
@@ -1000,6 +1048,7 @@ case "${CMD[0]:-menu}" in
   stop)    cmd_stop "${CMD[1]:?stop needs a name}" ;;
   status)  cmd_status ;;
   event)   cmd_event ;;
+  notify)  cmd_notify ;;
   settings) cmd_settings ;;
   switch)  cmd_switch ;;
   kanban-sync) cmd_kanban_sync "${CMD[1]:-}" ;;
