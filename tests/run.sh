@@ -659,6 +659,7 @@ case "$1" in
     printf '%s\n' "$*" >>"__APPROVELOG__"
     echo ok ;;
   ls) cat "__HD__/ls-response.json" 2>/dev/null || echo '[]' ;;
+  serve) sleep 30 ;;
   *) echo '{}' ;;
 esac
 FAKE
@@ -1824,6 +1825,105 @@ FAKE5
   grep -q -- "assign --project p-assign --node node-assign2 --session s-explicit" "$ORDERLOG" \
     || { cat "$ORDERLOG"; tfail "#10: harness assign --session must use the given session id verbatim"; }
   pass "harness assign (#10): picks the first idle rix session for the project when --session is omitted, else uses the given one"
+
+  # ---- harness run: a FOREGROUND supervisor for `harness serve --all` + the dispatch loop,
+  # meant to survive as a systemd unit's ExecStart (live 2026-09-16: setsid nohup … & died
+  # with the calling shell/session; the Gantt froze silently, sessions went stale) ----------
+  rm -rf "$HARNESS_STATE_DIR"
+
+  out_run_dry=$(OAL_DRY_RUN=1 "$L" --dry-run harness run 2>&1)
+  grep -q -- "would start:.*serve --all" <<<"$out_run_dry" || { echo "$out_run_dry"; tfail "harness run --dry-run must print the 'would start: … serve --all' line"; }
+  grep -q -- "would start:.*dispatch loop" <<<"$out_run_dry" || { echo "$out_run_dry"; tfail "harness run --dry-run must print the 'would start: … dispatch loop' line"; }
+  [[ -e "$HARNESS_STATE_DIR/serve.pid" ]] && tfail "harness run --dry-run must not write serve.pid"
+  [[ -e "$HARNESS_STATE_DIR/dispatch.pid" ]] && tfail "harness run --dry-run must not write dispatch.pid"
+  pass "harness run --dry-run: prints both would-start lines, writes no pid files, spawns nothing"
+
+  # A real run against the fake harness's `serve` (just sleeps 30s, added above), backgrounded
+  # and TERM'd: both pid files must exist while it runs (and name live processes), be cleared
+  # once it stops, and the exit code on a clean TERM must be 0 (so systemd does NOT restart it).
+  "$L" harness run &
+  RUNPID=$!
+  for _ in $(seq 1 50); do
+    [[ -s "$HARNESS_STATE_DIR/serve.pid" && -s "$HARNESS_STATE_DIR/dispatch.pid" ]] && break
+    sleep 0.1
+  done
+  [[ -s "$HARNESS_STATE_DIR/serve.pid" ]] || tfail "harness run: serve.pid must be written while it is running"
+  [[ -s "$HARNESS_STATE_DIR/dispatch.pid" ]] || tfail "harness run: dispatch.pid must be written while it is running"
+  kill -0 "$(cat "$HARNESS_STATE_DIR/serve.pid")" 2>/dev/null || tfail "harness run: serve.pid must name a live process"
+  kill -0 "$(cat "$HARNESS_STATE_DIR/dispatch.pid")" 2>/dev/null || tfail "harness run: dispatch.pid must name a live process"
+  kill -TERM "$RUNPID"
+  run_rc=0; wait "$RUNPID" || run_rc=$?
+  [[ $run_rc == 0 ]] || tfail "harness run: exit code must be 0 on a clean TERM (got $run_rc)"
+  [[ -e "$HARNESS_STATE_DIR/serve.pid" ]] && tfail "harness run: serve.pid must be cleared after TERM"
+  [[ -e "$HARNESS_STATE_DIR/dispatch.pid" ]] && tfail "harness run: dispatch.pid must be cleared after TERM"
+  pass "harness run: pid files written (both live) while running, cleared after TERM, exit code 0"
+
+  # ---- harness service install|uninstall|status: a systemd --user unit whose ExecStart is
+  # `harness run`, against a fake systemctl that just logs its argv ----------------------
+  SYSTEMCTL_LOG="$HD/systemctl.log"; : >"$SYSTEMCTL_LOG"
+  cat >"$HD/fakebin/systemctl" <<'FAKE3'
+#!/bin/bash
+printf '%s\n' "$*" >>"__SYSTEMCTLLOG__"
+case "$*" in
+  *"is-enabled"*) [[ -f "__HD__/systemctl-enabled" ]] && exit 0 || exit 1 ;;
+  *"is-active"*)  [[ -f "__HD__/systemctl-active"  ]] && exit 0 || exit 1 ;;
+esac
+exit 0
+FAKE3
+  sed -i "s#__SYSTEMCTLLOG__#$SYSTEMCTL_LOG#g; s#__HD__#$HD#g" "$HD/fakebin/systemctl"
+  chmod +x "$HD/fakebin/systemctl"
+
+  UNIT_PATH="$XDG_CONFIG_HOME/systemd/user/omarchy-agent-launcher-harness.service"
+  rm -f "$UNIT_PATH"
+
+  # Seed a live ad hoc serve.pid (as a plain `harness serve` run by hand before the unit
+  # existed would leave behind): install must kill/clear it BEFORE enable --now, or
+  # `harness run`'s own "refuse a second copy" check would see it alive the instant the
+  # unit starts and Restart=on-failure would flap forever while the ad hoc process runs on.
+  mkdir -p "$HARNESS_STATE_DIR"
+  sleep 30 & STALE_PID=$!
+  echo "$STALE_PID" >"$HARNESS_STATE_DIR/serve.pid"
+
+  out_install=$("$L" harness service install 2>&1) || { echo "$out_install"; tfail "harness service install failed"; }
+  kill -0 "$STALE_PID" 2>/dev/null && { kill "$STALE_PID" 2>/dev/null; tfail "service install must kill a stale ad hoc serve.pid before enable --now"; }
+  [[ -e "$HARNESS_STATE_DIR/serve.pid" ]] && tfail "service install must clear a stale ad hoc serve.pid"
+  grep -q -- "--user daemon-reload" "$SYSTEMCTL_LOG" || { cat "$SYSTEMCTL_LOG"; tfail "service install must call systemctl --user daemon-reload"; }
+  grep -q -- "--user enable --now omarchy-agent-launcher-harness.service" "$SYSTEMCTL_LOG" \
+    || { cat "$SYSTEMCTL_LOG"; tfail "service install must call systemctl --user enable --now omarchy-agent-launcher-harness.service"; }
+  [[ -f "$UNIT_PATH" ]] || tfail "service install must write the unit file"
+  grep -Eq '^ExecStart=.*harness run$' "$UNIT_PATH" || { cat "$UNIT_PATH"; tfail "unit ExecStart must run 'harness run'"; }
+  grep -q '^Restart=on-failure$' "$UNIT_PATH" || { cat "$UNIT_PATH"; tfail "unit must set Restart=on-failure"; }
+  pass "harness service install: daemon-reload + enable --now, unit file's ExecStart runs 'harness run' with Restart=on-failure, kills a stale ad hoc serve.pid first"
+
+  : >"$SYSTEMCTL_LOG"
+  out_uninstall=$("$L" harness service uninstall 2>&1) || { echo "$out_uninstall"; tfail "harness service uninstall failed"; }
+  grep -q -- "--user stop omarchy-agent-launcher-harness.service" "$SYSTEMCTL_LOG" || { cat "$SYSTEMCTL_LOG"; tfail "service uninstall must stop the unit"; }
+  grep -q -- "--user disable omarchy-agent-launcher-harness.service" "$SYSTEMCTL_LOG" || { cat "$SYSTEMCTL_LOG"; tfail "service uninstall must disable the unit"; }
+  [[ -f "$UNIT_PATH" ]] && tfail "service uninstall must remove the unit file"
+  pass "harness service uninstall: stops and disables the unit, removes the unit file"
+
+  # ---- harness serve defers to the installed+enabled unit instead of spawning ad hoc ------
+  touch "$HD/systemctl-enabled"
+  rm -rf "$HARNESS_STATE_DIR"
+  : >"$SYSTEMCTL_LOG"
+  out_serve=$("$L" harness serve 2>&1) || { echo "$out_serve"; tfail "harness serve (unit enabled) failed"; }
+  grep -qi "systemd" <<<"$out_serve" || { echo "$out_serve"; tfail "harness serve (unit enabled) must say it is using the installed unit"; }
+  grep -q -- "--user start omarchy-agent-launcher-harness.service" "$SYSTEMCTL_LOG" \
+    || { cat "$SYSTEMCTL_LOG"; tfail "harness serve (unit enabled) must call systemctl --user start"; }
+  [[ -e "$HARNESS_STATE_DIR/serve.pid" ]] && tfail "harness serve (unit enabled) must not spawn an ad hoc serve.pid"
+  [[ -e "$HARNESS_STATE_DIR/dispatch.pid" ]] && tfail "harness serve (unit enabled) must not spawn an ad hoc dispatch.pid"
+  pass "harness serve: when the unit is installed and enabled, delegates to systemctl --user start instead of spawning ad hoc"
+
+  # ---- harness_status_json: supervised (unit enabled) / unit_active reflect systemd -------
+  touch "$HD/systemctl-active"
+  s_sup=$(harness_status_json)
+  [[ $(jq -r .supervised <<<"$s_sup") == true ]] || { echo "$s_sup"; tfail "harness_status_json: supervised must be true when the unit is enabled"; }
+  [[ $(jq -r .unit_active <<<"$s_sup") == true ]] || { echo "$s_sup"; tfail "harness_status_json: unit_active must be true when the unit is active"; }
+  rm -f "$HD/systemctl-enabled" "$HD/systemctl-active"
+  s_nosup=$(harness_status_json)
+  [[ $(jq -r .supervised <<<"$s_nosup") == false ]] || { echo "$s_nosup"; tfail "harness_status_json: supervised must be false when the unit is not enabled"; }
+  [[ $(jq -r .unit_active <<<"$s_nosup") == false ]] || { echo "$s_nosup"; tfail "harness_status_json: unit_active must be false when the unit is not active"; }
+  pass "harness_status_json: supervised/unit_active reflect systemctl --user is-enabled/is-active"
 
   exit 0
 ) || exit 1

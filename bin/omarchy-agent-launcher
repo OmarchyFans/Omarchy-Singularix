@@ -47,6 +47,10 @@
 #                          approve PROJECT USD [REASON]|decline PROJECT|inbox NAME
 #                                          the session-harness scheduler: Rix dispatches its inbox packets and
 #                                          writes back the harness's own receipts (never $0 for an unpriced model)
+#   omarchy-agent-launcher harness run                    foreground supervisor (harness serve + dispatch); this is
+#                                          what the systemd unit below actually runs
+#   omarchy-agent-launcher harness service install|uninstall|status   keep the harness running across logout/reboot:
+#                                          a `systemctl --user` unit whose ExecStart is `harness run`, Restart=on-failure
 #   omarchy-agent-launcher usage [--json]            tokens and USD: totals, per agent, per task
 #   omarchy-agent-launcher backends list|show|add|remove|test [id]   models to hand work to
 #     add: --id I --kind endpoint --model M --url U [--key-env] [--ctx N] [--input-per-m $ --output-per-m $]
@@ -823,18 +827,38 @@ cmd_providers() {
 
 cmd_harness() {
   local sub=${CMD[1]:-status}
+  _harness_print_status() {
+    harness_notify_sync || true
+    if (( JSON )); then
+      harness_status_json | jq -c --argjson pa "$(harness_pending_approvals_json)" '.pending_approvals = $pa' | jq .
+      return 0
+    fi
+    local s; s=$(harness_status_json)
+    jq -r '"harness: " + (if .alive then "running" else "not running" end) + " · " + .url
+           + (if .bin == "" then " · CLI not found" else "" end) + " · " + (.projects|tostring) + " project(s)"
+           + " · jobs " + (.jobs.running|tostring) + "/" + (.jobs.slots|tostring)
+           + " · supervised " + (if .supervised then "yes" + (if .unit_active then " (active)" else " (not active)" end) else "no" end)' <<<"$s"
+    jq -r '.pending_approvals[]? | "  pending approval: project \(.id) — $" + (.pending_approval.estimate_usd // .pending_approval.usd // "?" | tostring) + " — " + (.pending_approval.reason // "")' <<<"$s"
+  }
   case "$sub" in
-    status)
-      harness_notify_sync || true
-      if (( JSON )); then
-        harness_status_json | jq -c --argjson pa "$(harness_pending_approvals_json)" '.pending_approvals = $pa' | jq .
-        return 0
-      fi
-      local s; s=$(harness_status_json)
-      jq -r '"harness: " + (if .alive then "running" else "not running" end) + " · " + .url
-             + (if .bin == "" then " · CLI not found" else "" end) + " · " + (.projects|tostring) + " project(s)"
-             + " · jobs " + (.jobs.running|tostring) + "/" + (.jobs.slots|tostring)' <<<"$s"
-      jq -r '.pending_approvals[]? | "  pending approval: project \(.id) — $" + (.pending_approval.estimate_usd // .pending_approval.usd // "?" | tostring) + " — " + (.pending_approval.reason // "")' <<<"$s" ;;
+    status)  _harness_print_status ;;
+    run)     harness_run ;;
+    service)
+      local ssub=${CMD[2]:-status}
+      case "$ssub" in
+        install)
+          harness_service_install || fail "harness service install failed"
+          (( OAL_DRY_RUN )) || say "installed and started $HARNESS_SERVICE_UNIT ($(harness_service_unit_path))" ;;
+        uninstall)
+          harness_service_uninstall || fail "harness service uninstall failed"
+          (( OAL_DRY_RUN )) || say "removed $HARNESS_SERVICE_UNIT" ;;
+        status)
+          local st="not-found"
+          have systemctl && st=$(systemctl --user is-active "$HARNESS_SERVICE_UNIT" 2>/dev/null || echo inactive)
+          say "unit $HARNESS_SERVICE_UNIT: $st"
+          _harness_print_status ;;
+        *) fail "usage: omarchy-agent-launcher harness service install|uninstall|status" ;;
+      esac ;;
     serve)   harness_serve_start && say "harness serve started ($(harness_url))" ;;
     stop)    harness_serve_stop; say "harness serve/dispatch stopped" ;;
     open)    have xdg-open && run xdg-open "$(harness_url)" || say "$(harness_url)" ;;
@@ -886,7 +910,7 @@ cmd_harness() {
         [[ -n $sid ]] || fail "harness assign: no idle rix session found for project $project (pass --session ID)"
       fi
       "$bin" assign --project "$project" --node "$node" --session "$sid" ;;
-    *) fail "usage: omarchy-agent-launcher harness status|serve|stop|open|projects|register PROFILE [REPO] [--slots N] [--project ID] [--role R]|role PROFILE ROLE|dispatch [--once]|approve PROJECT USD [REASON] [--request ID]|decline PROJECT|inbox PROFILE|assign PROJECT NODE [--session SID]   (register: --project ID skips the repo_path lookup and registers directly, --role defaults to the profile's harness_role (else coding); role: orchestrator|reasoning|coding|local; approve/decline: human only, refused with OAL_AGENT set; assign: --session defaults to the first idle rix session on the project)" ;;
+    *) fail "usage: omarchy-agent-launcher harness status|run|service install|uninstall|status|serve|stop|open|projects|register PROFILE [REPO] [--slots N] [--project ID] [--role R]|role PROFILE ROLE|dispatch [--once]|approve PROJECT USD [REASON] [--request ID]|decline PROJECT|inbox PROFILE|assign PROJECT NODE [--session SID]   (run: foreground supervisor, the systemd unit's ExecStart; service install|uninstall|status: manage that unit; register: --project ID skips the repo_path lookup and registers directly, --role defaults to the profile's harness_role (else coding); role: orchestrator|reasoning|coding|local; approve/decline: human only, refused with OAL_AGENT set; assign: --session defaults to the first idle rix session on the project)" ;;
   esac
 }
 

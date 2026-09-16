@@ -3,6 +3,11 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.16.1
+
+- `harness run`: a foreground supervisor for `harness serve --all` + the dispatch loop, meant to be a systemd unit's `ExecStart`. Fixes a live bug (2026-09-16): `harness serve` backgrounded both with `setsid nohup … &` from whatever shell called it, so closing that terminal or ending that session killed both — the Gantt froze silently and sessions went stale.
+- `harness service install|uninstall|status`: installs/removes a `systemctl --user` unit (`Restart=on-failure`) running `harness run`; `harness serve`/`stop` now defer to it (`systemctl --user start|stop`) once it's installed and enabled/active, instead of spawning ad hoc. `harness status --json` gains `supervised`/`unit_active`.
+
 ## 0.16.0
 
 - Plan tab: Inspector and Sessions are now collapsible (header click, or `i`/`s`) so the Gantt can claim the freed height; a running row only shimmers/pulses when its assignee session's heartbeat is actually fresh (<45s), showing a static "no signal" instead of fake motion once it's stale.
