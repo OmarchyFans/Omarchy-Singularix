@@ -1093,6 +1093,11 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
       return 0
     fi
     harness_prune_requested_key "$proj" "$node"   # was requested, now funded: stop dedup-blocking a future shortfall
+    # What the delegate may spend is what the human approved and is still free (remaining
+    # minus in-flight reservations), not this dispatcher's own packet-size estimate:
+    # cmd_delegate re-estimates the full job text (packet + trailer) and refused every
+    # sweep when that came out a hair above the tiny estimate (live 2026-09-16, exit 3 loop).
+    estimate=$avail
   fi
   if (( ${HARNESS_SLOTS_LEFT:-1} <= 0 )); then return 0; fi   # concurrency cap for this sweep; retried next sweep
   if (( OAL_DRY_RUN )); then
@@ -1153,7 +1158,8 @@ harness_dispatch_packet() { # <bin> <project> <session> <profile> <packet-json> 
   if (( drc != 0 )); then
     warn "harness: delegate refused to start $node (exit $drc)"
     mv -f "$claimed" "$path" 2>/dev/null || true   # un-claim so a future sweep can retry
-    event_emit "$profile" note "harness: $node did not start (delegate exit $drc)" --source harness --level warn --ref "$ref:failed"
+    event_emit "$profile" note "harness: $node did not start (delegate exit $drc); retrying in 5 min" --source harness --level warn --ref "$ref:failed:$(date +%s)"
+    harness_record_backoff "$sid" 300   # not every 3 s: a refusal needs a human or a fix, not a hot loop
     return 0
   fi
   # The delegate is a saved agent under the SLUGIFIED name (cmd_delegate slugifies

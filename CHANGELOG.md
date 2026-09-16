@@ -3,6 +3,10 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.16.3
+
+- Metered dispatch: the delegate may spend what the human approved and is free (remaining minus reservations), not the dispatcher's own packet estimate; `cmd_delegate` re-estimated the fuller job text and refused every 3 s. A delegate refusal now backs the session off 5 minutes instead of re-claiming in a hot loop.
+
 ## 0.16.2
 
 - `harness status` (text): pending approvals print project, node, estimate and request id (were `null — $?`).
