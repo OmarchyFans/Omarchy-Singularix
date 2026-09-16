@@ -28,6 +28,7 @@
 
 HARNESS_STATE_DIR="$OAL_STATE/harness"
 HARNESS_JOBS_DIR="$HARNESS_STATE_DIR/jobs"
+HARNESS_SERVICE_UNIT="omarchy-agent-launcher-harness.service"
 
 # ------------------------------------------------------------------ basics ----
 # Resolution: settings.json `harness_bin` (a path, or the word `none` = there is no harness,
@@ -90,9 +91,19 @@ harness_overview_json() {
 harness_pid_alive() { [[ -s $1 ]] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null; }
 
 # setsid harness serve --all under $OAL_STATE/harness/ (pid + log), wait up to
-# 5s for overview.json, then start our own dispatch loop the same way.
+# 5s for overview.json, then start our own dispatch loop the same way. When
+# the systemd unit (harness_service_install) is installed AND enabled, this
+# defers to it instead: `systemctl --user start` supervises `harness run`
+# (which owns both children and the same pid files), rather than spawning
+# ad hoc processes that die with the calling shell (live 2026-09-16).
 harness_serve_start() {
   mkdir -p "$HARNESS_STATE_DIR"
+  if harness_service_enabled; then
+    say "harness: $HARNESS_SERVICE_UNIT is installed and enabled; starting it via systemd instead of an ad hoc process"
+    if (( OAL_DRY_RUN )); then say "[dry-run] would run: systemctl --user start $HARNESS_SERVICE_UNIT"; return 0; fi
+    systemctl --user start "$HARNESS_SERVICE_UNIT"
+    return $?
+  fi
   local bin; bin=$(harness_bin) || return 1
   if harness_pid_alive "$HARNESS_STATE_DIR/serve.pid"; then
     : # already running
@@ -119,7 +130,19 @@ harness_serve_start() {
   return 0
 }
 
+# Stops the systemd unit when it is the one actually running (active), then
+# belt-and-braces kills/removes whatever pid files are still on disk (covers
+# the ad hoc (non-unit) path, and any pid file left behind by a unit killed
+# out from under us).
 harness_serve_stop() {
+  if harness_service_active; then
+    say "harness: stopping the installed systemd unit ($HARNESS_SERVICE_UNIT)"
+    if (( OAL_DRY_RUN )); then
+      say "[dry-run] would run: systemctl --user stop $HARNESS_SERVICE_UNIT"
+    else
+      systemctl --user stop "$HARNESS_SERVICE_UNIT" 2>/dev/null || true
+    fi
+  fi
   local f p pid
   for f in dispatch.pid serve.pid; do
     p="$HARNESS_STATE_DIR/$f"
@@ -128,6 +151,140 @@ harness_serve_stop() {
     [[ -n $pid ]] && kill "$pid" 2>/dev/null
     rm -f "$p"
   done
+}
+
+# --------------------------------------------------------- run (supervisor) ----
+# harness_run -- FOREGROUND supervisor for `harness serve --all` + our own
+# dispatch loop, meant to be the ExecStart of a systemd --user unit (see
+# harness_service_install below) so both survive the calling terminal/session
+# dying (live 2026-09-16: `harness serve` backgrounded both with
+# `setsid nohup … &` from whatever shell invoked it; when that shell's
+# session ended, both children died with it, the Gantt froze silently, and
+# sessions went stale). Writes serve.pid/dispatch.pid exactly like
+# harness_serve_start so `harness status`/`stop` keep working unmodified.
+# Refuses to start a second copy while either pid file is still alive. On
+# TERM/INT (a normal `systemctl stop`) it stops both children cleanly and
+# exits 0; if `harness serve` dies on its own, harness_run exits non-zero so
+# Restart=on-failure brings it back.
+harness_run() {
+  mkdir -p "$HARNESS_STATE_DIR"
+  if harness_pid_alive "$HARNESS_STATE_DIR/serve.pid" || harness_pid_alive "$HARNESS_STATE_DIR/dispatch.pid"; then
+    warn "harness run: already running (serve.pid or dispatch.pid is alive); refusing to start a second copy"
+    return 1
+  fi
+  local bin; bin=$(harness_bin) || return 1
+  if (( OAL_DRY_RUN )); then
+    say "[dry-run] would start: $bin serve --all"
+    say "[dry-run] would start: harness dispatch loop (in-process)"
+    return 0
+  fi
+
+  local serve_pid="" dispatch_pid="" stopped=0
+  _harness_run_stop() {
+    (( stopped )) && return 0
+    stopped=1
+    [[ -n $dispatch_pid ]] && kill "$dispatch_pid" 2>/dev/null
+    [[ -n $serve_pid ]] && kill "$serve_pid" 2>/dev/null
+    [[ -n $dispatch_pid ]] && wait "$dispatch_pid" 2>/dev/null
+    [[ -n $serve_pid ]] && wait "$serve_pid" 2>/dev/null
+    rm -f "$HARNESS_STATE_DIR/serve.pid" "$HARNESS_STATE_DIR/dispatch.pid"
+    harness_keepalive_clear
+  }
+  trap '_harness_run_stop; exit 0' TERM INT HUP
+
+  "$bin" serve --all >"$HARNESS_STATE_DIR/serve.log" 2>&1 </dev/null &
+  serve_pid=$!
+  echo "$serve_pid" >"$HARNESS_STATE_DIR/serve.pid"
+
+  # No wait-for-overview.json here (unlike harness_serve_start): the dispatch
+  # loop already tolerates an empty/missing overview.json on every sweep, and
+  # this is a foreground supervisor -- both pid files must exist right away
+  # for `harness status`/`stop` (and systemd) to see it as up.
+  harness_dispatch_loop >"$HARNESS_STATE_DIR/dispatch.log" 2>&1 </dev/null &
+  dispatch_pid=$!
+  echo "$dispatch_pid" >"$HARNESS_STATE_DIR/dispatch.pid"
+
+  wait -n "$serve_pid" "$dispatch_pid" 2>/dev/null
+  local rc=0
+  if ! kill -0 "$serve_pid" 2>/dev/null; then
+    warn "harness run: harness serve exited unexpectedly"
+    rc=1
+  elif ! kill -0 "$dispatch_pid" 2>/dev/null; then
+    warn "harness run: the dispatch loop exited unexpectedly"
+    rc=1
+  fi
+  _harness_run_stop
+  trap - TERM INT HUP
+  return "$rc"
+}
+
+# --------------------------------------------------------- service (systemd) ----
+# A `systemctl --user` unit whose ExecStart is `harness run` (above), so the
+# harness supervisor survives logout/terminal death and systemd restarts it
+# on crash. Everything here honours OAL_DRY_RUN and works against a fake
+# `systemctl` on PATH (tests/run.sh).
+harness_service_unit_path() { printf '%s/systemd/user/%s' "${XDG_CONFIG_HOME:-$HOME/.config}" "$HARNESS_SERVICE_UNIT"; }
+harness_service_installed() { [[ -f $(harness_service_unit_path) ]]; }
+harness_service_enabled()   { have systemctl && systemctl --user is-enabled --quiet "$HARNESS_SERVICE_UNIT" 2>/dev/null; }
+harness_service_active()    { have systemctl && systemctl --user is-active  --quiet "$HARNESS_SERVICE_UNIT" 2>/dev/null; }
+
+harness_service_unit_content() { # harness_service_unit_content <absolute launcher path>
+  local self=$1
+  cat <<UNIT
+[Unit]
+Description=Omarchy Agent Launcher harness supervisor (harness serve + dispatch)
+After=omarchy-local-agent.service
+Wants=omarchy-local-agent.service
+
+[Service]
+ExecStart=$self harness run
+Restart=on-failure
+RestartSec=5
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
+
+[Install]
+WantedBy=default.target
+UNIT
+}
+
+harness_service_install() {
+  local self=${OAL_SELF:-$0}
+  local path; path=$(harness_service_unit_path)
+  if (( OAL_DRY_RUN )); then
+    say "[dry-run] would write $path"
+    say "[dry-run] would run: systemctl --user daemon-reload"
+    say "[dry-run] would run: systemctl --user enable --now $HARNESS_SERVICE_UNIT"
+    return 0
+  fi
+  have systemctl || { warn "harness service install: systemctl not found"; return 1; }
+  # The unit isn't active yet (harness_service_active is still false here), so this only
+  # kills/clears any ad hoc serve.pid/dispatch.pid left over from a plain `harness serve`
+  # run by hand before the unit existed -- without it, `harness run`'s own "refuse a second
+  # copy" check would see those live pids, exit 1 immediately once the unit starts, and
+  # Restart=on-failure would flap it forever while the ad hoc processes keep running.
+  harness_serve_stop
+  mkdir -p "$(dirname "$path")"
+  harness_service_unit_content "$self" >"$path"
+  systemctl --user daemon-reload || { warn "harness service install: systemctl --user daemon-reload failed"; return 1; }
+  systemctl --user enable --now "$HARNESS_SERVICE_UNIT" || { warn "harness service install: systemctl --user enable --now failed"; return 1; }
+  return 0
+}
+
+harness_service_uninstall() {
+  local path; path=$(harness_service_unit_path)
+  if (( OAL_DRY_RUN )); then
+    say "[dry-run] would run: systemctl --user stop $HARNESS_SERVICE_UNIT"
+    say "[dry-run] would run: systemctl --user disable $HARNESS_SERVICE_UNIT"
+    say "[dry-run] would remove $path"
+    return 0
+  fi
+  if have systemctl; then
+    systemctl --user stop "$HARNESS_SERVICE_UNIT" 2>/dev/null || true
+    systemctl --user disable "$HARNESS_SERVICE_UNIT" 2>/dev/null || true
+    systemctl --user daemon-reload 2>/dev/null || true
+  fi
+  rm -f "$path"
+  return 0
 }
 
 # --------------------------------------------------------------- registry ----
@@ -1313,9 +1470,14 @@ harness_dispatch_loop() {
 # ----------------------------------------------------------------- status ----
 # File/pid based only: serve.pid liveness first, overview.json's mtime
 # (<15s old) as a fallback, the pid files under $OAL_STATE/harness/, and the
-# detached job/slot count. Never curl.
+# detached job/slot count. Never curl (systemctl --user is a local IPC call
+# to the user's own systemd, same precedent as local.sh's local_status_json;
+# it is not a network call).
 harness_status_json() {
   local bin; bin=$(harness_bin 2>/dev/null) || bin=""
+  local supervised=false unit_active=false
+  harness_service_enabled && supervised=true
+  harness_service_active && unit_active=true
   local url ddir; url=$(harness_url); ddir=$(harness_data_dir)
   local ov="$ddir/overview.json" alive=false
   local serving_pid=null dispatch_pid=null
@@ -1350,9 +1512,10 @@ harness_status_json() {
     --argjson projects "$projects" --argjson pending_approvals "$pending" \
     --argjson jobs_running "$running" --argjson jobs_slots "$slots" \
     --argjson roles "$roles" --argjson orchestrator "$orchestrator" \
+    --argjson supervised "$supervised" --argjson unit_active "$unit_active" \
     '{alive:$alive, url:$url, data_dir:$data_dir, bin:$bin, overview_path:$overview_path, serving_pid:$serving_pid, dispatch_pid:$dispatch_pid,
       projects:$projects, pending_approvals:$pending_approvals, jobs:{running:$jobs_running, slots:$jobs_slots},
-      roles:$roles, orchestrator:$orchestrator}'
+      roles:$roles, orchestrator:$orchestrator, supervised:$supervised, unit_active:$unit_active}'
 }
 
 # harness_pending_approvals_json -> [{project, estimate_usd, model, vendor,

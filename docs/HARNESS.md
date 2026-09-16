@@ -169,7 +169,10 @@ do (curl to 127.0.0.1 with `X-Harness: 1`) and the harness binary does.
 | `harness_data_dir` | `$HARNESS_DATA_DIR` or `~/.session-harness` |
 | `harness_url` | `http://127.0.0.1:<port>` from `~/.session-harness/config.toml` (`ui_port`, default 7744) |
 | `harness_alive` | `curl -s -m 1 <url>/api/status` ok |
-| `harness_serve_start` / `harness_serve_stop` | `setsid harness serve --all` under `$OAL_STATE/harness/` (pid file + log) then the dispatch loop; stop kills both |
+| `harness_serve_start` / `harness_serve_stop` | when the systemd unit (below) is installed and enabled/active, defers to it (`systemctl --user start\|stop`, printing that it did) instead of spawning ad hoc; otherwise `setsid harness serve --all` under `$OAL_STATE/harness/` (pid file + log) then the dispatch loop; stop kills both |
+| `harness_run` | **foreground supervisor** — the systemd unit's `ExecStart`. Refuses to start a second copy while `serve.pid`/`dispatch.pid` is still alive. Starts `harness serve --all` as a child (stdout/err → `serve.log`) and runs `harness_dispatch_loop` as a second child (→ `dispatch.log`), writing `serve.pid`/`dispatch.pid` exactly like `harness_serve_start` so `harness status`/`stop` keep working unmodified. On TERM/INT (a normal `systemctl stop`) it kills+waits both children, clears the pid files and the keepalive pids (`harness_keepalive_clear`), and exits 0. If `harness serve` dies on its own, `harness_run` exits non-zero so `Restart=on-failure` brings it back. `OAL_DRY_RUN=1` prints both would-start lines and creates nothing |
+| `harness_service_install` / `_uninstall` | install: kills/clears any stale ad hoc `serve.pid`/`dispatch.pid` first (`harness_serve_stop`; a leftover from a plain `harness serve` run by hand before the unit existed would otherwise make `harness_run`'s own "already running" check fail the instant the new unit starts, flapping under `Restart=on-failure`), then writes `~/.config/systemd/user/omarchy-agent-launcher-harness.service` (`ExecStart=<launcher> harness run`, `Restart=on-failure`, `RestartSec=5`) and `systemctl --user daemon-reload && enable --now`. Uninstall: `stop && disable`, remove the file |
+| `harness_service_enabled` / `_active` | `systemctl --user is-enabled\|is-active --quiet` on the unit (false when `systemctl` is missing) |
 | `harness_overview_json` | cat `overview.json` (or `{}`) |
 | `harness_backend_cost_class BACKEND` | **fail-CLOSED**: `free` only for `provider=local`; `subscription` only for `auth=oauth` on a provider actually in `backends_signed_providers`; every other case (api-key, no backend, an unresolved backend, an unsigned OAuth provider) → `metered` |
 | `harness_chain_metered_hop CHAIN` | the first hop in a Hermes `fallback_chain` that resolves to an `auth=api-key` backend, or empty — used so a chain that *can* fall back to a paid vendor is never registered as free/subscription |
@@ -199,7 +202,7 @@ do (curl to 127.0.0.1 with `X-Harness: 1`) and the harness binary does.
 | `harness_jobs_running` | count of job files (the concurrency accounting for `harness_workers`) |
 | `harness_dispatch_once` | heartbeat running jobs (or stop+clear-pid a withdrawn one), reap finished jobs, prune stale requests, compute `HARNESS_SLOTS_LEFT = settings.json:harness_workers (default 4) − running jobs`, then sweep every `rix` session's unclaimed inbox packets across projects (passing each session's `overview.json` `tier // role` through), dispatching up to the remaining slots |
 | `harness_dispatch_loop` | every 3 s: `harness_dispatch_once` (which itself heartbeats/reaps first) then `harness_notify_sync`, until stopped |
-| `harness_status_json` | `{alive, url, data_dir, bin, overview_path, serving_pid, dispatch_pid, projects: n, pending_approvals: [...], jobs: {running, slots}, roles: [{session, project, role, tier, model, vendor, ip_safe}], orchestrator: {project_id: …}}` — file/pid based, no network beyond one 1 s curl; `overview_path` is always `harness_data_dir/overview.json` (or `$HARNESS_DATA_DIR`), never `null`; a project entry with `orchestrator` set but no `id` is excluded rather than corrupting the map with a literal `"null"` key (Wave L1 #19) |
+| `harness_status_json` | `{alive, url, data_dir, bin, overview_path, serving_pid, dispatch_pid, projects: n, pending_approvals: [...], jobs: {running, slots}, roles: [{session, project, role, tier, model, vendor, ip_safe}], orchestrator: {project_id: …}, supervised, unit_active}` — file/pid based, no network beyond one 1 s curl (`systemctl --user is-enabled\|is-active` is a local IPC call, not network, same precedent as `local.sh`); `overview_path` is always `harness_data_dir/overview.json` (or `$HARNESS_DATA_DIR`), never `null`; a project entry with `orchestrator` set but no `id` is excluded rather than corrupting the map with a literal `"null"` key (Wave L1 #19); `supervised` is true when the systemd unit is *enabled*, `unit_active` when it is currently *active* — independent of whether this process itself spawned serve/dispatch |
 | `harness_pending_approvals_json` | `[{project, estimate_usd, model, vendor, reason, at}]` from `overview.json`, file only |
 | `harness_notify_sync` | one blocker per project with a `pending_approval` (resolved when it clears), one warn-level note per throttled session's `retry_at` — deduped in `$HARNESS_STATE_DIR/notified.txt` so nothing re-toasts; safe every dispatch cycle and from `status` |
 
@@ -209,15 +212,41 @@ some builds — a map keyed by request id) plus a singular `pending_approval`, `
 functions (`harness_prune_requested_stale`, `harness_resolve_request_id`, the dispatch gate) used
 to read exclusively; they now accept every shape (map, list, or the legacy `pending` key).
 
-CLI: `omarchy-agent-launcher harness status|serve|stop|open|projects|register PROFILE [REPO]
-[--slots N] [--project ID] [--role R]|role PROFILE ROLE|dispatch [--once]|approve PROJECT USD
-[REASON] [--request ID]|decline PROJECT|inbox PROFILE|assign PROJECT NODE [--session SID]` —
+CLI: `omarchy-agent-launcher harness status|run|service install|uninstall|status|serve|stop|open|
+projects|register PROFILE [REPO] [--slots N] [--project ID] [--role R]|role PROFILE ROLE|
+dispatch [--once]|approve PROJECT USD [REASON] [--request ID]|decline PROJECT|inbox PROFILE|
+assign PROJECT NODE [--session SID]` —
 `approve`/`decline` are refused outright when `$OAL_AGENT` is set (an agent's own shell must never
 fund or reject its own spending). `role` accepts `orchestrator|reasoning|coding|local`. `assign`
 (the Projects tab's "Assign to Rix" button, and the Rix skill's own `harness assign`) defaults
 `--session` to the first idle `rix` session on the project when omitted — the harness itself
-refuses an ineligible one.
+refuses an ineligible one. `run` is the foreground supervisor (see `harness_run` above and "Keep
+it running" below); `service install|uninstall|status` manage the systemd unit that runs it.
 `harness serve` is also started by `rix chat`/`rix open` when `settings.json:harness_autostart` is true.
+
+## Keep it running
+
+Before 0.16.1, `harness serve` backgrounded both `harness serve --all` and the dispatch loop with
+`setsid nohup … &` from whatever shell invoked it. That shell/session dying — a closed terminal, a
+logged-out session — killed both children with it: the Gantt froze silently and every session went
+stale (live 2026-09-16). Install the supervisor once as a `systemctl --user` unit and it survives
+logout and restarts itself on crash:
+
+```
+omarchy-agent-launcher harness service install     # writes the unit, daemon-reload, enable --now
+omarchy-agent-launcher harness service status       # systemctl --user is-active + harness status
+omarchy-agent-launcher harness service uninstall     # stop, disable, remove the unit file
+```
+
+The unit (`~/.config/systemd/user/omarchy-agent-launcher-harness.service`) runs
+`<launcher> harness run` — a foreground process that starts `harness serve --all` and the dispatch
+loop as its own children, writes the same `serve.pid`/`dispatch.pid` `harness status`/`stop` already
+read, and cleans both up on `systemctl stop` — with `Restart=on-failure` and `After=`/
+`Wants=omarchy-local-agent.service` (soft: the harness itself doesn't need the local GPU server,
+only Rix workers on it do). Once installed and enabled, `harness serve`/`stop` themselves detect it
+and delegate to `systemctl --user start\|stop` instead of spawning ad hoc — so existing scripts and
+the Rix skill's own `harness serve` keep working unchanged. `harness status --json` reports
+`supervised` (unit enabled) and `unit_active` alongside the existing `alive`/pid fields.
 
 ## Worker liveness protocol (assign → claim → pid/heartbeat → receipt → clear)
 
