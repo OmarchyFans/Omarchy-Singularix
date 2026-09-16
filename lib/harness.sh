@@ -1491,7 +1491,9 @@ harness_status_json() {
   harness_pid_alive "$HARNESS_STATE_DIR/dispatch.pid" && dispatch_pid=$(cat "$HARNESS_STATE_DIR/dispatch.pid")
   local overview; overview=$(harness_overview_json)
   local projects; projects=$(jq '.projects? | length // 0' <<<"$overview" 2>/dev/null); [[ $projects =~ ^[0-9]+$ ]] || projects=0
-  local pending; pending=$(jq -c '[.projects[]? | select(.pending_approval != null) | {id, pending_approval}]' <<<"$overview" 2>/dev/null)
+  # one row per OPEN request (keyed pending_approvals map; request_id + node), the same
+  # list the notifier and Approve use -- never the singular compat view
+  local pending; pending=$(harness_pending_approvals_json 2>/dev/null)
   [[ $pending == \[* ]] || pending='[]'
   local slots running; slots=$(settings_get harness_workers 4); [[ $slots =~ ^[0-9]+$ ]] || slots=4
   running=$(harness_jobs_running)
