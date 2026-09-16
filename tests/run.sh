@@ -809,7 +809,7 @@ JSON
   s=$(harness_status_json)
   [[ $(jq -r .alive <<<"$s") == true ]] || tfail "status alive must be true with a fresh overview.json"
   [[ $(jq -r '.pending_approvals|length' <<<"$s") == 1 ]] || tfail "status must surface p-rich's pending approval"
-  [[ $(jq -r '.pending_approvals[0].id' <<<"$s") == p-rich ]] || tfail "pending approval project id"
+  [[ $(jq -r '.pending_approvals[0].project' <<<"$s") == p-rich ]] || tfail "pending approval project id"
   [[ $(jq -r .serving_pid <<<"$s") == null && $(jq -r .dispatch_pid <<<"$s") == null ]] || tfail "no serve/dispatch pid files yet"
 
   mk_repos; harness_dispatch_once || true

@@ -1521,14 +1521,19 @@ harness_status_json() {
 # harness_pending_approvals_json -> [{project, estimate_usd, model, vendor,
 # reason, at}] from overview.json's per-project pending_approval. File only.
 harness_pending_approvals_json() {
-  jq -c '[.projects[]? | select(.pending_approval != null) | {
-    project: .id,
-    estimate_usd: (.pending_approval.estimate_usd // .pending_approval.usd // null),
-    model: (.pending_approval.model // null),
-    vendor: (.pending_approval.vendor // null),
-    reason: (.pending_approval.reason // ""),
-    at: (.pending_approval.at // .pending_approval.requested_at // null)
-  }]' <<<"$(harness_overview_json)"
+  # Every OPEN request across projects, one row each, from the keyed `pending_approvals`
+  # map (id -> {node, model, vendor, estimate_usd, reason, at}); the singular
+  # `pending_approval` is only a compat view of the oldest one and carries no id, so a
+  # panel reading it could never target the request it approved (live 2026-09-16).
+  jq -c '[.projects[]? as $p
+          | (if ($p.pending_approvals // {} | length) > 0
+             then ($p.pending_approvals | to_entries[] | .value + {request_id: (.value.id // .key)})
+             elif $p.pending_approval != null then ($p.pending_approval + {request_id: ($p.pending_approval.id // null)})
+             else empty end)
+          | {project: $p.id, request_id: (.request_id // null), node: (.node // null),
+             estimate_usd: (.estimate_usd // .usd // null), model: (.model // null),
+             vendor: (.vendor // null), reason: (.reason // ""), at: (.at // .requested_at // null)}]' \
+    <<<"$(harness_overview_json)"
 }
 
 # --------------------------------------------------------------- notify ----
@@ -1545,63 +1550,36 @@ harness_pending_approvals_json() {
 # off blockers.json would just re-emit (and re-toast) it on the next sweep.
 # Safe to call every dispatch cycle and from `cmd_harness status`.
 harness_notify_sync() {
-  mkdir -p "$HARNESS_STATE_DIR"
+  # One blocker notification per OPEN cost request (keyed project:request_id, so several
+  # requests on one project each get their own Approve/Decline and a re-issued shortfall
+  # re-notifies), remembered in notified.txt so a request is announced once.
+  local tab=$'\t'
   local nf="$HARNESS_STATE_DIR/notified.txt"
-  touch "$nf"
-  local tab; tab=$'\t'
+  mkdir -p "$HARNESS_STATE_DIR"; touch "$nf"; chmod 600 "$nf" 2>/dev/null || true
   local overview; overview=$(harness_overview_json)
+  local rows; rows=$(harness_pending_approvals_json)
   local tmp; tmp=$(mktemp "$HARNESS_STATE_DIR/.notified.XXXXXX")
-
-  local proj
-  while IFS= read -r proj; do
-    [[ -n $proj ]] || continue
-    local id pa line
-    id=$(jq -r '.id // empty' <<<"$proj")
+  local row
+  while IFS= read -r row; do
+    [[ -n $row ]] || continue
+    local id rid key at line
+    id=$(jq -r '.project // empty' <<<"$row"); rid=$(jq -r '.request_id // empty' <<<"$row")
     [[ -n $id ]] || continue
-    pa=$(jq -c '.pending_approval // empty' <<<"$proj")
-    line=$(grep -F "approval${tab}${id}${tab}" "$nf" 2>/dev/null | head -n1 || true)
-    if [[ -n $pa && $pa != null ]]; then
-      local at
-      at=$(jq -r '.at // .requested_at // .estimate_usd // .usd // empty' <<<"$pa")
-      [[ -n $at ]] || at="pending"
-      if [[ -n $line ]] && [[ $(cut -f3 <<<"$line") == "$at" ]]; then
-        printf '%s\n' "$line" >>"$tmp"
-      else
-        local agent estimate model vendor reason
-        agent=$(jq -r --arg id "$id" '.sessions[]? | select(.project == $id and .worker == "rix") | .label' <<<"$overview" | head -n1)
-        [[ -n $agent ]] || agent=rix
-        estimate=$(jq -r '.estimate_usd // .usd // "?"' <<<"$pa")
-        model=$(jq -r '.model // "?"' <<<"$pa")
-        vendor=$(jq -r '.vendor // "?"' <<<"$pa")
-        reason=$(jq -r '.reason // ""' <<<"$pa")
-        event_emit "$agent" blocker "Approve \$$estimate for $model via $vendor on $id: $reason" \
-          --source harness --level blocker --ref "harness:$id:approval:$at" --key "approval-$id"
-        printf 'approval%s%s%s%s%s%s\n' "$tab" "$id" "$tab" "$at" "$tab" "$agent" >>"$tmp"
-      fi
-    elif [[ -n $line ]]; then
-      local cleared_agent; cleared_agent=$(cut -f4 <<<"$line")
-      [[ -n $cleared_agent ]] || cleared_agent=rix
-      event_emit "$cleared_agent" blocker_cleared "harness: approval on $id resolved" --source harness --key "approval-$id"
-    fi
-  done < <(jq -c '.projects[]?' <<<"$overview")
-
-  local sess
-  while IFS= read -r sess; do
-    [[ -n $sess ]] || continue
-    local sid label retry line
-    sid=$(jq -r '.id // empty' <<<"$sess")
-    [[ -n $sid ]] || continue
-    label=$(jq -r '.label // empty' <<<"$sess"); [[ -n $label ]] || label=rix
-    retry=$(jq -r '.retry_at // empty' <<<"$sess"); [[ -n $retry ]] || retry="unknown"
-    line=$(grep -F "throttled${tab}${sid}${tab}" "$nf" 2>/dev/null | head -n1 || true)
-    if [[ -n $line ]] && [[ $(cut -f3 <<<"$line") == "$retry" ]]; then
+    key="$id:${rid:-single}"
+    at=$(jq -r '.at // .estimate_usd // "pending"' <<<"$row")
+    line=$(grep -F "approval${tab}${key}${tab}" "$nf" 2>/dev/null | head -n1 || true)
+    if [[ -n $line ]] && [[ $(cut -f3 <<<"$line") == "$at" ]]; then
       printf '%s\n' "$line" >>"$tmp"
-    else
-      event_emit "$label" note "harness: $sid throttled, retrying at $retry" --source harness --level warn --ref "harness:$sid:throttled:$retry"
-      printf 'throttled%s%s%s%s\n' "$tab" "$sid" "$tab" "$retry" >>"$tmp"
+      continue
     fi
-  done < <(jq -c '.sessions[]? | select(.state == "throttled")' <<<"$overview")
-
+    local agent estimate model vendor reason node
+    agent=$(jq -r --arg id "$id" '.sessions[]? | select(.project == $id and .worker == "rix") | .label' <<<"$overview" | head -n1)
+    [[ -n $agent ]] || agent=rix
+    estimate=$(jq -r '.estimate_usd // "?"' <<<"$row"); model=$(jq -r '.model // "?"' <<<"$row")
+    vendor=$(jq -r '.vendor // "?"' <<<"$row"); reason=$(jq -r '.reason // ""' <<<"$row"); node=$(jq -r '.node // ""' <<<"$row")
+    event_emit "$agent" blocker "Approve \$$estimate for $model via $vendor on $id${node:+ ($node)}: $reason" \
+      --source harness --level blocker --ref "harness:$key:approval:$at" --key "approval-$key"
+    printf 'approval%s%s%s%s\n' "$tab" "$key" "$tab" "$at" >>"$tmp"
+  done < <(jq -c '.[]?' <<<"$rows")
   mv -f "$tmp" "$nf"
-  return 0
 }
