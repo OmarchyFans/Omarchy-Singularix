@@ -1218,6 +1218,51 @@ JSON
   grep -q '"kind":"blocker_cleared".*"key":"approval-p-rich"' "$OAL_EVENTS" || tfail "notify_sync must log blocker_cleared for the resolved approval"
   pass "harness_notify_sync: clears the blocker when the approval disappears"
 
+  # ---- harness_notify_sync: one blocker per unresolved credential alert (§17.8), with
+  #      the rotation URL as an Open-rotation-page action and Mark-rotated; cleared when
+  #      the alert resolves; the secret value never appears -------------------------------
+  jq -n --arg t "$(date -Is)" '{
+    projects: [
+      {id:"p-sec", repo_path:"/tmp/proj-sec",
+       secret_alerts:[
+         {id:"a1", kind:"GitHub token", masked:"ghp_…9f3e", exposure:"exposed",
+          where:["receipt:P0.9"],
+          guide:{vendor:"GitHub", url:"https://github.com/settings/tokens",
+                 steps:["Open the URL","Revoke it","Set GH_TOKEN","Mark rotated"]}}
+       ]}
+    ],
+    sessions: [ {id:"s-sec", project:"p-sec", worker:"rix", label:"hns-sec"} ],
+    queue: [], events: [], generated_at: $t
+  }' >"$HARNESS_DATA_DIR/overview.json"
+  harness_notify_sync
+  sblk=$(blockers_json | jq -c '.["hns-sec/secret-p-sec-a1"]')
+  [[ -n $sblk && $sblk != null ]] || { blockers_json | jq .; tfail "notify_sync: expected a secret blocker for p-sec/a1"; }
+  [[ $(jq -r '.message' <<<"$sblk") == *"ghp_…9f3e"* ]] || { echo "$sblk"; tfail "notify_sync: secret blocker must name the masked value"; }
+  [[ $(jq -r '.why' <<<"$sblk") == *"left this machine"* ]] || { echo "$sblk"; tfail "notify_sync: exposed alert why must say it left the machine"; }
+  [[ $(jq -r '.detail' <<<"$sblk") == *"Revoke it"* ]] || { echo "$sblk"; tfail "notify_sync: secret blocker detail must carry the rotation steps"; }
+  jq -e '.actions | map(.label) | index("Open rotation page") != null and index("Mark rotated") != null' <<<"$sblk" >/dev/null \
+    || { echo "$sblk"; tfail "notify_sync: secret blocker must offer Open rotation page + Mark rotated"; }
+  jq -e '.actions[] | select(.label=="Open rotation page") | .argv == ["open-url","https://github.com/settings/tokens"]' <<<"$sblk" >/dev/null \
+    || { echo "$sblk"; tfail "notify_sync: Open rotation page must run open-url with the guide URL"; }
+  jq -e '.actions[] | select(.label=="Mark rotated") | .argv[0:2] == ["harness","secret-rotated"] and (.argv | index("a1")) != null' <<<"$sblk" >/dev/null \
+    || { echo "$sblk"; tfail "notify_sync: Mark rotated must run harness secret-rotated for the alert id"; }
+  n_sec1=$(grep -c '"key":"secret-p-sec-a1"' "$OAL_EVENTS" || true)
+  harness_notify_sync
+  n_sec2=$(grep -c '"key":"secret-p-sec-a1"' "$OAL_EVENTS" || true)
+  [[ $n_sec1 == "$n_sec2" ]] || tfail "notify_sync: an unchanged secret alert must not re-emit its blocker"
+  jq '(.projects[] | select(.id=="p-sec")) |= (.secret_alerts = [])' "$HARNESS_DATA_DIR/overview.json" >"$HD/overview-sec-cleared.json"
+  mv -f "$HD/overview-sec-cleared.json" "$HARNESS_DATA_DIR/overview.json"
+  harness_notify_sync
+  [[ $(blockers_json | jq '[.[] | select(.key=="secret-p-sec-a1")] | length') == 0 ]] || tfail "notify_sync must clear a secret blocker once the alert resolves"
+  pass "harness_notify_sync: secret alert -> one blocker with masked value, why, rotation steps, Open-rotation-page + Mark-rotated actions; idempotent; cleared on resolve"
+
+  # ---- open-url: opens http(s) only, refuses anything else -----------------------------
+  out=$("$L" --dry-run open-url "https://github.com/settings/tokens" 2>&1) || tfail "open-url http(s) must succeed"
+  grep -q "github.com/settings/tokens" <<<"$out" || tfail "open-url must pass the URL through"
+  "$L" open-url "file:///etc/passwd" >/dev/null 2>&1 && tfail "open-url must refuse a non-http URL" || true
+  "$L" open-url "javascript:alert(1)" >/dev/null 2>&1 && tfail "open-url must refuse a javascript: URL" || true
+  pass "open-url: opens http(s) URLs, refuses file:// and javascript:"
+
   # ---- dispatch_packet: job file records slug/claimed/started_at; the harness sees
   #      either `session set --pid` or `heartbeat` for the dispatched session ---------
   : >"$DELEGATE_LOG"; : >"$SESSADD"; : >"$HEARTBEATLOG"

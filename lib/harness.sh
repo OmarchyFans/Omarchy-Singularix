@@ -1748,6 +1748,64 @@ harness_notify_sync() {
     fi
   done < <(jq -c '.sessions[]? | select(.state == "throttled")' <<<"$overview")
 
+  # One blocker per unresolved credential alert (§17.8). Keyed secret-<project>-<id>;
+  # the exposure is the change token, so an alert that escalates (held -> exposed)
+  # re-notifies. The alert carries only a masked value, never the secret. The rotation
+  # guide's URL becomes an "Open rotation page" action and the steps become the detail;
+  # "Mark rotated" resolves the alert. No secret value is ever in any of this.
+  local prow
+  while IFS= read -r prow; do
+    [[ -n $prow ]] || continue
+    local proj; proj=$(jq -r '.id // empty' <<<"$prow")
+    [[ -n $proj ]] || continue
+    local arow
+    while IFS= read -r arow; do
+      [[ -n $arow ]] || continue
+      local aid kind masked exposure key at
+      aid=$(jq -r '.id // empty' <<<"$arow"); [[ -n $aid ]] || continue
+      kind=$(jq -r '.kind // "credential"' <<<"$arow")
+      masked=$(jq -r '.masked // "?"' <<<"$arow")
+      exposure=$(jq -r '.exposure // "scrubbed"' <<<"$arow")
+      key="secret-$proj-$aid"; at="$exposure"
+      local line; line=$(grep -F "secret${tab}${key}${tab}" "$nf" 2>/dev/null | head -n1 || true)
+      if [[ -n $line ]] && [[ $(cut -f3 <<<"$line") == "$at" ]]; then
+        printf '%s\n' "$line" >>"$tmp"; continue
+      fi
+      local agent; agent=$(jq -r --arg id "$proj" '.sessions[]? | select(.project == $id and .worker == "rix") | .label' <<<"$overview" | head -n1)
+      [[ -n $agent ]] || agent=rix
+      local url vendor steps where why recommend
+      url=$(jq -r '.guide.url // ""' <<<"$arow")
+      vendor=$(jq -r '.guide.vendor // ""' <<<"$arow")
+      where=$(jq -r '(.where // []) | join(", ")' <<<"$arow")
+      steps=$(jq -r '(.guide.steps // []) | to_entries | map("\(.key + 1). \(.value)") | join("\n")' <<<"$arow")
+      case $exposure in
+        exposed) why="A model produced this $kind, so the value has left this machine. It must be treated as compromised and rotated now." ;;
+        held)    why="This $kind sits in a file a delegate would read directly ($where); the harness will not hand that node to a non-local model until it is moved out." ;;
+        *)       why="The harness masked this $kind before it left in a packet or prompt, but the value still lives wherever that text was rendered from ($where)." ;;
+      esac
+      recommend="Rotate the credential at ${vendor:-its provider}, then Mark rotated. Full steps are below."
+      local -a actions=()
+      [[ -n $url ]] && actions+=(--action "Open rotation page=$(jq -nc --arg u "$url" '["open-url",$u]')")
+      actions+=(--action "Mark rotated=$(jq -nc --arg id "$aid" --arg p "$proj" '["harness","secret-rotated",$id,"--project",$p]')")
+      event_emit "$agent" blocker "Rotate $kind $masked ($exposure) on $proj" \
+        --source harness --level blocker --ref "harness:$proj:secret:$aid:$exposure" --key "$key" \
+        --project "$proj" \
+        --why "$why" --recommend "$recommend" \
+        --detail "${steps:-Rotate this credential and mark it rotated.}" \
+        "${actions[@]}"
+      printf 'secret%s%s%s%s%s%s\n' "$tab" "$key" "$tab" "$at" "$tab" "$agent" >>"$tmp"
+    done < <(jq -c '.secret_alerts[]?' <<<"$prow")
+  done < <(jq -c '.projects[]?' <<<"$overview")
+  # a secret alert that was open last time and is gone now (resolved): clear its blocker
+  local oldsec
+  while IFS= read -r oldsec; do
+    [[ -n $oldsec ]] || continue
+    local skey; skey=$(cut -f2 <<<"$oldsec")
+    grep -qF "secret${tab}${skey}${tab}" "$tmp" 2>/dev/null && continue
+    local sagent; sagent=$(cut -f4 <<<"$oldsec"); [[ -n $sagent ]] || sagent=rix
+    event_emit "$sagent" blocker_cleared "harness: credential alert resolved" --source harness --key "$skey"
+  done < <(grep "^secret${tab}" "$nf" 2>/dev/null || true)
+
   mv -f "$tmp" "$nf"
   return 0
 }

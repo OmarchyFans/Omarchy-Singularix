@@ -471,6 +471,49 @@ Item {
   property string roleFilter: ""
   property string modelFilter: ""
   property bool criticalOnly: false
+  // Search + sort live in one collapsible section (collapsed by default, so the board
+  // gets the room until the user reaches for them).
+  property bool controlsExpanded: false
+  property string searchText: ""
+  property string sortBy: "schedule"
+  readonly property var sortOptions: [
+    { value: "schedule", label: "Sort: schedule" },
+    { value: "title", label: "Sort: title" },
+    { value: "state", label: "Sort: state" },
+    { value: "model", label: "Sort: model" }
+  ]
+  function toggleControls() { tab.controlsExpanded = !tab.controlsExpanded }
+  // A one-line summary shown on the collapsed header so active filters aren't hidden.
+  readonly property string controlsSummary: {
+    var parts = []
+    if (tab.searchText !== "") parts.push("“" + tab.searchText + "”")
+    if (tab.projectFilter !== "") parts.push("1 project")
+    if (tab.agentFilter !== "") parts.push("agent")
+    if (tab.roleFilter !== "") parts.push("role")
+    if (tab.modelFilter !== "") parts.push("model")
+    if (tab.criticalOnly) parts.push("critical only")
+    if (tab.sortBy !== "schedule") parts.push(tab.sortBy)
+    return parts.length ? parts.join(" · ") : "no filters"
+  }
+  function matchesSearch(q) {
+    if (tab.searchText === "") return true
+    var s = tab.searchText.toLowerCase()
+    return [q.title, q.node, q.assignee, tab.rowModel(q), q.role].some(function(f) {
+      return String(f || "").toLowerCase().indexOf(s) !== -1
+    })
+  }
+  function sortRows(rows) {
+    var by = tab.sortBy
+    var order = ["blocked", "ready", "running", "done", "failed", "cancelled"]
+    return rows.slice().sort(function(a, b) {
+      if (by === "title") return String(a.title || "").localeCompare(String(b.title || ""))
+      if (by === "state") return order.indexOf(a.state) - order.indexOf(b.state)
+      if (by === "model") return String(tab.rowModel(a) || "").localeCompare(String(tab.rowModel(b) || ""))
+      // schedule (default): critical first, then earliest start
+      if (!!a.critical !== !!b.critical) return a.critical ? -1 : 1
+      return (a.es || 0) - (b.es || 0)
+    })
+  }
   property var activeStates: ({ ready: true, running: true, blocked: true, done: true, failed: true })
   function toggleState(s) { var m = {}; for (var k in activeStates) m[k] = activeStates[k]; m[s] = !m[s]; activeStates = m }
   function stateOk(s) { return activeStates[s] !== undefined ? !!activeStates[s] : true }
@@ -543,9 +586,10 @@ Item {
         if (tab.criticalOnly && !q.critical) return false
         if (tab.roleFilter !== "" && String(q.role || "") !== tab.roleFilter) return false
         if (tab.modelFilter !== "" && tab.rowModel(q) !== tab.modelFilter) return false
+        if (!tab.matchesSearch(q)) return false
         return true
       })
-      rows.sort(function(a, b) { if (!!a.critical !== !!b.critical) return a.critical ? -1 : 1; return (a.es || 0) - (b.es || 0) })
+      rows = tab.sortRows(rows)
       out.push({ project: p, rows: rows, maxEf: tab.projectMaxEf(p.id) })
     }
     return out
@@ -1388,6 +1432,50 @@ Item {
       Repeater { model: tab.approvalRows; delegate: ApprovalBanner { required property var modelData; width: headerCol.width; row: modelData } }
     }
 
+    // Search & sort + filters live in one collapsible section (collapsed by default so the
+    // board has the room). The header row toggles it and shows a summary of what's active.
+    Row {
+      width: parent.width; spacing: Style.spacing.sm
+      MouseArea {
+        width: header.implicitWidth; height: header.implicitHeight
+        cursorShape: Qt.PointingHandCursor
+        onClicked: tab.toggleControls()
+        Row {
+          id: header; spacing: Style.spacing.sm
+          Text { text: tab.controlsExpanded ? "▾" : "▸"; color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.body }
+          Text { text: "Search & sort"; color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.body; font.bold: true }
+        }
+      }
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        visible: !tab.controlsExpanded
+        text: tab.controlsSummary; color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+      }
+    }
+
+    Column {
+      width: parent.width; spacing: Style.spacing.controlGap
+      visible: tab.controlsExpanded
+
+      Row {
+        width: parent.width; spacing: Style.spacing.controlGap
+        TextField {
+          id: taskSearch
+          width: Style.space(280)
+          placeholderText: "search tasks (title, node, agent, model)"
+          text: tab.searchText
+          foreground: dash.foreground; font.family: dash.fontFamily
+          verticalPadding: Style.spacing.controlPaddingY
+          onTextEdited: tab.searchText = text
+          Keys.onEscapePressed: function(e) { tab.searchText = ""; dash.focusCatcher(); e.accepted = true }
+        }
+        PanelDropdown {
+          id: sortDrop; width: Style.space(180); showLabel: false; options: tab.sortOptions; value: tab.sortBy
+          popupParent: tab; ownerOpen: dash.opened && dash.tab === "plan"
+          foreground: dash.foreground; fontFamily: dash.fontFamily; onChanged: function(v) { tab.sortBy = v }
+        }
+      }
+
     // Filters + state chips: a Flow (not a Row) so each control wraps onto
     // its own line at narrower widths (1280x800 panel, sidebar included).
     Flow {
@@ -1413,6 +1501,7 @@ Item {
         }
       }
       Button { text: "Critical only"; bordered: true; selected: tab.criticalOnly; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: tab.toggleCriticalOnly() }
+    }
     }
     Text {
       visible: tab.filterEmptyNote !== ""

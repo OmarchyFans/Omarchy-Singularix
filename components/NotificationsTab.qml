@@ -33,6 +33,34 @@ Item {
   property bool notify: true
   property var expanded: ({})
 
+  // ---- multi-select: tick several notifications, then act on all at once ---------------
+  property var selected: ({})
+  function allRows() { return tab.blockerList.concat(tab.warnings) }
+  function isSelected(r) { return !!(r && tab.selected[r.__id]) }
+  function selectedCount() { return Object.keys(tab.selected).length }
+  function toggleSelect(r) {
+    if (!r) return
+    var m = {}; for (var k in tab.selected) m[k] = tab.selected[k]
+    if (m[r.__id]) delete m[r.__id]; else m[r.__id] = true
+    tab.selected = m
+  }
+  function clearSelection() { tab.selected = ({}) }
+  function selectAll() {
+    var m = {}; var rows = tab.allRows()
+    for (var i = 0; i < rows.length; i++) m[rows[i].__id] = true
+    tab.selected = m
+  }
+  function selectedRows() {
+    return tab.allRows().filter(function(r) { return tab.isSelected(r) })
+  }
+  // Apply one action to every selected row it makes sense for, then clear the selection.
+  // Approve/Decline touch only approval rows; Dismiss and Hand to Rix touch all selected.
+  function bulkApprove() { tab.selectedRows().forEach(function(r) { if (tab.isApproval(r)) tab.approve(r) }); tab.clearSelection() }
+  function bulkDecline() { tab.selectedRows().forEach(function(r) { if (tab.isApproval(r)) tab.decline(r) }); tab.clearSelection() }
+  function bulkDismiss() { tab.selectedRows().forEach(function(r) { tab.dismiss(r) }); tab.clearSelection() }
+  function bulkHandToRix() { tab.selectedRows().forEach(function(r) { tab.handToRix(r) }); tab.clearSelection() }
+  function selectedApprovalCount() { return tab.selectedRows().filter(function(r) { return tab.isApproval(r) }).length }
+
   function rowAt(i) { return (i >= 0 && i < tab.blockerList.length) ? tab.blockerList[i] : tab.warnings[i - tab.blockerList.length] }
   function isBlockerRow(r) { return !!(r && r.__row === "blocker") }
   function isExpanded(r) { return !!(r && tab.expanded[r.__id]) }
@@ -115,6 +143,21 @@ Item {
     return m ? m[1] : ""
   }
   function approveLabel(b) { return "Approve $" + tab.approvalUsd(b) }
+  // Shipped actions minus the ones with their own dedicated buttons (Approve/Decline);
+  // whatever's left renders as a generic button in the expanded card. Each is
+  // {label, argv, tip?}. A secret-rotation blocker ships "Open rotation page" and
+  // "Mark rotated" this way (lib/harness.sh), so no per-kind QML is needed.
+  function extraActions(b) {
+    if (!b || !b.actions) return []
+    var skip = { "Decline": true }
+    skip[tab.approveLabel(b)] = true
+    var out = []
+    for (var i = 0; i < b.actions.length; i++) {
+      var a = b.actions[i]
+      if (a && a.label && !skip[a.label]) out.push(a)
+    }
+    return out
+  }
   // Prefer the argv the emitter shipped (--action LABEL=ARGV_JSON, lib/events.sh); fall
   // back to deriving it from the key/ref/message text for an older event or one raised
   // straight from the CLI without --action.
@@ -227,9 +270,23 @@ Item {
         Item {
           width: parent.width
           height: Math.max(glyph.implicitHeight, titleLine.implicitHeight, rightSlot.implicitHeight)
+          // Selection tick: clicking it (or its box) toggles this row in the multi-select
+          // set without expanding the card. The bulk bar above then acts on all ticked rows.
+          Text {
+            id: checkbox
+            anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+            text: tab.isSelected(rowItem.row) ? "󰄲" : "󰄱"
+            color: tab.isSelected(rowItem.row) ? dash.accent : dash.dim
+            font.family: dash.fontFamily; font.pixelSize: Style.font.iconLarge
+            MouseArea {
+              anchors.fill: parent; anchors.margins: -Style.space(4)
+              cursorShape: Qt.PointingHandCursor
+              onClicked: tab.toggleSelect(rowItem.row)
+            }
+          }
           Text {
             id: glyph
-            anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+            anchors.left: checkbox.right; anchors.leftMargin: Style.space(8); anchors.verticalCenter: parent.verticalCenter
             text: tab.levelGlyph(rowItem.row)
             color: tab.isBlockerRow(rowItem.row) ? dash.urgent : dash.warnColor
             font.family: dash.fontFamily; font.pixelSize: Style.font.iconLarge
@@ -352,6 +409,19 @@ Item {
               visible: tab.isApproval(rowItem.row)
               onClicked: tab.decline(rowItem.row)
             }
+            // Any extra action the emitter shipped (lib/events.sh --action LABEL=ARGV_JSON)
+            // that isn't already a hard-coded button above -- e.g. a secret alert's
+            // "Open rotation page" (open-url) and "Mark rotated" (harness secret-rotated).
+            // Approve/Decline are handled by their own buttons, so they're filtered out.
+            Repeater {
+              model: tab.extraActions(rowItem.row)
+              delegate: Button {
+                required property var modelData
+                text: modelData.label; iconText: "󰐊"; foreground: dash.foreground; fontFamily: dash.fontFamily
+                tooltipText: modelData.tip || ("Runs: " + (modelData.argv || []).join(" "))
+                onClicked: dash.act([dash.launcher].concat(modelData.argv || []))
+              }
+            }
             Button {
               text: "Hand to Rix"; iconText: "󰬐"; foreground: dash.foreground; fontFamily: dash.fontFamily
               tooltipText: "Creates a task for Rix from this notification and opens Rix's chat. Does not dismiss it."
@@ -381,8 +451,59 @@ Item {
     }
     Text {
       width: parent.width; wrapMode: Text.Wrap
-      text: "Click a notification for details. Dismiss hides it; Hand to Rix creates a task for Rix; Approve/Decline decide a metered spend."
+      text: "Click a notification for details, or tick the box to select several and act on them together. Dismiss hides it; Hand to Rix creates a task for Rix; Approve/Decline decide a metered spend."
       color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+    }
+
+    // Bulk action bar: appears once anything is ticked. Approve/Decline apply only to the
+    // selected metered-approval rows; Dismiss and Hand to Rix apply to every selected row.
+    Rectangle {
+      width: parent.width
+      visible: tab.selectedCount() > 0
+      implicitHeight: bulkRow.implicitHeight + Style.space(16)
+      radius: Style.space(6)
+      color: Qt.rgba(dash.accent.r, dash.accent.g, dash.accent.b, 0.10)
+      Row {
+        id: bulkRow
+        anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+        anchors.leftMargin: Style.space(12); anchors.rightMargin: Style.space(12)
+        spacing: Style.spacing.sm
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: tab.selectedCount() + " selected"
+          color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.body; font.bold: true
+        }
+        Button {
+          text: "Approve selected (" + tab.selectedApprovalCount() + ")"; iconText: "󰄬"; selected: true
+          enabled: tab.selectedApprovalCount() > 0; foreground: dash.foreground; fontFamily: dash.fontFamily
+          tooltipText: "Approves every selected metered-spend request."
+          onClicked: tab.bulkApprove()
+        }
+        Button {
+          text: "Decline selected"; iconText: "󰅖"; enabled: tab.selectedApprovalCount() > 0
+          foreground: dash.urgent; fontFamily: dash.fontFamily
+          tooltipText: "Declines every selected metered-spend request."
+          onClicked: tab.bulkDecline()
+        }
+        Button {
+          text: "Hand selected to Rix"; iconText: "󰬐"; foreground: dash.foreground; fontFamily: dash.fontFamily
+          tooltipText: "Creates a Rix task from each selected notification."
+          onClicked: tab.bulkHandToRix()
+        }
+        Button {
+          text: "Dismiss selected"; iconText: "󰅖"; foreground: dash.foreground; fontFamily: dash.fontFamily
+          tooltipText: "Clears/hides every selected notification."
+          onClicked: tab.bulkDismiss()
+        }
+        Button {
+          text: "Select all"; foreground: dash.foreground; fontFamily: dash.fontFamily
+          onClicked: tab.selectAll()
+        }
+        Button {
+          text: "Clear"; foreground: dash.foreground; fontFamily: dash.fontFamily
+          onClicked: tab.clearSelection()
+        }
+      }
     }
     PanelSeparator { width: parent.width; foreground: dash.foreground }
 

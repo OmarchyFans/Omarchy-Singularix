@@ -3,6 +3,13 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.19.0
+
+- **Credential alerts reach you as notifications.** When the harness finds a secret (§17.8) it raises a blocker per unresolved alert with what it is (masked, never the value), why it matters (exposed to a model / held in a file / scrubbed before sending), and the rotation guide as click-by-click steps. "Open rotation page" opens the vendor's console (`open-url`, http/https only); "Mark rotated" resolves the alert (`harness secret-rotated`). `harness secrets list|show|scan|resolve` also work from the launcher.
+- **Select several notifications and act on them at once.** Tick the box on each row; a bulk bar approves or declines every selected metered request, or dismisses / hands to Rix every selected notification. Select-all and clear included.
+- **The sidebar collapses to an icon rail when idle** and expands on hover, focus, or a pin toggle, giving the Gantt and forms more width. Navigation stays one click away with tooltips in the rail.
+- **Projects: search and sort in one collapsible section.** A text search across task title, node, agent and model, plus sort by schedule / title / state / model, folded into a "Search & sort" section that stays collapsed (with a summary of what's active) until you open it.
+
 ## 0.18.0
 
 - **Singularix.** The plugin is now called Singularix: Singularix.ai technology, available locally as a shell plugin on Omarchy. The GitHub repository moved to `OmarchyFans/Omarchy-Singularix` (the old URL redirects; the update banner and README point at the new one). Bar widget display name and alias `singularix` added; the `agent-launcher`/`agents` aliases and every command, path and keybinding keep working.

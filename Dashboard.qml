@@ -47,6 +47,10 @@ Item {
 
   // ---- state shared with the tabs ---------------------------------------
   property string tab: "rix"
+  // Sidebar collapses to an icon rail when it is not in use (hover or focus
+  // expands it); the pin locks it open. Session-lived, no host persistence.
+  property bool sidebarPinned: false
+  property bool sidebarHovered: false
   property var status: null            // parsed `status --json`
   property var blockers: ({})          // parsed blockers.json
   property var events: []              // ingested events.jsonl lines (capped)
@@ -358,9 +362,17 @@ Item {
           // ---- sidebar ---------------------------------------------------
           Rectangle {
             id: sidebar
-            width: Style.space(200)
+            // Rail when idle, full when hovered/pinned/any nav focused. The
+            // pages fill whatever room is left, so collapsing gives the Gantt
+            // and forms more width without hiding navigation.
+            readonly property bool expanded: dash.sidebarPinned || dash.sidebarHovered || navFocus.activeFocus
+            width: expanded ? Style.space(200) : Style.space(52)
             height: parent.height
             color: Qt.rgba(dash.foreground.r, dash.foreground.g, dash.foreground.b, 0.04)
+            Behavior on width { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+
+            HoverHandler { id: sidebarHover; onHoveredChanged: dash.sidebarHovered = hovered }
+            FocusScope { id: navFocus; anchors.fill: parent }
 
             Column {
               anchors.fill: parent
@@ -372,6 +384,7 @@ Item {
                 Text { text: "󱚝"; color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.display }
                 Column {
                   anchors.verticalCenter: parent.verticalCenter
+                  visible: sidebar.expanded
                   Text { text: "Agents"; color: dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.title; font.bold: true }
                   Text { text: "omarchy.fans"; color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption }
                 }
@@ -380,10 +393,14 @@ Item {
 
               component NavButton: Button {
                 property string tabId: ""
+                property string label: ""
                 property int badge: 0
                 property color badgeColor: dash.accent
                 width: sidebar.width - Style.space(28)
                 leftAlign: true
+                // icon-only in the rail; the tooltip names the page there
+                text: sidebar.expanded ? label : ""
+                tooltipText: sidebar.expanded ? "" : label
                 selected: dash.tab === tabId
                 foreground: dash.foreground; fontFamily: dash.fontFamily
                 onClicked: dash.selectTab(tabId)
@@ -396,27 +413,36 @@ Item {
                   Text { id: badgeText; anchors.centerIn: parent; text: parent.parent.badge; color: dash.background; font.family: dash.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
                 }
               }
-              NavButton { tabId: "rix"; iconText: "󰚩"; text: "Rix" }
-              NavButton { tabId: "plan"; iconText: "󰙅"; text: "Projects"; badge: dash.planApprovalCount; badgeColor: dash.urgent }
-              NavButton { tabId: "agents"; iconText: "󰙨"; text: "Agents"; badge: dash.runningCount; badgeColor: dash.okColor }
-              NavButton { tabId: "new"; iconText: ""; text: "New agent" }
-              NavButton { tabId: "events"; iconText: "󰈙"; text: "Events" }
-              NavButton { tabId: "notifications"; iconText: "󰂚"; text: "Notifications"; badge: dash.blockerCount; badgeColor: dash.urgent }
+              NavButton { tabId: "rix"; iconText: "󰚩"; label: "Rix" }
+              NavButton { tabId: "plan"; iconText: "󰙅"; label: "Projects"; badge: dash.planApprovalCount; badgeColor: dash.urgent }
+              NavButton { tabId: "agents"; iconText: "󰙨"; label: "Agents"; badge: dash.runningCount; badgeColor: dash.okColor }
+              NavButton { tabId: "new"; iconText: ""; label: "New agent" }
+              NavButton { tabId: "events"; iconText: "󰈙"; label: "Events" }
+              NavButton { tabId: "notifications"; iconText: "󰂚"; label: "Notifications"; badge: dash.blockerCount; badgeColor: dash.urgent }
+
+              Item { width: 1; height: Style.space(8) }
+              PanelActionButton {
+                iconText: dash.sidebarPinned ? "󰤱" : "󰤰"
+                tooltipText: dash.sidebarPinned ? "Unpin the sidebar (let it collapse when idle)" : "Pin the sidebar open"
+                onClicked: dash.sidebarPinned = !dash.sidebarPinned
+              }
 
               Item { width: 1; height: Style.space(16) }
               Text {
+                visible: sidebar.expanded
                 width: parent.width; wrapMode: Text.Wrap
                 text: (dash.agentCount + " agent" + (dash.agentCount === 1 ? "" : "s") + "  ·  " + dash.runningCount + " running") + (dash.blockerCount ? "\n" + dash.blockerCount + " need" + (dash.blockerCount === 1 ? "s" : "") + " you" : "")
                       + (dash.usage ? "\n" + dash.fmtK(dash.usage.totals.prompt + dash.usage.totals.output) + " tokens  ·  " + dash.fmtUsd(dash.totalCost) : "")
                 color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
               }
               Text {
-                visible: dash.error !== ""
+                visible: sidebar.expanded && dash.error !== ""
                 width: parent.width; wrapMode: Text.Wrap
                 text: dash.error; color: dash.urgent; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
               }
               Item { width: 1; height: Style.space(16) }
               Text {
+                visible: sidebar.expanded
                 width: parent.width; wrapMode: Text.Wrap
                 text: "1-6 pages · j/k move · Enter chat · r refresh · Esc close"
                 color: dash.dim; font.family: dash.fontFamily; font.pixelSize: Style.font.caption

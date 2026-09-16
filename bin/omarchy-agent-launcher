@@ -923,6 +923,19 @@ cmd_harness() {
       [[ -z ${OAL_AGENT:-} ]] || fail "harness decline: agents cannot decline spending; ask the user to run this"
       local project=${CMD[2]:?"harness decline needs a project id"} req; req=$(opt_value --request || true)
       harness_decline "$project" "$req" | jq . 2>/dev/null || true ;;
+    secrets)
+      # Pass through to the harness CLI's own `secrets` subcommand (list|show|scan|resolve).
+      local bin; bin=$(harness_bin) || fail "harness CLI not found"
+      "$bin" secrets "${CMD[@]:2}" ;;
+    secret-rotated)
+      # The Notifications "Mark rotated" action: resolve one credential alert. A human
+      # confirmation that the credential was rotated -- not a spend, but keep agents out
+      # of it so a delegate can't quietly mark its own leak handled.
+      [[ -z ${OAL_AGENT:-} ]] || fail "harness secret-rotated: ask the user to confirm a rotation"
+      local bin; bin=$(harness_bin) || fail "harness CLI not found"
+      local project; project=$(opt_value --project || true)
+      local aid=${CMD[2]:?"harness secret-rotated needs an alert id"}
+      "$bin" secrets resolve ${project:+--project "$project"} "$aid" ;;
     inbox)
       local profile=${CMD[2]:?"harness inbox needs a profile name"}
       local bin; bin=$(harness_bin) || fail "harness CLI not found"
@@ -1064,6 +1077,13 @@ case "${CMD[0]:-menu}" in
   fallback) cmd_fallback "${CMD[@]:1}" ;;
   cloud)    load_runtime cloud; cloud_dispatch "${CMD[@]:1}" ;;
   focus-window) cmd_focus_window "${CMD[1]:?focus-window needs a window title}" ;;
+  open-url)
+    # Open a rotation page (or any http/https URL) from a notification action. Refuse
+    # anything that is not plainly http(s): a notification must never turn into a
+    # file:// or command opener.
+    url=${CMD[1]:?"open-url needs a URL"}
+    [[ $url =~ ^https?://[^[:space:]]+$ ]] || fail "open-url only opens http(s) URLs"
+    have xdg-open && run xdg-open "$url" || say "$url" ;;
   models)   [[ ${OAL_OFFLINE:-0} == 1 ]] || models_catalog_refresh >/dev/null 2>&1 || true
             if (( JSON )); then models_tree_json | jq .; else models_tree_print; fi ;;
   *) fail "unknown command: ${CMD[0]} (try --help)" ;;
