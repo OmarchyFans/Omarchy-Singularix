@@ -866,6 +866,15 @@ JSON
   ) || exit 1
   pass "harness keepalive: idle launcher-owned rix sessions carry the dispatch loop's pid; others untouched"
 
+  # ---- forgetting a delegate keeps its run log under the state dir ---------------------
+  (
+    mkdir -p "$(stage_dir hns-keep-log)/runs"; echo "delegate said hello" >"$(stage_dir hns-keep-log)/runs/20260101-000000.log"
+    harness_job_forget hns-keep-log
+    [[ -d $(stage_dir hns-keep-log) ]] && tfail "forget must remove the staged agent"
+    grep -q "delegate said hello" "$HARNESS_STATE_DIR/runs/hns-keep-log/20260101-000000.log" || tfail "forget must keep the delegate's run log in the state dir"
+  ) || exit 1
+  pass "harness_job_forget keeps the delegate's run logs as evidence"
+
   # ---- harness_bin never falls back to a real CLI when told there is none --------------
   (
     settings_set harness_bin none

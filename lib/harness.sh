@@ -761,7 +761,10 @@ harness_approve() {
   local rc=0 out=""
   if [[ -n $bin ]]; then
     if (( OAL_DRY_RUN )); then say "[dry-run] would: $bin approve --project $project --request ${request:-<none>} --usd $usd"; return 0; fi
-    out=$("$bin" approve --project "$project" --request "${request:-}" --usd "$usd") || rc=$?
+    # A panel click has no terminal; the harness CLI refuses a non-TTY approval unless the
+    # caller vouches for a human. This wrapper already refused any agent (OAL_AGENT), so the
+    # remaining caller IS the human at the desktop (live 2026-09-16: Approve did nothing).
+    out=$(HARNESS_APPROVER=human "$bin" approve --project "$project" --request "${request:-}" --usd "$usd") || rc=$?
   else
     local body; body=$(jq -nc --arg rid "${request:-}" --argjson usd "$usd" --arg reason "$reason" \
       '{request_id:$rid, usd:$usd, reason:$reason, by:"human"}')
@@ -792,7 +795,7 @@ harness_decline() {
     if (( OAL_DRY_RUN )); then say "[dry-run] would: $bin decline --project $project --request ${request:-<none>}"; return 0; fi
     mkdir -p "$HARNESS_STATE_DIR"
     local errf; errf=$(mktemp "$HARNESS_STATE_DIR/.decline-err.XXXXXX" 2>/dev/null) || errf=""
-    if out=$("$bin" decline --project "$project" --request "${request:-}" 2>"${errf:-/dev/null}"); then
+    if out=$(HARNESS_APPROVER=human "$bin" decline --project "$project" --request "${request:-}" 2>"${errf:-/dev/null}"); then
       :   # CLI decline exists and succeeded
     else
       rc=$?
@@ -1180,6 +1183,15 @@ harness_job_forget() { # <slug>
   local slug=$1
   [[ -n $slug && $slug == hns-* ]] || return 0
   session_kill "$slug" 2>/dev/null || true
+  # Keep the delegate's run logs: they are the only evidence of what it did (live
+  # 2026-09-16 a delegate failed three oracles under the new systemd unit and nothing was
+  # left to read). $HARNESS_STATE_DIR/runs/<slug>/<run>.log; the 60 newest slugs survive.
+  local runs="$(stage_dir "$slug")/runs"
+  if [[ -d $runs ]]; then
+    mkdir -p "$HARNESS_STATE_DIR/runs/$slug"
+    cp -f "$runs"/*.log "$HARNESS_STATE_DIR/runs/$slug/" 2>/dev/null || true
+    ls -1dt "$HARNESS_STATE_DIR"/runs/*/ 2>/dev/null | tail -n +61 | xargs -r rm -rf
+  fi
   rm -rf "$(stage_dir "$slug")" 2>/dev/null || true
   rm -f "$(profile_path "$slug")" "$(job_path "$slug")" 2>/dev/null || true
 }
