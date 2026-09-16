@@ -3,6 +3,10 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.19.1
+
+- **The harness won't start here while your digital twin is running it in the sandbox.** Take the work back first: `omarchy-digital-twin handoff local`. `harness status` shows when it's on the sandbox.
+
 ## 0.19.0
 
 - **Credential alerts reach you as notifications.** When the harness finds a secret (§17.8) it raises a blocker per unresolved alert with what it is (masked, never the value), why it matters (exposed to a model / held in a file / scrubbed before sending), and the rotation guide as click-by-click steps. "Open rotation page" opens the vendor's console (`open-url`, http/https only); "Mark rotated" resolves the alert (`harness secret-rotated`). `harness secrets list|show|scan|resolve` also work from the launcher.
