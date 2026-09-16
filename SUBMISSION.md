@@ -21,7 +21,7 @@ Developer Tools
 
 ### Tags
 
-ai, launcher
+ai, launcher, quickshell
 
 ### Suggest a missing tag
 
@@ -29,7 +29,7 @@ _No response_
 
 ### Maintainer notes
 
-Bar widget + terminal form that launches Hermes Agent or OpenClaw locally, in Docker, or on Omarchy.Fans Cloud. The widget is a thin launcher; all logic is bash inside the plugin folder (bin/, lib/). `sudo` appears once (`sudo docker` when omarchy-sudo-docker says so). The cloud runtime talks only to api.omarchy.fans; nothing is curl-piped.
+See SUBMISSION-body.md for the current maintainer notes (kept in sync with the code).
 
 ### Submission checklist
 

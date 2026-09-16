@@ -118,7 +118,7 @@ events_recent() { [[ -f $OAL_EVENTS ]] || { printf '[]'; return; }; tail -n "${1
 # function, not duplicated logic, so tests/run.sh can register the exact same trap body
 # standalone and exercise this directly (no tmux/hermes needed).
 session_exit_notify() {
-  local name=$1 m="$OAL_STATE/stopping/$name"
+  local name=$1; local m="$OAL_STATE/stopping/$name"
   if [[ -f $m ]] && (( $(date +%s) - $(stat -c %Y "$m" 2>/dev/null || echo 0) < 60 )); then
     rm -f "$m"
     event_emit "$name" session_exited "Session ended; cleaned up by the launcher" --code 129 \

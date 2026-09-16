@@ -1239,7 +1239,7 @@ harness_job_forget() { # <slug>
   # Keep the delegate's run logs: they are the only evidence of what it did (live
   # 2026-09-16 a delegate failed three oracles under the new systemd unit and nothing was
   # left to read). $HARNESS_STATE_DIR/runs/<slug>/<run>.log; the 60 newest slugs survive.
-  local runs="$(stage_dir "$slug")/runs"
+  local runs; runs="$(stage_dir "$slug")/runs"
   if [[ -d $runs ]]; then
     mkdir -p "$HARNESS_STATE_DIR/runs/$slug"
     cp -f "$runs"/*.log "$HARNESS_STATE_DIR/runs/$slug/" 2>/dev/null || true
@@ -1304,7 +1304,7 @@ harness_dispatch_heartbeat() {
       tok_in=$(jq -r '.prompt // empty' <<<"$usage_row" 2>/dev/null)
       tok_out=$(jq -r '.output // empty' <<<"$usage_row" 2>/dev/null)
       if [[ ( -n $usd_actual && $usd_actual != null ) || ( -n $tok_in && $tok_in != null ) || ( -n $tok_out && $tok_out != null ) ]]; then
-        local -a largs=(receipt --project "$proj" --session "$sid" --node "$node" --status done --evidence "usage after withdrawal")
+        local -a largs=(receipt --project "$proj" --session "$sid" --node "$node" --status "done" --evidence "usage after withdrawal")
         [[ -n $model ]] && largs+=(--model "$model")
         [[ -n $vendor ]] && largs+=(--vendor "$vendor")
         [[ -n $usd_actual && $usd_actual != null ]] && largs+=(--usd "$usd_actual")
