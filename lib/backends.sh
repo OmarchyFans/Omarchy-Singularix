@@ -17,6 +17,52 @@
 OAL_BACKENDS="$OAL_CONF/backends.json"
 BACKEND_KINDS="provider endpoint"
 
+# Per-backend policy for Rix's autonomous proxy (P0.6): which role tier a backend
+# serves, whether IP-sensitive work may go to it, and whether it costs money per
+# call. Looked up by backend id (registry entries) or provider id (implicit
+# provider backends); anything not listed falls back to backend_policy_json's
+# conservative default below. id|tier(csv)|ip_safe(true/false)|metered(true/false)
+BACKEND_POLICY=(
+  "anthropic|reasoning,coding|true|false"    # subscription OAuth (Hermes)
+  "openai-codex|coding|true|false"           # ChatGPT subscription OAuth
+  "xai-oauth|coding|true|false"              # Grok browser sign-in
+  "local|coding|true|false"                  # llama.cpp, offline
+  "ollama|coding|true|false"                 # local, no key, no network egress
+  "deepseek|coding|false|true"               # third-party API key, metered
+  "openai|coding|false|true"
+  "xai|coding|false|true"
+  "nous|coding|false|true"
+  "openrouter|coding|false|true"
+  "gemini|coding|false|true"
+)
+
+# backend_policy_json <id> [provider] [kind] [has_price(0/1)]
+# Returns {tier:[...], ip_safe:bool, metered:bool}. Table lookup by id, falling
+# back to provider id, then to a kind-aware default: an endpoint (registry)
+# backend is assumed private infra (Omarchy.Fans Cloud relay, a team vLLM
+# server, a private gateway) so ip_safe defaults true, with metered true only
+# when the entry has pricing set (input_per_m); any other unlisted backend gets
+# the conservative "third-party API" stance — not IP-safe, metered — so a new
+# provider never silently leaks IP-sensitive work before someone reviews it.
+backend_policy_json() {
+  local id=$1 provider=${2:-$1} kind=${3:-provider} has_price=${4:-0}
+  local row rid tier ip_safe metered
+  for row in "${BACKEND_POLICY[@]}"; do
+    IFS='|' read -r rid tier ip_safe metered <<<"$row"
+    if [[ $rid == "$id" || $rid == "$provider" ]]; then
+      jq -nc --arg tier "$tier" --argjson ip_safe "$ip_safe" --argjson metered "$metered" \
+        '{tier: ($tier | split(",")), ip_safe:$ip_safe, metered:$metered}'
+      return 0
+    fi
+  done
+  if [[ $kind == endpoint ]]; then
+    local m=false; [[ $has_price == 1 ]] && m=true
+    jq -nc --argjson metered "$m" '{tier:["coding"], ip_safe:true, metered:$metered}'
+  else
+    jq -nc '{tier:["coding"], ip_safe:false, metered:true}'
+  fi
+}
+
 backends_json() { [[ -s $OAL_BACKENDS ]] && cat "$OAL_BACKENDS" || printf '{}'; }
 backend_key_var() { printf 'BACKEND_%s_KEY' "$(tr '[:lower:]-' '[:upper:]_' <<<"$1")"; }
 backend_exists() { backends_json | jq -e --arg id "$1" 'has($id)' >/dev/null; }
@@ -65,18 +111,21 @@ backend_from_provider() {
     $ready || state="local GPU · not ready"
   fi
   [[ $p == ollama ]] && { have ollama && ready=true; state="ollama"; }
+  local policy; policy=$(backend_policy_json "$p" "$p" provider)
   jq -nc --arg id "$p" --arg label "$label" --arg provider "$p" --arg auth "$auth" --argjson ready "$ready" --arg state "$state" \
-    --arg model "$model" --arg base_url "$(provider_base_url "$p")" --arg env "$env" \
+    --arg model "$model" --arg base_url "$(provider_base_url "$p")" --arg env "$env" --argjson policy "$policy" \
     '{id:$id, label:$label, kind:"provider", provider:$provider, auth:$auth, model:$model, base_url:$base_url,
-      key_var:(if $env == "-" then "" else $env end), ready:$ready, state:$state, hermes:true}'
+      key_var:(if $env == "-" then "" else $env end), ready:$ready, state:$state, hermes:true} + $policy'
 }
 
 # One backend, registry first, then providers. backend_get <id> -> JSON object (exit 1 if unknown)
 backend_get() {
   local b; b=$(backends_json | jq -c --arg id "$1" '.[$id] // empty')
   if [[ -n $b ]]; then
-    jq -c --arg var "$(backend_key_var "$1")" --argjson has_key "$([[ -n $(secret_get "$(backend_key_var "$1")") ]] && echo true || echo false)" \
-      '. + {key_var:$var, has_key:$has_key, ready:(.state == "ready" and .url != null and .url != ""), hermes:true, provider:"endpoint", auth:"api-key"}' <<<"$b"
+    local has_price=0; jq -e '.input_per_m != null' <<<"$b" >/dev/null 2>&1 && has_price=1
+    local policy; policy=$(backend_policy_json "$1" "$1" endpoint "$has_price")
+    jq -c --arg var "$(backend_key_var "$1")" --argjson has_key "$([[ -n $(secret_get "$(backend_key_var "$1")") ]] && echo true || echo false)" --argjson policy "$policy" \
+      '. + {key_var:$var, has_key:$has_key, ready:(.state == "ready" and .url != null and .url != ""), hermes:true, provider:"endpoint", auth:"api-key"} + $policy' <<<"$b"
     return 0
   fi
   backend_from_provider "$1"
