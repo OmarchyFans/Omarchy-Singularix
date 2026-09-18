@@ -35,10 +35,18 @@
 #   omarchy-agent-launcher rix setup [BACKEND] [MODEL]   choose what Rix runs on
 #   omarchy-agent-launcher rix brief              plain status brief: agents, blockers, tokens, USD
 #   omarchy-agent-launcher rix ask "<question>"   one answer from Rix, no window
+#   omarchy-agent-launcher rix fleet register [--project ID] [--repo PATH]   one harness delegate
+#                                          SESSION per ready backend (Sonnet-5+Opus-5 on anthropic,
+#                                          Codex, Grok, DeepSeek) -- skips any that needs sign-in
+#   omarchy-agent-launcher rix fleet status [--json]   the registered fleet: backend, role, model,
+#                                          harness registration + live session state
 #   omarchy-agent-launcher models [--json]        every model Rix can run on: local models, then each
 #                                          vendor's models with $/M in/out, data country and IP-safe badge
-#   omarchy-agent-launcher delegate --backend B --name N --task-title T (--job-stdin|--job-env|--job-file F) [--wait] [--model M]
-#                                          hand a job to a worker agent on that backend
+#   omarchy-agent-launcher delegate [--backend B] --name N --task-title T (--job-stdin|--job-env|--job-file F) [--wait] [--model M]
+#                                          hand a job to a worker agent on that backend; omit --backend to let
+#                                          the fleet router pick one (round-robin coding across Sonnet/Codex/Grok,
+#                                          --role reasoning -> Opus, --ip-class open -> DeepSeek overflow, metered
+#                                          still asks) -- see: omarchy-agent-launcher rix fleet status
 #   omarchy-agent-launcher result <name> [--list]    a worker's latest unattended run output
 #   omarchy-agent-launcher sentinel [advisories [--all] [--json]]   Sentinel's advisories and Rix's handling of them
 #   omarchy-agent-launcher sentinel read ID | assign ID WORKER | decline ID "reason" | verify ID
@@ -92,6 +100,7 @@ source "$OAL_LIB/usage.sh"
 source "$OAL_LIB/harness.sh"
 source "$OAL_LIB/fallback.sh"
 source "$OAL_LIB/rix.sh"
+source "$OAL_LIB/rix_fleet.sh"
 source "$OAL_LIB/sentinel.sh"
 source "$OAL_LIB/harness_bridge.sh"
 source "$OAL_LIB/vendors.sh"
@@ -109,7 +118,7 @@ while (($#)); do
     -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --version) echo "omarchy-agent-launcher $OAL_VERSION"; exit 0 ;;
     --name|--agent|--runtime|--provider|--auth|--model|--base-url|--mode|--skill|--job-file|--task|--level|--key|--ctx|--kv|--slots|\
-    --backend|--parent|--role|--task-title|--id|--kind|--label|--url|--size|--input-per-m|--output-per-m|--approved-usd|--request|--project|--session|\
+    --backend|--parent|--role|--ip-class|--task-title|--id|--kind|--label|--url|--size|--input-per-m|--output-per-m|--approved-usd|--request|--project|--session|\
     --ref|--why|--recommend|--detail|--node|--action)
                OPTS+=("$1" "${2:-}"); shift ;;   # valued options (create, delegate, backends add, local-server, harness)
     --*)       OPTS+=("$1") ;;                    # create's flags
@@ -709,7 +718,17 @@ cmd_rix() {
                  || { warn "rix ask: refusing to run on a metered backend without --approved-usd (exit 3)"; return 3; }
                rix_ask "$q" ;;
     status)    rix_status_json | jq . ;;
-    *) fail "usage: omarchy-agent-launcher rix [chat|setup [BACKEND [MODEL]]|brief|ask \"…\"|status]" ;;
+    fleet)
+      case "${CMD[2]:-}" in
+        register)
+          local project; project=$(opt_value --project || true)
+          local repo; repo=$(opt_value --repo || true)
+          rix_fleet_register "$project" "$repo" ;;
+        status)
+          if (( JSON )); then rix_fleet_status_json | jq .; else rix_fleet_status; fi ;;
+        *) fail "usage: omarchy-agent-launcher rix fleet register [--project ID] [--repo PATH] | status" ;;
+      esac ;;
+    *) fail "usage: omarchy-agent-launcher rix [chat|setup [BACKEND [MODEL]]|brief|ask \"…\"|status|fleet register|fleet status]" ;;
   esac
 }
 
@@ -720,11 +739,34 @@ cmd_rix() {
 # dispatch loop supplies it once ITS OWN budget check has already cleared.
 cmd_delegate() {
   local backend name title mode=unattended model
-  backend=$(opt_value --backend) || fail "delegate: --backend is required (see: omarchy-agent-launcher backends list)"
+  backend=$(opt_value --backend || true)
   name=$(opt_value --name || echo "task-$(date +%m%d%H%M%S)"); name=$(slugify "$name")
   title=$(opt_value --task-title || echo "$name"); model=$(opt_value --model || true)
   opt_flag --interactive && mode=interactive
   local approved; approved=$(opt_value --approved-usd || echo 0)
+
+  # P0.21: no --backend given -- ask the fleet router (lib/rix_fleet.sh) for
+  # one instead of failing outright. --role/--ip-class describe the NODE
+  # this job is for (coding|reasoning; protected|open -- the same two axes
+  # CONTRACTS §17 / P0.1 routing.md route real harness dispatch on), and
+  # only steer which fleet target gets asked for -- they are never trusted
+  # to widen what the picked backend may do. --backend, when given, always
+  # wins outright and the picker is never consulted (existing behavior,
+  # unchanged).
+  if [[ -z $backend ]]; then
+    local role ip_class
+    role=$(opt_value --role || echo coding)
+    [[ $role == coding || $role == reasoning ]] || fail "delegate: --role must be coding or reasoning"
+    ip_class=$(opt_value --ip-class || echo protected)
+    [[ $ip_class == protected || $ip_class == open ]] || fail "delegate: --ip-class must be protected or open"
+    local pick
+    pick=$(rix_fleet_pick_backend "$role" "$ip_class") || \
+      fail "delegate: --backend is required (no ready fleet backend covers role=$role ip_class=$ip_class -- see: omarchy-agent-launcher rix fleet status)"
+    backend=$(jq -r .backend <<<"$pick")
+    # A fleet target's own model override (e.g. rix-opus -> claude-opus-5)
+    # wins only when the caller didn't already ask for a specific --model.
+    [[ -n $model ]] || model=$(jq -r '.model // empty' <<<"$pick")
+  fi
 
   # Buffer the job text once (from stdin/file/env) so its size can be
   # estimated before the profile is created, then hand those same bytes to
