@@ -7,6 +7,9 @@
 #
 # Everything is local: jq, flock, and (for toasts) omarchy-notification-send.
 
+# common.sh sets OAL_CONF too; default it here so this file stays sourceable on its own
+# (tests/run.sh registers the real exit trap standalone).
+OAL_CONF="${OAL_CONF:-${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-agent-launcher}"
 OAL_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-agent-launcher"
 OAL_EVENTS="$OAL_STATE/events.jsonl"
 OAL_BLOCKERS="$OAL_STATE/blockers.json"
@@ -111,22 +114,45 @@ event_emit() {
 # Recent events as a JSON array (bad lines skipped). events_recent [n]
 events_recent() { [[ -f $OAL_EVENTS ]] || { printf '[]'; return; }; tail -n "${1:-2000}" "$OAL_EVENTS" | jq -R 'fromjson? // empty' | jq -sc .; }
 
+# agent_mode NAME -- "unattended" | "interactive" (default). Used to decide whether an
+# exit cost the user anything.
+agent_mode() {
+  local m
+  if declare -F profile_get >/dev/null; then m=$(profile_get "$1" mode 2>/dev/null)
+  else m=$(jq -r '.mode // empty' "$OAL_CONF/agents/$1.json" 2>/dev/null); fi
+  [[ $m == unattended ]] && printf 'unattended' || printf 'interactive'
+}
+
 # session_exit_notify NAME -- called from cmd_session's HUP/TERM trap
-# (bin/omarchy-agent-launcher) when the agent's tmux session ends. A FRESH marker at
-# $OAL_STATE/stopping/<name> (harness_job_forget, lib/harness.sh, writes one right before
-# it kills a transient hns-* delegate on purpose: job done/failed/throttled, or its node
-# reassigned) downgrades this to an info note instead of the default "killed from
-# outside" blocker; a marker older than 60s is stale (some other kill) and ignored --
-# harness_job_forget prunes markers past that age too, so none pile up. A single real
-# function, not duplicated logic, so tests/run.sh can register the exact same trap body
-# standalone and exercise this directly (no tmux/hermes needed).
+# (bin/omarchy-agent-launcher) when the agent's tmux session ends.
+#
+# An ended session is NOT a blocker. Nothing is lost and nothing is asked of you: the
+# launcher never auto-restarts an agent, "Chat" starts it again, and `session_started`
+# deletes the exit note the moment you do. It used to raise a blocker -- 42 of the first
+# 99 blocker events on this machine, the single biggest source, for closing a window.
+#
+# The one case that costs something is an UNATTENDED run: it was working through a job
+# on its own and now nobody is, so that gets a warn (Notifications > Recent -- still no
+# badge, no desktop notification). Everything else is a plain note in the event log.
+#
+# A FRESH marker at $OAL_STATE/stopping/<name> means the launcher itself did the kill on
+# purpose (cmd_stop, or harness_job_forget reaping a transient hns-* delegate whose job
+# is done/failed/throttled or whose node was reassigned), so it is not even unexpected;
+# a marker older than 60s is stale (some other kill) and ignored -- harness_job_forget
+# prunes markers past that age too, so none pile up. A single real function, not
+# duplicated logic, so tests/run.sh can register the exact same trap body standalone and
+# exercise this directly (no tmux/hermes needed).
 session_exit_notify() {
   local name=$1; local m="$OAL_STATE/stopping/$name"
   if [[ -f $m ]] && (( $(date +%s) - $(stat -c %Y "$m" 2>/dev/null || echo 0) < 60 )); then
     rm -f "$m"
     event_emit "$name" session_exited "Session ended; cleaned up by the launcher" --code 129 \
       --recommend "omarchy-agent-launcher notify runlog $name"
+  elif [[ $(agent_mode "$name") == unattended ]]; then
+    event_emit "$name" session_exited "Unattended run ended before it finished (tmux session ended); Chat starts it again" \
+      --level warn --key exit --code 129 \
+      --recommend "omarchy-agent-launcher result $name  (what it got through), then Chat to pick it up"
   else
-    event_emit "$name" session_exited "Session was killed from outside (tmux session ended); Chat starts it again" --level blocker --key exit --code 129
+    event_emit "$name" session_exited "Session ended (tmux session ended); Chat starts it again" --key exit --code 129
   fi
 }

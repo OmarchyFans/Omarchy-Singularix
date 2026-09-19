@@ -3,6 +3,11 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.19.4
+
+- **An agent's session ending is no longer something that "needs you".** Closing an agent window raised a blocker — 42 of the first 99 blockers on this machine, the single biggest source — for an event that asks nothing of you: the launcher never auto-restarts an agent, Chat starts it again, and the note clears itself the moment you do. It is now a plain entry in the event log. The one exception that actually costs something is an **unattended** run that stopped before finishing, since nobody picks that up on its own; that warns (Notifications › Recent), still with no badge.
+- **Pressing Stop no longer files "killed from outside" against you.** `stop` killed the session without telling the session's own exit trap it was us, so a stop you asked for came back as an unexplained end. That is why `rix` and `jarvis` kept reappearing in the badge.
+
 ## 0.19.3
 
 - **Desktop notifications for blockers are off by default, and never sticky when you turn them on.** The badge on the bar widget already counts everything that needs you, so nothing pops up over your work any more. Blockers were being sent at `critical` urgency, which by spec never expires — that is why they stayed on screen until dismissed. Switch them back on from the Notifications page (or `settings set notify_blockers true`) and you get an ordinary notification that fades on its own after a few seconds.

@@ -370,7 +370,15 @@ session_run_once() {
     fi
   else
     say "Session ended with exit code $code."
-    event_emit "$name" session_exited "Session exited with code $code" --level blocker --key exit --code "$code"
+    # Same rule as session_exit_notify: only an unattended run that stopped by itself
+    # cost the user anything, and even that is a warn, not a blocker.
+    if [[ $(agent_mode "$name") == unattended ]]; then
+      event_emit "$name" session_exited "Unattended run exited with code $code before it finished" \
+        --level warn --key exit --code "$code" \
+        --recommend "omarchy-agent-launcher result $name  (what it got through), then Chat to pick it up"
+    else
+      event_emit "$name" session_exited "Session exited with code $code" --key exit --code "$code"
+    fi
   fi
   cmd_kanban_sync "$name" >/dev/null 2>&1 || true
   return "$code"
@@ -461,6 +469,10 @@ cmd_stop() {
   local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
   if session_alive "$name"; then
     event_emit "$name" stopped "Session stopped by the user"
+    # Tell the session's own exit trap that WE did this, or session_exit_notify reads a
+    # stop the user asked for as an unexplained end (it had no marker before 0.19.4).
+    mkdir -p "$OAL_STATE/stopping" 2>/dev/null || true
+    : >"$OAL_STATE/stopping/$name" 2>/dev/null || true
     session_kill "$name"; say "stopped $name"
   else say "$name is not running"; fi
 }

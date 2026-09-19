@@ -231,7 +231,7 @@ jq -e '."rich-test/rt-1" | .why == "only session is metered" and .recommend == "
 "$L" event rich-test note "bad action" --action 'onlylabel' >/dev/null 2>&1 && tfail "event: --action without LABEL=ARGV_JSON must be refused"
 pass "event_emit: why/recommend/detail/actions/node/project stored on events and blockers; old 4-arg form unaffected"
 
-echo "== cmd_session exit trap: harness_job_forget's marker downgrades 'killed from outside' to an info note; without one it stays a blocker"
+echo "== cmd_session exit trap: an ended session is never a blocker; only an unattended run that stopped by itself warns"
 # Registers the EXACT one-line trap bin/omarchy-agent-launcher's cmd_session does (calling
 # the real session_exit_notify from lib/events.sh, not a re-implementation of its logic),
 # standalone (no tmux/hermes needed): a background bash process registers it, gets
@@ -249,8 +249,20 @@ EOF
 chmod +x "$TRAPTEST"
 "$TRAPTEST" "$ROOT" hns-extkill >/dev/null 2>&1 & tp=$!
 sleep 0.3; kill -HUP "$tp" 2>/dev/null; wait "$tp" 2>/dev/null || true
-grep -qE '"agent":"hns-extkill".*"kind":"session_exited".*"level":"blocker"' "$OAL_EVENTS" \
-  || tfail "an external kill with no stopping-marker must still raise a blocker"
+# An interactive session that ends costs nothing: nothing to do, nothing lost, and
+# session_started clears the note. It must never reach blockers.json (the bar badge).
+grep -qE '"agent":"hns-extkill".*"kind":"session_exited".*"level":"info"' "$OAL_EVENTS" \
+  || tfail "an interactive session ending must be an info note, never a blocker"
+[[ $(jq -r '."hns-extkill/exit" // "none"' "$OAL_BLOCKERS") == none ]] \
+  || tfail "an ended interactive session must not land in blockers.json"
+# ...but an UNATTENDED run that stopped before finishing did cost something: warn.
+profile_write unat-kill hermes local ollama none qwen3:8b http://localhost:11434/v1 unattended ""
+"$TRAPTEST" "$ROOT" unat-kill >/dev/null 2>&1 & tp=$!
+sleep 0.3; kill -HUP "$tp" 2>/dev/null; wait "$tp" 2>/dev/null || true
+grep -qE '"agent":"unat-kill".*"kind":"session_exited".*"level":"warn"' "$OAL_EVENTS" \
+  || tfail "an unattended run ending before it finished must warn"
+[[ $(jq -r '."unat-kill/exit" // "none"' "$OAL_BLOCKERS") == none ]] \
+  || tfail "even an unattended exit must stay out of blockers.json"
 mkdir -p "$OAL_STATE/stopping"; : >"$OAL_STATE/stopping/hns-selfkill"
 "$TRAPTEST" "$ROOT" hns-selfkill >/dev/null 2>&1 & tp=$!
 sleep 0.3; kill -HUP "$tp" 2>/dev/null; wait "$tp" 2>/dev/null || true
@@ -260,9 +272,22 @@ grep -qE '"agent":"hns-selfkill".*"kind":"session_exited".*"level":"info"' "$OAL
 mkdir -p "$OAL_STATE/stopping"; : >"$OAL_STATE/stopping/hns-stalekill"; touch -d '-90 seconds' "$OAL_STATE/stopping/hns-stalekill"
 "$TRAPTEST" "$ROOT" hns-stalekill >/dev/null 2>&1 & tp=$!
 sleep 0.3; kill -HUP "$tp" 2>/dev/null; wait "$tp" 2>/dev/null || true
-grep -qE '"agent":"hns-stalekill".*"kind":"session_exited".*"level":"blocker"' "$OAL_EVENTS" \
-  || tfail "a stale (>60s) marker must not suppress a later external kill"
-pass "cmd_session exit trap: a fresh stopping-marker downgrades to info and is consumed; no marker or a stale one stays a blocker"
+grep -qE '"agent":"hns-stalekill".*"kind":"session_exited".*"level":"info"' "$OAL_EVENTS" \
+  || tfail "a stale (>60s) marker still yields an info note for an interactive agent"
+# `stop` must leave its own marker, or the session's trap reads a stop the user asked for
+# as an unexplained end -- which is how `rix`/`jarvis` kept filing "killed from outside".
+if command -v tmux >/dev/null; then
+  profile_write stopmark hermes local ollama none qwen3:8b http://localhost:11434/v1 unattended ""
+  SMSOCK="$OAL_STATE/tmux/oal-stopmark.sock"; mkdir -p "$(dirname "$SMSOCK")"
+  tmux -S "$SMSOCK" new-session -d -s oal-stopmark -- sleep 60
+  "$L" stop stopmark >/dev/null 2>&1 || tfail "stop stopmark"
+  [[ -f "$OAL_STATE/stopping/stopmark" ]] || tfail "cmd_stop must drop a stopping-marker for the session's own exit trap"
+  rm -f "$OAL_STATE/stopping/stopmark"
+  "$L" remove stopmark --yes >/dev/null 2>&1 || true
+else
+  echo "  skip (tmux not installed): stop leaves a stopping-marker"
+fi
+pass "cmd_session exit trap: an ended session never blocks; unattended warns; stop leaves its own marker"
 
 echo "== kanban mirror (sqlite fixture)"
 if command -v sqlite3 >/dev/null; then
