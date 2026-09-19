@@ -144,7 +144,7 @@ Enter to open the selected agent's chat, `r` to refresh, Esc to close.
 | **Agents** | every saved agent with a status pill (running / blocked / done / idle), its job, last event, task count, tokens and USD so far, and **Chat**, Stop, Edit job, Remove |
 | **New agent** | the one-page setup form |
 | **Events** | the event log: filter by agent, task, level, or text; click a column header to sort |
-| **Notifications** | open blockers ("NEEDS YOU") and recent warnings; click a row (or press Enter on it) to expand what it is, why it matters, and what's recommended, with buttons named by effect — Dismiss, Hand to Rix, Approve/Decline, Open in Projects, Chat — plus the desktop-notification toggle |
+| **Notifications** | open blockers ("NEEDS YOU") and recent warnings; click a row (or press Enter on it) to expand what it is, why it matters, and what's recommended, with buttons named by effect — Dismiss, Hand to Rix, Approve/Decline, Open in Projects, Chat — plus the desktop-notification toggle (off by default: the count on the bar widget is the signal) |
 | **Projects** | every registered project with its waterfall phase, percent complete, and open blocker count; double-click jumps to its events |
 
 ### The New agent page
@@ -433,7 +433,10 @@ See [docs/update-alerts.md](docs/update-alerts.md) for how it is built.
 - The dashboard runs only the plugin's own script with argv, never a shell
   string, and tails the event log with `tail -F`.
 - Task boards and session stores are opened with `sqlite3 -readonly`.
-  Notifications go through `omarchy-notification-send`.
+  Desktop notifications go through `omarchy-notification-send`, are **off by
+  default** (the badge on the bar widget counts every open blocker), and when
+  switched on are ordinary self-expiring notifications rather than sticky
+  critical ones: `omarchy-agent-launcher settings set notify_blockers true`.
 - The omarchy.fans token is sent to curl through a pipe and to the console as
   a one-time ticket, so it never shows up in the process list.
 - Rix has no powers of its own: it runs the same commands you can, inside a

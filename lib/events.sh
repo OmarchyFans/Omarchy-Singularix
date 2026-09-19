@@ -96,8 +96,11 @@ event_emit() {
     if (( size > OAL_EVENTS_MAX_BYTES )); then mv -f "$OAL_EVENTS" "$OAL_STATE/events.1.jsonl"; fi
     blockers_apply "$line"
   } 9>"$OAL_EVENTS_LOCK"
-  if [[ $level == blocker && $(settings_get notify_blockers true) == true ]]; then
-    local -a toast=(omarchy-notification-send -u critical -g "󱚝" "$agent: $message" "${task:+task $task · }open the Agent Dashboard"
+  # Off by default: the bar widget's badge already counts every open blocker, and a
+  # critical toast never expires on its own. When the user turns it on it is a normal,
+  # self-expiring notification, not a sticky one.
+  if [[ $level == blocker && $(settings_get notify_blockers false) == true ]]; then
+    local -a toast=(omarchy-notification-send -u normal -t 6000 -g "󱚝" "$agent: $message" "${task:+task $task · }open the Agent Dashboard"
                     --exec omarchy-shell shell summon "$OAL_PLUGIN_ID" "{\"tab\":\"notifications\",\"agent\":\"$agent\"}")
     if (( OAL_DRY_RUN )); then run "${toast[@]}"
     elif have omarchy-notification-send; then "${toast[@]}" >/dev/null 2>&1 || true; fi

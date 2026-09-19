@@ -209,7 +209,8 @@ Item {
   Process {
     id: settingProc
     stdout: StdioCollector { id: settingOut; waitForEnd: true }
-    onExited: { var v = String(settingOut.text || "").trim(); tab.notify = (v !== "false") }
+    // Unset means OFF: the badge on the bar widget is the default signal, not a toast.
+    onExited: { var v = String(settingOut.text || "").trim(); tab.notify = (v === "true") }
   }
   Connections { target: dash; function onOpenedChanged() { if (dash.opened) tab.loadSetting() } }
 
@@ -532,7 +533,7 @@ Item {
         Toggle {
           width: inner.width
           label: "Desktop notifications for blockers"
-          description: "Send an Omarchy notification whenever an agent needs you; clicking it opens this page."
+          description: "Off by default — the badge on the bar widget already counts everything that needs you. Turn this on to also get a notification that fades on its own; clicking it opens this page."
           checked: tab.notify
           foreground: dash.foreground; fontFamily: dash.fontFamily
           onClicked: { tab.notify = !tab.notify; dash.act([dash.launcher, "settings", "set", "notify_blockers", tab.notify ? "true" : "false"]) }

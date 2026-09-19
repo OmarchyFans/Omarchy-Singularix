@@ -3,6 +3,10 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.19.3
+
+- **Desktop notifications for blockers are off by default, and never sticky when you turn them on.** The badge on the bar widget already counts everything that needs you, so nothing pops up over your work any more. Blockers were being sent at `critical` urgency, which by spec never expires — that is why they stayed on screen until dismissed. Switch them back on from the Notifications page (or `settings set notify_blockers true`) and you get an ordinary notification that fades on its own after a few seconds.
+
 ## 0.19.2
 
 - **The dashboard reads the harness again, and Rix's model picker shows what Rix runs on.** Once the event log passed 128 KiB, `status --json` came out malformed and the dashboard fell back to "could not parse status": the Rix tab's harness section, the Plan tab's Gantt and the picker's current model all went blank, and picking a model looked like it did nothing because the label never changed. The event log, the blockers and each agent's task list now reach `jq` through files instead of the command line (Linux caps one argument at 128 KiB however large `ARG_MAX` is, and the log only rotates at 2 MiB, so this was going to happen to everyone). `rix brief` had the same limit and is fixed too.
