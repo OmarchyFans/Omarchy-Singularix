@@ -147,7 +147,12 @@ rix_setup() {
   if [[ $provider == local ]] && declare -F local_status_json >/dev/null && ! local_status_json | jq -e '.agent_ready' >/dev/null 2>&1; then
     warn "the local GPU server is not ready for agents yet: run  omarchy-agent-launcher local-server tune --ctx 32768  (or pick another backend)"
   fi
-  say "Rix runs on $backend / $m  (change with: omarchy-agent-launcher rix setup BACKEND [MODEL])"
+  if session_alive "$RIX_NAME"; then
+    say "Saved. Rix is still running $(agent_field_now "$RIX_NAME" model) in its open session:"
+    say "  it switches to $backend / $m when you restart it (Stop, then Chat)."
+  else
+    say "Rix runs on $backend / $m  (change with: omarchy-agent-launcher rix setup BACKEND [MODEL])"
+  fi
 }
 
 # Deterministic status brief from the launcher's own data: no model, no cost.
@@ -198,15 +203,26 @@ rix_ask() { # rix_ask "<question>"
 }
 
 rix_status_json() {
-  local running=false model="" backend="" provider=""
+  local running=false model="" backend="" provider="" pending_model="" pending_backend=""
   if rix_exists; then
     session_alive "$RIX_NAME" && running=true
-    model=$(profile_get "$RIX_NAME" model); backend=$(profile_get "$RIX_NAME" backend); provider=$(profile_get "$RIX_NAME" provider)
+    # What Rix is running NOW (the stamp while a session is up, else the profile).
+    model=$(agent_field_now "$RIX_NAME" model); backend=$(agent_field_now "$RIX_NAME" backend)
+    provider=$(agent_field_now "$RIX_NAME" provider)
+    # A pick made while Rix is up takes effect on its next start; say so rather than
+    # showing it as if it were already true (2026-09-19).
+    if agent_change_pending "$RIX_NAME"; then
+      pending_model=$(profile_get "$RIX_NAME" model)
+      pending_backend=$(profile_get "$RIX_NAME" backend)
+      [[ -n $pending_backend ]] || pending_backend=$(profile_get "$RIX_NAME" provider)
+    fi
   fi
   jq -nc --arg name "$RIX_NAME" --argjson configured "$(rix_exists && echo true || echo false)" --argjson running "$running" \
     --arg model "$model" --arg backend "${backend:-$provider}" --arg provider "$provider" --arg default "$(rix_default_backend)" \
+    --arg pm "$pending_model" --arg pb "$pending_backend" \
     --argjson workers "$(profile_list | while IFS= read -r n; do [[ -n $n && $(profile_get "$n" parent 2>/dev/null) == "$RIX_NAME" ]] && echo "$n"; done | jq -R . | jq -sc .)" \
-    '{name:$name, configured:$configured, running:$running, model:$model, backend:$backend, provider:$provider, default_backend:$default, workers:$workers}'
+    '{name:$name, configured:$configured, running:$running, model:$model, backend:$backend, provider:$provider, default_backend:$default, workers:$workers,
+      pending_model:$pm, pending_backend:$pb}'
 }
 
 # Pre-0.9 names, kept for one release.

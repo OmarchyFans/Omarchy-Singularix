@@ -40,10 +40,59 @@ show_cmd() { printf '  $ %q' "$1"; printf ' %q' "${@:2}"; printf '\n'; }
 # own window lookup all match a window by recomputing this same string, and
 # tmux is pinned to drive the terminal's live title to this exact value
 # (see open_agent_window) so a user's own tmux title-format config can never
-# hide the window from that lookup. One edge case this reintroduces: if a
-# profile's model/backend changes while its window is still open, the next
-# open won't find that old window by title (a fresh one opens instead).
-window_title() { printf 'Agent · %s · %s @ %s' "$1" "$(tmux_model_short "$(profile_get "$1" model)")" "$(tmux_backend_short "$1")"; }
+# hide the window from that lookup. The model/backend in it are the LIVE ones
+# (agent_field_now), not the profile's: when a pick changed the profile under an
+# open window, this lookup stopped matching and Chat opened a second window onto
+# the very session whose model it claimed to have changed (2026-09-19).
+# ---- what a LIVE session is actually running --------------------------------
+# A profile is what the agent will run NEXT time. It is not what a session that
+# is already up is running: `rix setup` (or any backend change) rewrites the
+# profile, but the Hermes process keeps the config.yaml it was provisioned with
+# until it restarts. Every label used to read the profile, so on 2026-09-19 the
+# user picked gpt-6-astra, the tmux bar said astra, and Hermes underneath was
+# still on local Qwen -- with the harness told astra too.
+#
+# So `session` stamps what it actually provisioned, and every label, the status
+# document and harness_resync_profile read the stamp while the session is alive.
+# Expanded at call time, not here: lib/events.sh sets OAL_STATE and is sourced
+# after this file.
+run_stamp_dir()  { printf '%s/running' "$OAL_STATE"; }
+run_stamp_path() { printf '%s/running/%s.json' "$OAL_STATE" "$1"; }
+# Record what this session is running. Called from session_run_once right after
+# prepare_session (agent_provision) has written the agent's real config.
+run_stamp_write() { # run_stamp_write <name>
+  local name=$1
+  local dir; dir=$(run_stamp_dir)
+  mkdir -p "$dir" 2>/dev/null || return 0
+  local tmp; tmp=$(mktemp "$dir/.stamp.XXXXXX" 2>/dev/null) || return 0
+  jq -nc --arg provider "$(profile_get "$name" provider)" --arg model "$(profile_get "$name" model)" \
+     --arg backend "$(profile_get "$name" backend)" --arg started "$(date -Is)" \
+     '{provider:$provider, model:$model, backend:$backend, started:$started}' >"$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$(run_stamp_path "$name")" || rm -f "$tmp"
+}
+run_stamp_clear() { rm -f "$(run_stamp_path "$1")" 2>/dev/null || true; }
+# The stamp only speaks for a session that is still up; a leftover from a crash
+# must never outrank the profile.
+run_stamp_get() { # run_stamp_get <name> <key>
+  local f; f=$(run_stamp_path "$1")
+  [[ -f $f ]] && session_alive "$1" || return 1
+  local v; v=$(jq -r --arg k "$2" '.[$k] // empty' "$f" 2>/dev/null) || return 1
+  [[ -n $v ]] || return 1
+  printf '%s' "$v"
+}
+# Field of a live session if we know it, else the profile's (what it will use next).
+agent_field_now() { # agent_field_now <name> <key>
+  run_stamp_get "$1" "$2" || profile_get "$1" "$2"
+}
+# True when a live session is running something other than what the profile now says.
+agent_change_pending() { # agent_change_pending <name>
+  local rm rb
+  rm=$(run_stamp_get "$1" model) || return 1
+  rb=$(run_stamp_get "$1" backend) || rb=""
+  [[ $rm != "$(profile_get "$1" model)" || $rb != "$(profile_get "$1" backend)" ]]
+}
+
+window_title() { printf 'Agent · %s · %s @ %s' "$1" "$(tmux_model_short "$(agent_field_now "$1" model)")" "$(tmux_backend_short "$1")"; }
 tmux_session() { printf 'oal-%s' "$1"; }
 # Each agent gets its own tmux server on a socket under the launcher's state
 # directory. Session names are global on the default server, so anything else
@@ -77,12 +126,12 @@ tmux_model_short() { # tmux_model_short <model>
 # Backend/provider label for the status line: the resolved backend id if the
 # profile has one (endpoint backends, or "local"), else its provider id.
 tmux_backend_short() { # tmux_backend_short <name>
-  local name=$1 backend; backend=$(profile_get "$name" backend)
-  [[ -n $backend ]] || backend=$(profile_get "$name" provider)
+  local name=$1 backend; backend=$(agent_field_now "$name" backend)
+  [[ -n $backend ]] || backend=$(agent_field_now "$name" provider)
   printf '%s' "${backend:-?}"
 }
 tmux_status_left() { # tmux_status_left <name> -> "<name> · <model> @ <backend>"
-  local name=$1 model; model=$(tmux_model_short "$(profile_get "$name" model)")
+  local name=$1 model; model=$(tmux_model_short "$(agent_field_now "$name" model)")
   printf '%s · %s @ %s' "$(tmux_escape_format "$name")" "$(tmux_escape_format "${model:-?}")" "$(tmux_escape_format "$(tmux_backend_short "$name")")"
 }
 # <task title (harness delegates) or job title> · %H:%M (tmux expands %H:%M
@@ -97,7 +146,7 @@ tmux_status_right() { # tmux_status_right <name>
   printf '%s · %%H:%%M' "$(tmux_escape_format "${tt:-$name}")"
 }
 tmux_window_name() { # tmux_window_name <name> -> "<model>@<backend>"
-  local name=$1 model; model=$(tmux_model_short "$(profile_get "$name" model)")
+  local name=$1 model; model=$(tmux_model_short "$(agent_field_now "$name" model)")
   printf '%s@%s' "${model:-$name}" "$(tmux_backend_short "$name")"
 }
 # Push the status line + window name onto a name's tmux server, if its

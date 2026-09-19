@@ -3,6 +3,12 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.19.5
+
+- **What the dashboard says Rix runs on is what Rix is actually running.** Picking a model rewrites the profile, but a session that is already open keeps the configuration it was started with until it restarts — and every label read the profile. So a pick showed as if it had already taken effect: the tmux bar said the new model while Hermes underneath was still on the old one, and the window title stopped matching, so Chat opened a *second* window onto that same session. A session now records what it actually started with, and the status line, window title, `status --json` and the Rix tab all read that. A pick made while Rix is up shows as "… on restart" with a Stop button next to it.
+- **The harness is no longer told a model that is not running.** It routes, gates and prices work by its session record, and a model pick was pushed straight into that record while the session kept running something else. It now keeps the running model until the session restarts.
+- **The OpenAI subscription backend only offers models it can actually serve.** The ChatGPT-account Codex endpoint answers `400 · not supported when using Codex with a ChatGPT account` for anything but a Codex model, yet the picker listed all 14 OpenAI models there. It now lists Codex models only. The OpenAI API-key backend is unchanged and still offers the full catalogue.
+
 ## 0.19.4
 
 - **An agent's session ending is no longer something that "needs you".** Closing an agent window raised a blocker — 42 of the first 99 blockers on this machine, the single biggest source — for an event that asks nothing of you: the launcher never auto-restarts an agent, Chat starts it again, and the note clears itself the moment you do. It is now a plain entry in the event log. The one exception that actually costs something is an **unattended** run that stopped before finishing, since nobody picks that up on its own; that warns (Notifications › Recent), still with no badge.

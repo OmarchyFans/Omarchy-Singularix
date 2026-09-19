@@ -145,6 +145,27 @@ unset OAL_VENDORS_FILE
 XDG_CACHE_HOME="$T/cache" "$L" models 2>/dev/null | grep -q "not IP-safe" || tfail "models plain listing"
 pass "models tree, catalog prices, badges, ready-first order"
 
+# The ChatGPT-account Codex endpoint serves Codex models only; offering the rest of
+# OpenAI's catalog there hands the user a model the backend answers 400 to (live
+# 2026-09-19: "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT
+# account"). models_endpoint_filter must hold whether the live catalog is present or not.
+echo "== openai-codex offers Codex models only"
+for offline in 0 1; do
+  cx=$(OAL_OFFLINE=$offline XDG_CACHE_HOME="$T/cache" "$L" models --json 2>/dev/null \
+       | jq -r '.online[] | select(.backend=="openai-codex") | .models[].id')
+  [[ -n $cx ]] || tfail "openai-codex must still offer something (OAL_OFFLINE=$offline)"
+  while IFS= read -r id; do
+    [[ $id == *-codex ]] || tfail "openai-codex must not offer '$id' (OAL_OFFLINE=$offline): that endpoint rejects it"
+  done <<<"$cx"
+  grep -qx "gpt-5.4-codex" <<<"$cx" \
+    || tfail "the declared default must survive even though models.dev does not list it (OAL_OFFLINE=$offline)"
+done
+# ...and a plain API key still reaches the full catalog, which is where astra lives.
+XDG_CACHE_HOME="$T/cache" "$L" models --json 2>/dev/null \
+  | jq -e '.online[] | select(.backend=="openai") | (.models | map(.id) | length) > 2' >/dev/null \
+  || tfail "the OpenAI API-key backend must still offer the whole catalog"
+pass "openai-codex offers only Codex models, keeps its declared default, and the API-key backend is unrestricted"
+
 echo "== events, blockers, status, settings, rotation, stop, switch"
 S="$XDG_STATE_HOME/omarchy-agent-launcher"
 grep -q '"kind":"created"' "$S/events.jsonl" || tfail "create did not log an event"
@@ -288,6 +309,47 @@ else
   echo "  skip (tmux not installed): stop leaves a stopping-marker"
 fi
 pass "cmd_session exit trap: an ended session never blocks; unattended warns; stop leaves its own marker"
+
+echo "== a live session's labels follow what it is RUNNING, not a profile changed underneath it"
+# 2026-09-19: the user picked gpt-6-astra for Rix. The profile changed, the tmux bar was
+# re-rendered from it, harness_resync_profile pushed astra to three live harness sessions
+# -- and the Hermes process underneath kept running local Qwen, because a running session
+# keeps the config agent_provision gave it until it restarts.
+if command -v tmux >/dev/null; then
+  profile_write runtruth hermes local local none old-model.gguf http://127.0.0.1:8080/v1 interactive ""
+  profile_set runtruth backend '"local"'
+  RTSOCK="$OAL_STATE/tmux/oal-runtruth.sock"; mkdir -p "$(dirname "$RTSOCK")"
+  tmux -S "$RTSOCK" new-session -d -s oal-runtruth -- sleep 60
+  run_stamp_write runtruth
+  [[ -f "$OAL_STATE/running/runtruth.json" ]] || tfail "session must stamp what it provisioned"
+  # ...now the profile changes underneath the live session, as a model pick does.
+  profile_write runtruth hermes local openai-codex oauth gpt-5.4-codex - interactive ""
+  profile_set runtruth backend '"openai-codex"'
+  [[ $(agent_field_now runtruth model) == old-model.gguf ]] \
+    || tfail "a live session's model must be the stamped one, not the profile's"
+  [[ $(agent_field_now runtruth backend) == local ]] \
+    || tfail "a live session's backend must be the stamped one"
+  agent_change_pending runtruth || tfail "a profile that no longer matches the live session must read as pending"
+  grep -q "old-model" <<<"$(window_title runtruth)" \
+    || { echo "$(window_title runtruth)"; tfail "the window title must name the running model (or Chat opens a second window onto the same session)"; }
+  grep -q "old-model" <<<"$(tmux_status_left runtruth)" || tfail "the tmux status line must name the running model"
+  # The harness routes, gates and prices by its session record: it must not be told a
+  # model that is not running.
+  rt_err=$( ( source "$ROOT/lib/backends.sh"; source "$ROOT/lib/usage.sh"; source "$ROOT/lib/harness.sh"
+              harness_resync_profile runtruth ) 2>&1 >/dev/null || true )
+  grep -q "still running" <<<"$rt_err" || { echo "$rt_err"; tfail "harness_resync_profile must refuse to push a model the live session is not running"; }
+  # Once the session is gone the stamp stops speaking and the profile is the truth again.
+  tmux -S "$RTSOCK" kill-session -t oal-runtruth 2>/dev/null || true
+  [[ $(agent_field_now runtruth model) == gpt-5.4-codex ]] \
+    || tfail "with no live session the profile is the truth again"
+  agent_change_pending runtruth && tfail "nothing is pending once the session is gone"
+  run_stamp_clear runtruth
+  [[ ! -f "$OAL_STATE/running/runtruth.json" ]] || tfail "run_stamp_clear must remove the stamp"
+  "$L" remove runtruth --yes >/dev/null 2>&1 || true
+  pass "live session: labels, window title and the harness record all follow the stamp, not the profile"
+else
+  echo "  skip (tmux not installed): running-vs-profile truth"
+fi
 
 echo "== kanban mirror (sqlite fixture)"
 if command -v sqlite3 >/dev/null; then

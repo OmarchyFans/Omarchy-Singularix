@@ -17,7 +17,10 @@
 PROVIDERS=(
   "anthropic|Anthropic (Claude)|ANTHROPIC_API_KEY|anthropic|y|anthropic|y|-|claude-sonnet-5|claude-opus-5,claude-sonnet-5,claude-haiku-4-5-20251001"
   "openai|OpenAI (API key)|OPENAI_API_KEY|openai-api|n|openai|n|-|gpt-5.4|gpt-5.4,gpt-5.4-mini,o4-mini"
-  "openai-codex|OpenAI (ChatGPT subscription, OAuth)|-|openai-codex|y|openai|y|-|gpt-5.4-codex|gpt-5.4-codex,gpt-5.4"
+  # ChatGPT-account Codex endpoint: Codex models ONLY (it 400s on anything else --
+  # models_endpoint_filter in lib/models.sh enforces this against the live catalog too).
+  # gpt-5.4 was listed here and would be rejected the same way gpt-6-astra was.
+  "openai-codex|OpenAI (ChatGPT subscription, OAuth)|-|openai-codex|y|openai|y|-|gpt-5.4-codex|gpt-5.4-codex,gpt-5.3-codex"
   "nous|Nous Portal (OAuth)|NOUS_API_KEY|nous|y|-|n|-|hermes-4-405b|hermes-4-405b,hermes-4-70b"
   "xai|xAI (Grok)|XAI_API_KEY|xai|n|xai|n|-|grok-4.6|grok-4.6,grok-4.6-fast,grok-4"
   "xai-oauth|xAI (Grok, browser sign-in)|-|xai-oauth|y|-|n|https://api.x.ai/v1|grok-4.6|grok-4.6,grok-4.6-fast"

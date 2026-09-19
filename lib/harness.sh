@@ -561,6 +561,17 @@ harness_session_sync() {
 harness_resync_profile() {
   local profile=$1
   profile_exists "$profile" || return 0
+  # The harness's record must never run ahead of the process. A profile change
+  # (`rix setup`, the dashboard's model picker) does NOT move a session that is
+  # already up: it keeps the config agent_provision gave it until it restarts.
+  # Pushing the new model here would tell the harness -- which routes, gates and
+  # prices by exactly this record -- a model that is not running. Live
+  # 2026-09-19: the user picked gpt-6-astra and rix/rix-1/rix-2 were all recorded
+  # as openai-codex/gpt-6-astra while the process ran local Qwen.
+  if declare -F agent_change_pending >/dev/null && agent_change_pending "$profile"; then
+    warn "$profile is still running $(run_stamp_get "$profile" model 2>/dev/null || echo "its previous model"); the harness keeps that until you restart it"
+    return 0
+  fi
   declare -F harness_bin >/dev/null || return 0
   local bin; bin=$(harness_bin 2>/dev/null) || return 0
   local sess

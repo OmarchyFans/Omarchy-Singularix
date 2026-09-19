@@ -193,6 +193,13 @@ Item {
     onExited: function(code) { if (code === 0) { try { tab.modelTree = JSON.parse(String(modelsOut.text || "")) } catch (e) {} } }
   }
   Timer { id: modelsRefresh; interval: 2500; onTriggered: tab.loadModels() }
+  // A pick made while Rix is up does not move the running session: it keeps the config it
+  // was provisioned with until it restarts. Say so everywhere rather than showing the new
+  // model as if it were already in effect (2026-09-19: the bar said astra, Hermes ran Qwen).
+  function pendingNote() {
+    if (!rix || !rix.pending_model || rix.pending_model === "") return ""
+    return "  \u00b7  " + shortModel(rix.pending_model, rix.pending_backend) + " on restart"
+  }
   function pickModel(backend, model) {
     keyHint = ""
     var served = modelTree && modelTree.local ? modelTree.local.served : ""
@@ -379,7 +386,7 @@ Item {
       title: "Rix"
       meta: !tab.rix ? "Loading…"
             : !tab.rix.configured ? "Your chief of staff is not set up yet. Chat sets it up on " + (tab.rix.default_backend === "local" ? "your local GPU (offline, $0)" : tab.rix.default_backend) + "."
-            : "Chief of staff on " + tab.rix.backend + " / " + tab.rix.model + "  ·  " + (tab.rix.running ? "running" : "idle") + (tab.rix.workers.length ? "  ·  " + tab.rix.workers.length + " worker" + (tab.rix.workers.length === 1 ? "" : "s") : "")
+            : "Chief of staff on " + tab.rix.backend + " / " + tab.rix.model + "  ·  " + (tab.rix.running ? "running" : "idle") + tab.pendingNote() + (tab.rix.workers.length ? "  ·  " + tab.rix.workers.length + " worker" + (tab.rix.workers.length === 1 ? "" : "s") : "")
       foreground: dash.foreground; fontFamily: dash.fontFamily
       iconComponent: Component { Text { text: "󰚩"; color: tab.rix && tab.rix.running ? dash.okColor : dash.foreground; font.family: dash.fontFamily; font.pixelSize: Style.font.display } }
     }
@@ -419,6 +426,14 @@ Item {
             onPicked: function(b, m) { tab.pickModel(b, m) }
             onNeedsKey: function(b, label, needs) { tab.keyHint = label + ": " + (needs || "needs a key or sign-in") + ". Add it on the New agent page, then pick the model again." }
           }
+        }
+        Row {
+          width: parent.width; spacing: Style.spacing.controlGap
+          visible: tab.rix && tab.rix.pending_model && tab.rix.pending_model !== ""
+          Dim { anchors.verticalCenter: parent.verticalCenter
+                text: "Rix is still running " + (tab.rix ? tab.shortModel(tab.rix.model, tab.rix.backend) : "") + " in its open session. Stop it and Chat again to switch." }
+          Button { text: "Stop Rix"; iconText: "\uf4db"; foreground: dash.foreground; fontFamily: dash.fontFamily
+                   onClicked: dash.act([tab.launcher, "stop", tab.rix.name]) }
         }
         Row {
           width: parent.width; spacing: Style.spacing.controlGap

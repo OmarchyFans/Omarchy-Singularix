@@ -20,6 +20,20 @@ models_catalog_key() {
   esac
 }
 
+# Some sign-ins reach an endpoint that serves only PART of its vendor's catalog, so the
+# catalog alone is not the list of models you can actually run. openai-codex talks to
+# https://chatgpt.com/backend-api/codex, which answers
+#   "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account"
+# for anything but a Codex model. Live 2026-09-19 the picker offered 14 OpenAI models
+# there, 13 of which that endpoint rejects, and the user picked one of the 13.
+# Returns a jq boolean test applied to a model id, or "-" for no restriction.
+models_endpoint_filter() { # models_endpoint_filter <provider>
+  case "$1" in
+    openai-codex) printf 'test("-codex$")' ;;
+    *)            printf '-' ;;
+  esac
+}
+
 # Refresh the cache if missing or older than a day. Never blocks for long.
 models_catalog_refresh() { # models_catalog_refresh [force]
   mkdir -p "$(dirname "$MODELS_CACHE")"
@@ -66,6 +80,16 @@ models_for_provider() { # models_for_provider <provider>
              input: (if $priced then (.value.cost.input // null) else null end),
              output: (if $priced then (.value.cost.output // null) else null end),
              context: (.value.limit.context // null), release: (.value.release_date // null)})' "$MODELS_CACHE" 2>/dev/null) || out="[]"
+    local filt; filt=$(models_endpoint_filter "$p")
+    if [[ $filt != - ]]; then
+      # Keep only what this endpoint serves, then add any model the provider table
+      # declares that the catalog does not list (models.dev has no gpt-5.4-codex).
+      local declared
+      declared=$(provider_models "$p" | jq -R . \
+        | jq -sc "map(select(. != \"-\" and . != \"\" and (. | $filt)) | {id:., name:., input:null, output:null, context:null, release:null})")
+      out=$(jq -c --argjson d "$declared" \
+        "(map(select(.id | $filt))) as \$c | \$c + [\$d[] | select(.id as \$i | (\$c | map(.id) | index(\$i)) == null)]" <<<"$out") || out="[]"
+    fi
     [[ $out != "[]" && -n $out ]] && { printf '%s\n' "$out"; return 0; }
   fi
   # Static fallback from providers.sh.
