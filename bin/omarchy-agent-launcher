@@ -643,13 +643,18 @@ cmd_kanban_sync() { # cmd_kanban_sync [name]
 # array. Delegates per-agent extraction to agent_projects_json (adapter-
 # specific; Hermes-only today, no-op elsewhere).
 cmd_projects_json() {
-  local n out="[]" part
+  local n out="[]" part partf
+  # --slurpfile, not --argjson: Linux caps ONE argv string at 128 KiB (MAX_ARG_STRLEN)
+  # however large ARG_MAX is, and an agent with many projects outgrows that.
+  partf=$(mktemp "${TMPDIR:-/tmp}/oal-projects.XXXXXX") || { printf '%s' "$out"; return; }
   while IFS= read -r n; do
     [[ -n $n ]] || continue; profile_exists "$n" || continue
     part=$( ( load_agent "$(profile_get "$n" agent)"; declare -F agent_projects_json >/dev/null && agent_projects_json "$n" ) 2>/dev/null )
     [[ $part == \[*\] ]] || continue
-    out=$(jq -c --argjson p "$part" '. + $p' <<<"$out")
+    printf '%s' "$part" >"$partf"
+    out=$(jq -c --slurpfile p "$partf" '. + $p[0]' <<<"$out") || break
   done < <(profile_list)
+  rm -f "$partf"
   printf '%s' "$out"
 }
 
@@ -659,9 +664,19 @@ cmd_projects_json() {
 cmd_status_json() {
   cmd_kanban_sync >/dev/null 2>&1 || true
   local clients="[]"; have hyprctl && clients=$(hyprctl clients -j 2>/dev/null || echo "[]")
-  local recent blockers; recent=$(events_recent 4000); blockers=$(blockers_json)
+  # The event log, the blockers and an agent's task list all outgrow a single
+  # argv string: Linux caps ONE argument at 128 KiB (MAX_ARG_STRLEN) however
+  # large ARG_MAX is, so past ~128 KiB of events every per-agent jq below died
+  # with "Argument list too long" and the whole document came out malformed.
+  # They go through files and --slurpfile instead.
+  local recentf blockersf extraf
+  recentf=$(mktemp "${TMPDIR:-/tmp}/oal-status-recent.XXXXXX") || fail "cannot create a temporary file"
+  blockersf=$(mktemp "${TMPDIR:-/tmp}/oal-status-blockers.XXXXXX") || fail "cannot create a temporary file"
+  extraf=$(mktemp "${TMPDIR:-/tmp}/oal-status-extra.XXXXXX") || fail "cannot create a temporary file"
+  events_recent 4000 >"$recentf"
+  blockers_json >"$blockersf"
   local projects; projects=$(cmd_projects_json)
-  local n running window tasks_extra p
+  local n running window tasks_extra agentj p
   # What the local server actually serves; a saved agent may pin an older file name.
   local served=""
   if declare -F local_online >/dev/null && local_online; then served=$(local_models_json | jq -r '.[0].id // ""' 2>/dev/null || true); fi
@@ -670,16 +685,20 @@ cmd_status_json() {
   {
     # "jarvis" duplicates "rix" for one release (pre-0.9 readers).
     printf '{"version":%s,"blockers":%s,"rix":%s,"jarvis":%s,"sentinel":%s,"harness":%s,"usage":%s,"backends":%s,"projects":%s,"agents":[' \
-      "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' <<<"$blockers")" "$rixj" "$rixj" "$(sentinel_status_json)" "$harnessj" "$(usage_json)" "$(backends_list_json)" "$projects"
+      "$(jq -Rn --arg v "$OAL_VERSION" '$v')" "$(jq 'length' "$blockersf")" "$rixj" "$rixj" "$(sentinel_status_json)" "$harnessj" "$(usage_json)" "$(backends_list_json)" "$projects"
     local first=1
     while IFS= read -r n; do
-      [[ -n $n ]] || continue; (( first )) || printf ','; first=0
+      [[ -n $n ]] || continue
       running=false; session_alive "$n" && running=true
       window=$(jq -r --arg t "$(window_title "$n")" '.[] | select(.initialTitle==$t or .title==$t) | .address' <<<"$clients" 2>/dev/null | head -n1)
       tasks_extra=$( ( load_agent "$(profile_get "$n" agent)"; agent_tasks_json "$n" ) 2>/dev/null ); [[ $tasks_extra == \[* ]] || tasks_extra="[]"
-      jq -c --arg n "$n" --arg served "$served" --argjson running "$running" --arg window "${window:-}" --arg job "$(job_title "$n")" \
-         --argjson recent "$recent" --argjson blockers "$blockers" --argjson extra "$tasks_extra" '
-        ($recent | map(select(.agent == $n))) as $ev
+      printf '%s' "$tasks_extra" >"$extraf"
+      # One agent that fails to render must not take the document down with it:
+      # emit the comma only once the object is in hand, and skip a bad agent.
+      agentj=$(jq -c --arg n "$n" --arg served "$served" --argjson running "$running" --arg window "${window:-}" --arg job "$(job_title "$n")" \
+         --slurpfile recentf "$recentf" --slurpfile blockersf "$blockersf" --slurpfile extraf "$extraf" '
+        ($recentf[0] // []) as $recent | ($blockersf[0] // {}) as $blockers | ($extraf[0] // []) as $extra
+        | ($recent | map(select(.agent == $n))) as $ev
         | ($blockers | to_entries | map(.value) | map(select(.agent == $n))) as $open
         | ($ev | map(select(.task != "" and .task != $job)) | group_by(.task) | map({source:"cli", id:.[-1].task, title:.[-1].task,
              status: (.[-1].kind | if . == "task_done" then "done" elif . == "task_blocked" then "blocked" elif . == "task_review" then "review" elif . == "task_started" then "running" else "noted" end)})) as $cli
@@ -693,11 +712,17 @@ cmd_status_json() {
             open_blockers: $open,
             status: (if ($open|length) > 0 then "blocked" elif $running then "running" elif (($ev|last // {}).kind == "job_done") then "done" else "idle" end),
             tasks: ([{source:"job", id:"job", title:$job, status:(if $running then "running" elif (($ev|last // {}).kind == "job_done") then "done" else "idle" end)}] + $cli + $extra)
-          }' "$(profile_path "$n")"
+          }' "$(profile_path "$n")" 2>/dev/null) || agentj=""
+      [[ -n $agentj ]] || continue
+      (( first )) || printf ','; first=0
+      printf '%s' "$agentj"
     done < <(profile_list)
     printf ']}'
   } | jq -c '(.usage.agents | map({key: .name, value: {prompt, output, cost_usd, cost_unknown, sessions}}) | from_entries) as $u
              | .agents |= map(. + {usage: ($u[.name] // null)})'
+  local rc=$?
+  rm -f "$recentf" "$blockersf" "$extraf"
+  return $rc
 }
 cmd_status() { if (( JSON )); then cmd_status_json | jq .; else cmd_list; fi; }
 

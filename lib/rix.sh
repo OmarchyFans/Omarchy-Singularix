@@ -152,8 +152,14 @@ rix_setup() {
 
 # Deterministic status brief from the launcher's own data: no model, no cost.
 rix_brief() {
-  local st us; st=$(cmd_status_json); us=$(usage_json)
-  jq -rn --argjson s "$st" --argjson u "$us" --arg j "$RIX_NAME" '
+  # Via files, not argv: the status document passes 128 KiB (MAX_ARG_STRLEN)
+  # on a busy machine and jq would die with "Argument list too long".
+  local stf usf
+  stf=$(mktemp "${TMPDIR:-/tmp}/oal-brief-status.XXXXXX") || fail "cannot create a temporary file"
+  usf=$(mktemp "${TMPDIR:-/tmp}/oal-brief-usage.XXXXXX") || fail "cannot create a temporary file"
+  cmd_status_json >"$stf"; usage_json >"$usf"
+  jq -rn --slurpfile sf "$stf" --slurpfile uf "$usf" --arg j "$RIX_NAME" '
+    ($sf[0]) as $s | ($uf[0]) as $u |
     def usd: if . == null then "$?" else "$" + ((. * 100 | round) / 100 | tostring) end;
     def k: if . >= 1000000 then "\((. / 100000 | round) / 10)M" elif . >= 1000 then "\((. / 100 | round) / 10)K" else tostring end;
     ($s.agents | map(select(.name != $j))) as $a
@@ -172,6 +178,7 @@ rix_brief() {
       "Agents:",
       (if ($a | length) == 0 then "  none yet (omarchy-agent-launcher delegate … or the New agent page)" else
         ($a[] | "  \(.name)\t\(.status)\t\(.backend // .provider)/\(.model)\t\(.job_title[:50])" + (if .last then "\t\(.last.message[:60])" else "" end)) end)' | column -t -s $'\t'
+  rm -f "$stf" "$usf"
 }
 
 # One question to Rix, answered in its own home, no window (for scripts and the dashboard).

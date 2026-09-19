@@ -177,6 +177,34 @@ fi
 out=$("$L" --dry-run switch 2>&1) || tfail "switch dry-run"; grep -q "issue-triage" <<<"$out" || tfail "switch rows"
 pass "events, blockers, status, settings, rotation, stop, switch"
 
+# Regression: Linux caps ONE argv string at 128 KiB (MAX_ARG_STRLEN) no matter how
+# large ARG_MAX is, and the event log rotates only at 2 MiB. Passing the log to jq
+# with --argjson therefore died with "Argument list too long" once it grew past
+# ~128 KiB, and every agent object came out empty -> a malformed status document.
+echo "== status --json survives an event log larger than one argv string"
+ev_before=$(wc -c <"$S/events.jsonl")
+python3 - "$S/events.jsonl" <<'PY'
+import json, sys, time
+path = sys.argv[1]
+now = int(time.time())
+with open(path, "a") as f:
+    for i in range(700):
+        f.write(json.dumps({"t": now, "ts": "2026-09-19T00:00:00Z", "agent": "issue-triage",
+                            "kind": "note", "level": "info", "key": "", "task": "",
+                            "message": "padding line %d %s" % (i, "x" * 200),
+                            "code": 0, "source": "test", "ref": "", "why": "", "recommend": "",
+                            "detail": "", "actions": [], "node": "", "project": ""}) + "\n")
+PY
+ev_after=$(wc -c <"$S/events.jsonl")
+(( ev_after > 131072 )) || tfail "the padded event log must exceed MAX_ARG_STRLEN (got $ev_after bytes)"
+st=$("$L" status --json) || tfail "status --json must survive an event log over 128 KiB"
+jq -e . <<<"$st" >/dev/null || tfail "status --json must stay valid JSON with a large event log"
+jq -e '.agents | length > 0' <<<"$st" >/dev/null || tfail "agents must not be dropped when the event log is large"
+jq -e '.agents[] | select(.name=="issue-triage") | .job_title == "Job"' <<<"$st" >/dev/null \
+  || tfail "the padded agent must still render"
+"$L" rix brief >/dev/null 2>&1 || tfail "rix brief must survive a status document over 128 KiB"
+pass "status --json and rix brief survive an event log over 128 KiB ($ev_before -> $ev_after bytes)"
+
 echo "== event_emit: why/recommend/detail/actions/node/project, backward compat with the old 4-arg form"
 event_emit rich-test note "plain 4-arg call still works" >/dev/null 2>&1 || tfail "event_emit: old 4-arg call form must still work"
 grep -q '"agent":"rich-test".*"kind":"note".*"message":"plain 4-arg call still works"' "$OAL_EVENTS" || tfail "event_emit: plain call missing"
