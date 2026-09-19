@@ -145,21 +145,23 @@ unset OAL_VENDORS_FILE
 XDG_CACHE_HOME="$T/cache" "$L" models 2>/dev/null | grep -q "not IP-safe" || tfail "models plain listing"
 pass "models tree, catalog prices, badges, ready-first order"
 
-# The ChatGPT-account Codex endpoint serves Codex models only; offering the rest of
-# OpenAI's catalog there hands the user a model the backend answers 400 to (live
-# 2026-09-19: "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT
-# account"). models_endpoint_filter must hold whether the live catalog is present or not.
-echo "== openai-codex offers Codex models only"
+# The ChatGPT-account Codex endpoint serves a small PROBED subset of OpenAI's catalog;
+# offering the rest hands the user a model it answers 400 to (live 2026-09-19: the picker
+# offered all 14 and 11 were rejected). The allowlist must hold with or without the live
+# catalog, and a "-codex" name must not be mistaken for evidence either way: gpt-5.3-codex
+# and gpt-5.4-codex are both rejected by that endpoint, gpt-5.6-terra is served.
+echo "== openai-codex offers exactly the models it was probed to serve"
 for offline in 0 1; do
   cx=$(OAL_OFFLINE=$offline XDG_CACHE_HOME="$T/cache" "$L" models --json 2>/dev/null \
        | jq -r '.online[] | select(.backend=="openai-codex") | .models[].id')
   [[ -n $cx ]] || tfail "openai-codex must still offer something (OAL_OFFLINE=$offline)"
-  while IFS= read -r id; do
-    [[ $id == *-codex ]] || tfail "openai-codex must not offer '$id' (OAL_OFFLINE=$offline): that endpoint rejects it"
-  done <<<"$cx"
-  grep -qx "gpt-5.4-codex" <<<"$cx" \
-    || tfail "the declared default must survive even though models.dev does not list it (OAL_OFFLINE=$offline)"
+  [[ $(tr '\n' ' ' <<<"$cx" | sed 's/ *$//') == "$OAL_CODEX_MODELS" ]] \
+    || { echo "$cx"; tfail "openai-codex must offer exactly OAL_CODEX_MODELS, in order (OAL_OFFLINE=$offline)"; }
+  grep -q -- "-codex" <<<"$cx" && tfail "no -codex id is served by that endpoint (OAL_OFFLINE=$offline)"
+  grep -qx "gpt-6-astra" <<<"$cx" && tfail "gpt-6-astra is rejected there; it must not be offered (OAL_OFFLINE=$offline)"
 done
+[[ $(provider_default_model openai-codex) == gpt-5.6-terra ]] \
+  || tfail "the default for openai-codex must be a model it actually serves"
 # ...and a plain API key still reaches the full catalog, which is where astra lives.
 XDG_CACHE_HOME="$T/cache" "$L" models --json 2>/dev/null \
   | jq -e '.online[] | select(.backend=="openai") | (.models | map(.id) | length) > 2' >/dev/null \

@@ -23,14 +23,31 @@ models_catalog_key() {
 # Some sign-ins reach an endpoint that serves only PART of its vendor's catalog, so the
 # catalog alone is not the list of models you can actually run. openai-codex talks to
 # https://chatgpt.com/backend-api/codex, which answers
-#   "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account"
-# for anything but a Codex model. Live 2026-09-19 the picker offered 14 OpenAI models
-# there, 13 of which that endpoint rejects, and the user picked one of the 13.
-# Returns a jq boolean test applied to a model id, or "-" for no restriction.
-models_endpoint_filter() { # models_endpoint_filter <provider>
+#   "The '<id>' model is not supported when using Codex with a ChatGPT account"
+# for everything outside a small set. Live 2026-09-19 the picker offered all 14 OpenAI
+# models there and 11 of them were rejected, so the user picked a broken one.
+#
+# This list is PROBED, not guessed -- a "-codex" name proves nothing either way
+# (gpt-5.3-codex is rejected; gpt-5.6-terra is fine). Re-probe when OpenAI moves things,
+# one tiny call per candidate against a home that is signed in:
+#
+#   HERMES_HOME=<agent home>/hermes hermes --provider openai-codex -m <id> -z "say OK"
+#
+# Probed 2026-09-19 against a ChatGPT account:
+#   serves   gpt-5.6-terra, gpt-5.6-luna, gpt-5.5
+#   rejects  gpt-6-astra, gpt-5.6-sol, gpt-5.6, gpt-5.4, gpt-5.4-mini, gpt-5.4-nano,
+#            gpt-5.3-chat-latest, gpt-5.3-codex, gpt-5.4-codex
+#   unknown  gpt-5.5-pro, gpt-5.4-pro -- Hermes' own price guard refuses a -pro model
+#            non-interactively (it prices from models.dev, i.e. the API, not the plan),
+#            so the endpoint was never reached. Left out rather than guessed.
+# "Custom model id…" in the picker stays the escape hatch for anything new.
+OAL_CODEX_MODELS="gpt-5.6-terra gpt-5.6-luna gpt-5.5"
+
+# Ids a provider's endpoint is known to serve, space separated, or "" for no restriction.
+models_endpoint_allowlist() { # models_endpoint_allowlist <provider>
   case "$1" in
-    openai-codex) printf 'test("-codex$")' ;;
-    *)            printf '-' ;;
+    openai-codex) printf '%s' "$OAL_CODEX_MODELS" ;;
+    *)            printf '' ;;
   esac
 }
 
@@ -80,15 +97,16 @@ models_for_provider() { # models_for_provider <provider>
              input: (if $priced then (.value.cost.input // null) else null end),
              output: (if $priced then (.value.cost.output // null) else null end),
              context: (.value.limit.context // null), release: (.value.release_date // null)})' "$MODELS_CACHE" 2>/dev/null) || out="[]"
-    local filt; filt=$(models_endpoint_filter "$p")
-    if [[ $filt != - ]]; then
-      # Keep only what this endpoint serves, then add any model the provider table
-      # declares that the catalog does not list (models.dev has no gpt-5.4-codex).
-      local declared
-      declared=$(provider_models "$p" | jq -R . \
-        | jq -sc "map(select(. != \"-\" and . != \"\" and (. | $filt)) | {id:., name:., input:null, output:null, context:null, release:null})")
-      out=$(jq -c --argjson d "$declared" \
-        "(map(select(.id | $filt))) as \$c | \$c + [\$d[] | select(.id as \$i | (\$c | map(.id) | index(\$i)) == null)]" <<<"$out") || out="[]"
+    local allow; allow=$(models_endpoint_allowlist "$p")
+    if [[ -n $allow ]]; then
+      # Keep only ids this endpoint is known to serve, in the allowlist's own order
+      # (best first), and keep an allowed id the catalog happens not to list.
+      local allowj; allowj=$(printf '%s\n' $allow | jq -R . | jq -sc .)
+      out=$(jq -c --argjson a "$allowj" '
+        . as $cat
+        | [ $a[] | . as $id
+            | ($cat | map(select(.id == $id)) | first)
+              // {id:$id, name:$id, input:null, output:null, context:null, release:null} ]' <<<"$out") || out="[]"
     fi
     [[ $out != "[]" && -n $out ]] && { printf '%s\n' "$out"; return 0; }
   fi

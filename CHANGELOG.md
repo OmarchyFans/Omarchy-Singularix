@@ -3,6 +3,10 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.19.6
+
+- **The OpenAI subscription backend now offers the models it was actually probed to serve: GPT-5.6 Terra, GPT-5.6 Luna and GPT-5.5.** 0.19.5 guessed from the name that the ChatGPT-account endpoint meant "Codex models", and got it wrong in both directions — it hid Terra, Luna and 5.5, which work, and kept `gpt-5.4-codex`, which that endpoint rejects even though it was this backend's default. The list is now probed, one call per model, and the method is written down next to it so it can be re-checked when OpenAI moves things. `gpt-6-astra` and `gpt-5.6-sol` are rejected there — they need an OpenAI API key, not the subscription. "Custom model id…" remains for anything new.
+
 ## 0.19.5
 
 - **What the dashboard says Rix runs on is what Rix is actually running.** Picking a model rewrites the profile, but a session that is already open keeps the configuration it was started with until it restarts — and every label read the profile. So a pick showed as if it had already taken effect: the tmux bar said the new model while Hermes underneath was still on the old one, and the window title stopped matching, so Chat opened a *second* window onto that same session. A session now records what it actually started with, and the status line, window title, `status --json` and the Rix tab all read that. A pick made while Rix is up shows as "… on restart" with a Stop button next to it.
