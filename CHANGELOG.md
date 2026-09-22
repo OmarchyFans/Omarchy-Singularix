@@ -3,6 +3,11 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.19.8
+
+- **Cloud API responses are size-bounded before capture.** HANCORE-linux's second-pass review on #7248 found `cloud_http`/`cloud_api` in `lib/runtimes/cloud.sh` captured a curl response fully into a shell variable with only a time ceiling (`--max-time`), no byte ceiling — a malicious or malfunctioning `api.omarchy.fans` endpoint could stream an unbounded body and exhaust client memory before `jq`/command substitution ever saw it. Both now add `--max-filesize` (default 8MB, `OFC_HTTP_MAX_BYTES` override); curl 8.4+ enforces this even on chunked responses with no Content-Length. Verified against a local test server: an oversized chunked response is refused in milliseconds, a normal response still round-trips correctly.
+- The same review's second finding — the one-time console ticket traveling in the `websocat` URL argument, readable by other local accounts via `/proc/<pid>/cmdline` during its ~60s window — remains open. `websocat` has no mechanism to read a connect URL from an environment variable or file instead of argv, and the console relay (`api/src/console.js` in omarchy-fans-cloud) only accepts the ticket via URL query parameter today; closing this needs a paired change to that live, separately-deployed API to accept the ticket over a header or protected channel, which is out of scope for a client-only fix in this plugin.
+
 ## 0.19.7
 
 - **Docker runtime images are pinned by digest, not `:latest`.** HANCORE-linux's marketplace security review on #7248 found `nousresearch/hermes-agent:latest` and `ghcr.io/openclaw/openclaw:latest` were mutable references — a registry owner or compromised publishing account could swap the code the plugin runs without touching this repository. Both defaults are now `name@sha256:...` digests, and `agent_docker_image()` refuses to run a configured `OAL_HERMES_IMAGE`/`OAL_OPENCLAW_IMAGE` override that isn't itself digest-pinned.

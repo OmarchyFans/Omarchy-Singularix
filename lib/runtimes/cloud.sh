@@ -51,10 +51,18 @@ cloud_curl() { # cloud_curl <curl args…> <<<body   (stdin is the body when arg
 # cloud_http METHOD PATH [json-body]: raw request. Sets CLOUD_HTTP_CODE (000 when
 # the API could not be reached) and CLOUD_HTTP_BODY; prints nothing, returns 0
 # whenever an HTTP answer arrived (the caller decides what a 4xx means).
+#
+# --max-filesize bounds the response BEFORE it is captured into a shell
+# variable (HANCORE-linux's review on #7248): without a producer-side
+# ceiling, a malicious or malfunctioning API endpoint could stream an
+# unbounded body and exhaust client memory before `jq`/command substitution
+# ever sees it. curl 8.4+ enforces this even on chunked responses with no
+# Content-Length.
+CLOUD_HTTP_MAX_BYTES="${OFC_HTTP_MAX_BYTES:-$((8 * 1024 * 1024))}"
 CLOUD_HTTP_CODE=000 CLOUD_HTTP_BODY=""
 cloud_http() {
   local method=$1 path=$2 body=${3:-} out
-  local -a args=(-s --max-time "$OFC_HTTP_TIMEOUT" -X "$method" -H 'Accept: application/json' -w $'\n%{http_code}')
+  local -a args=(-s --max-time "$OFC_HTTP_TIMEOUT" --max-filesize "$CLOUD_HTTP_MAX_BYTES" -X "$method" -H 'Accept: application/json' -w $'\n%{http_code}')
   [[ -n $body ]] && args+=(-H 'Content-Type: application/json' --data-binary @-)
   if ! out=$(cloud_curl "${args[@]}" "$OFC_API_URL$path" <<<"$body" 2>/dev/null); then CLOUD_HTTP_CODE=000; CLOUD_HTTP_BODY=""; return 1; fi
   CLOUD_HTTP_CODE=${out##*$'\n'}; CLOUD_HTTP_BODY=${out%$'\n'*}
@@ -62,10 +70,11 @@ cloud_http() {
 }
 
 # cloud_api METHOD PATH [json-body]: JSON on stdout; on any HTTP error prints
-# the API's error message to stderr and returns 1.
+# the API's error message to stderr and returns 1. Same response ceiling as
+# cloud_http above.
 cloud_api() {
   local method=$1 path=$2 body=${3:-} out
-  local -a args=(-s --fail-with-body --max-time "$OFC_HTTP_TIMEOUT" -X "$method" -H 'Accept: application/json')
+  local -a args=(-s --fail-with-body --max-time "$OFC_HTTP_TIMEOUT" --max-filesize "$CLOUD_HTTP_MAX_BYTES" -X "$method" -H 'Accept: application/json')
   [[ -n $body ]] && args+=(-H 'Content-Type: application/json' --data-binary @-)
   if ! out=$(cloud_curl "${args[@]}" "$OFC_API_URL$path" <<<"$body" 2>/dev/null); then
     warn "$method $path failed: $(cloud_error_message "$out")"

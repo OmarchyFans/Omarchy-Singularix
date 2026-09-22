@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "fans.omarchy.singularix",
   "name": "Singularix",
-  "version": "0.19.7",
+  "version": "0.19.8",
   "author": "omarchy.fans",
   "license": "MIT",
   "description": "Singularix.ai technology, now available locally as a shell plugin on Omarchy. An Agent Dashboard with Rix, a chief-of-staff agent on your local GPU that manages every agent you spin up (Hermes Agent, OpenClaw; local, Docker, or Omarchy.Fans Cloud) and hands work to bigger models: API keys, browser sign-in, or OpenAI-compatible GPU endpoints. Shows input and output tokens and USD, in total and per task.",
