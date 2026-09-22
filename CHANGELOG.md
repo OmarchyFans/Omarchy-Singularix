@@ -3,6 +3,10 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.19.7
+
+- **Docker runtime images are pinned by digest, not `:latest`.** HANCORE-linux's marketplace security review on #7248 found `nousresearch/hermes-agent:latest` and `ghcr.io/openclaw/openclaw:latest` were mutable references — a registry owner or compromised publishing account could swap the code the plugin runs without touching this repository. Both defaults are now `name@sha256:...` digests, and `agent_docker_image()` refuses to run a configured `OAL_HERMES_IMAGE`/`OAL_OPENCLAW_IMAGE` override that isn't itself digest-pinned.
+
 ## 0.19.6
 
 - **The OpenAI subscription backend now offers the models it was actually probed to serve: GPT-5.6 Terra, GPT-5.6 Luna and GPT-5.5.** 0.19.5 guessed from the name that the ChatGPT-account endpoint meant "Codex models", and got it wrong in both directions — it hid Terra, Luna and 5.5, which work, and kept `gpt-5.4-codex`, which that endpoint rejects even though it was this backend's default. The list is now probed, one call per model, and the method is written down next to it so it can be re-checked when OpenAI moves things. `gpt-6-astra` and `gpt-5.6-sol` are rejected there — they need an OpenAI API key, not the subscription. "Custom model id…" remains for anything new.

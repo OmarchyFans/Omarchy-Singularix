@@ -12,7 +12,7 @@
 
 AGENT_BIN=openclaw
 AGENT_LABEL="OpenClaw"
-OPENCLAW_IMAGE="${OAL_OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}"
+OPENCLAW_IMAGE="${OAL_OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw@sha256:ea298b62be8955d3ef750e2004a610dd90c3a30e5f9886e5d654d78a0c573218}"
 
 agent_available_local() { have openclaw; }
 agent_install_hint() {
@@ -110,7 +110,11 @@ agent_local_env() {
   printf 'OPENCLAW_STATE_DIR=%s\nOPENCLAW_WORKSPACE_DIR=%s/workspace\nOAL_AGENT=%s\nPATH=%s/bin:%s\n' "$home" "$home" "$1" "$OAL_ROOT" "$PATH"
 }
 
-agent_docker_image() { printf '%s' "$OPENCLAW_IMAGE"; }
+agent_docker_image() {
+  [[ $OPENCLAW_IMAGE == *@sha256:* ]] \
+    || fail "OPENCLAW_IMAGE must be pinned by digest (name@sha256:...), got: $OPENCLAW_IMAGE"
+  printf '%s' "$OPENCLAW_IMAGE"
+}
 agent_docker_home()  { printf '/home/node/.openclaw'; }
 agent_docker_flags() { printf '%s\n' --env-file "$(agent_home "$1")/.oal.env"; }
 agent_docker_entry() { printf '%s\n' node openclaw.mjs; }   # image CMD is `node openclaw.mjs gateway`

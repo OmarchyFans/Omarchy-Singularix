@@ -9,7 +9,7 @@
 
 AGENT_BIN=hermes
 AGENT_LABEL="Hermes Agent"
-HERMES_IMAGE="${OAL_HERMES_IMAGE:-nousresearch/hermes-agent:latest}"
+HERMES_IMAGE="${OAL_HERMES_IMAGE:-nousresearch/hermes-agent@sha256:e37d62499cb7539f0adc69b416e0364f90d828df0d9c3fefe422259fd1f08fce}"
 
 agent_available_local() { have hermes; }
 agent_install_hint() {
@@ -208,7 +208,14 @@ agent_local_env() {
 }
 
 # Docker: image, mount target for the agent home, extra `docker run` flags.
-agent_docker_image() { printf '%s' "$HERMES_IMAGE"; }
+# OAL_HERMES_IMAGE is a configurable override; it must stay digest-pinned
+# (name@sha256:...) like the built-in default, so a tag can never be swapped
+# in to run different code than what was reviewed.
+agent_docker_image() {
+  [[ $HERMES_IMAGE == *@sha256:* ]] \
+    || fail "HERMES_IMAGE must be pinned by digest (name@sha256:...), got: $HERMES_IMAGE"
+  printf '%s' "$HERMES_IMAGE"
+}
 agent_docker_home()  { printf '/opt/data'; }
 agent_docker_flags() { printf '%s\n' -e "HERMES_UID=$(id -u)" -e "HERMES_GID=$(id -g)"; }
 agent_docker_entry() { :; }   # image ENTRYPOINT dispatches `chat`, `auth`, ... directly
