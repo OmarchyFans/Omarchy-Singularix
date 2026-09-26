@@ -27,6 +27,11 @@ PROVIDERS=(
   "openrouter|OpenRouter|OPENROUTER_API_KEY|openrouter|n|openrouter|n|-|anthropic/claude-sonnet-5|anthropic/claude-sonnet-5,openai/gpt-5.4,google/gemini-3-pro,deepseek/deepseek-v4"
   "gemini|Google Gemini|GEMINI_API_KEY|gemini|n|google|n|-|gemini-3-pro|gemini-3-pro,gemini-3-flash"
   "deepseek|DeepSeek|DEEPSEEK_API_KEY|deepseek|n|deepseek|n|-|deepseek-chat|deepseek-chat,deepseek-reasoner"
+  # Z.ai (GLM). Hermes knows it natively as provider "zai" and reads ZAI_API_KEY
+  # (hermes_cli/auth.py); OpenAI-compatible at https://api.z.ai/api/paas/v4. A key under
+  # this name was saved on the user's machine with no row here, so it never reached the
+  # picker (2026-09-26). Models verified with a free GET /models against that key.
+  "zai|Z.ai (GLM)|ZAI_API_KEY|zai|n|-|n|https://api.z.ai/api/paas/v4|glm-5.3|glm-5.3,glm-5.2,glm-5.1,glm-4.7"
   "ollama|Ollama (local, no key)|-|custom|n|ollama|n|http://localhost:11434/v1|qwen3:8b|qwen3:8b,llama3.3:70b,gpt-oss:20b"
   "local|Local GPU (llama.cpp, offline)|-|lmstudio|n|openai|n|http://127.0.0.1:8080/v1|-|-"
   "endpoint|Backend endpoint (OpenAI-compatible: cloud GPU machine, shared server)|-|custom|n|-|n|-|-|-"

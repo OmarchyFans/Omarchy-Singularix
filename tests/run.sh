@@ -353,6 +353,58 @@ else
   echo "  skip (tmux not installed): running-vs-profile truth"
 fi
 
+echo "== Rix and Sentinel are protected from removal, and every removal names its caller"
+# Rix was removed three times on 2026-09-19/20, each time taking its sign-ins and history
+# with it, and the log said only "Agent removed". No agent was active in those minutes.
+profile_write rix hermes local local none - http://127.0.0.1:8080/v1 interactive ""
+profile_set rix role '"chief-of-staff"'
+out=$("$L" remove rix --yes 2>&1) && tfail "remove rix without --really must be refused"
+grep -q "protected" <<<"$out" || { echo "$out"; tfail "the refusal must say rix is protected and how to switch its model"; }
+[[ -f "$(profile_path rix)" ]] || tfail "a refused remove must leave rix's profile in place"
+# An agent session may never remove the chief of staff, even with --really...
+out=$(OAL_AGENT=worker9 "$L" remove rix --yes --really 2>&1) && tfail "an agent must not be able to remove rix"
+grep -q "may not remove" <<<"$out" || { echo "$out"; tfail "the agent refusal must say why"; }
+[[ -f "$(profile_path rix)" ]] || tfail "rix must survive an agent's remove attempt"
+# ...nor itself (a remove run inside a session kills that session mid-command).
+profile_write selfrm hermes local local none - http://127.0.0.1:8080/v1 interactive ""
+OAL_AGENT=selfrm "$L" remove selfrm --yes >/dev/null 2>&1 && tfail "an agent must not remove itself"
+[[ -f "$(profile_path selfrm)" ]] || tfail "self-removal must leave the profile"
+# An ordinary agent removed by an agent records who did it.
+profile_write byagent hermes local local none - http://127.0.0.1:8080/v1 interactive ""
+OAL_AGENT=rix "$L" remove byagent --yes >/dev/null || tfail "rix may remove an ordinary worker"
+grep -qE '"agent":"byagent".*"kind":"removed".*"message":"Agent removed by agent rix"' "$OAL_EVENTS" \
+  || tfail "the removed event must name the agent that asked for it"
+# You can still remove Rix yourself, deliberately.
+"$L" remove rix --yes --really >/dev/null || tfail "the user can still remove rix with --really"
+grep -qE '"agent":"rix".*"kind":"removed".*"message":"Agent removed by ' "$OAL_EVENTS" || tfail "a user removal also names its caller"
+"$L" remove selfrm --yes >/dev/null 2>&1 || true
+pass "rix/sentinel need --really, agents can never remove them or themselves, and every removal names its caller"
+
+echo "== Z.ai (GLM) is a provider, so a saved ZAI_API_KEY reaches the picker"
+# The user's machine held a working ZAI_API_KEY and the picker had no Z.ai row to show it.
+[[ $(provider_env zai) == ZAI_API_KEY && $(provider_hermes zai) == zai ]] || tfail "zai: env var and Hermes provider id"
+[[ $(provider_base_url zai) == https://api.z.ai/api/paas/v4 ]] || tfail "zai: OpenAI-compatible base URL"
+[[ $(models_catalog_key zai) == zai ]] || tfail "zai: models.dev catalog key"
+zj=$(OAL_OFFLINE=1 "$L" models --json 2>/dev/null | jq -c '.online[] | select(.backend=="zai")')
+[[ -n $zj ]] || tfail "zai must appear in the picker's online list"
+jq -e '.models | map(.id) | index("glm-5.3") != null' <<<"$zj" >/dev/null || tfail "zai must offer glm-5.3 even offline"
+pass "Z.ai: provider row, Hermes id, base URL, catalog key, and it shows in the picker"
+
+echo "== a local agent's Hermes config names the model the server serves, not the profile's"
+# The `singularix` agent's profile said model "astra" on provider local; llama.cpp ignores
+# the name, so every call went to Qwen 4B while Hermes' footer said astra (2026-09-26).
+profile_write liar hermes local local none astra http://127.0.0.1:8080/v1 interactive ""
+printf '# Job\nx\n' >"$(job_path liar)"
+( source "$ROOT/lib/agents/hermes.sh"
+  local_online() { return 0; }
+  local_models_json() { printf '[{"id":"Real-Served-Model.gguf"}]'; }
+  agent_provision liar ) >/dev/null 2>&1
+LCFG="$XDG_DATA_HOME/omarchy-agent-launcher/agents/liar/hermes/config.yaml"
+grep -q 'default: "Real-Served-Model.gguf"' "$LCFG" || { grep -A2 '^model:' "$LCFG"; tfail "a local agent must be provisioned with the served model"; }
+grep -q 'astra' "$LCFG" && tfail "the profile's stale model name must not reach Hermes"
+"$L" remove liar --yes >/dev/null 2>&1 || true
+pass "local agents: Hermes is told the served model, whatever the profile says"
+
 echo "== kanban mirror (sqlite fixture)"
 if command -v sqlite3 >/dev/null; then
   profile_write kb hermes local ollama none qwen3:8b http://localhost:11434/v1 interactive ""
@@ -562,7 +614,7 @@ grep -q '"rix"' "$(stage_dir rix)/hermes/SOUL.md" || tfail "SOUL renamed"
 [[ $(jq -r .parent "$(profile_path worker1)") == rix ]] || tfail "worker parent rewritten"
 jq -e 'has("rix/decide") and (has("jarvis/decide") | not) and .["rix/decide"].agent == "rix"' "$OAL_BLOCKERS" >/dev/null || { cat "$OAL_BLOCKERS"; tfail "blocker rekeyed"; }
 "$L" list >/dev/null 2>&1; profile_exists rix || tfail "migration must be idempotent"
-"$L" remove worker1 --yes >/dev/null; "$L" remove rix --yes >/dev/null; rm -f "$OAL_BLOCKERS" "$OAL_BLOCKERS.bak"
+"$L" remove worker1 --yes >/dev/null; "$L" remove rix --yes --really >/dev/null; rm -f "$OAL_BLOCKERS" "$OAL_BLOCKERS.bak"
 pass "rix migration"
 
 echo "== rix: setup, delegate, result, brief"
@@ -589,7 +641,7 @@ if command -v hermes >/dev/null; then
   "$L" jarvis brief | grep -q "Rix brief" || tfail "jarvis alias: brief"
   [[ $("$L" jarvis status | jq -r .name) == rix ]] || tfail "jarvis alias: status"
   [[ $(jq -r '.jarvis.name' <<<"$st") == rix ]] || tfail "status --json keeps a jarvis key"
-  "$L" remove summ --yes >/dev/null; "$L" remove summ2 --yes >/dev/null; "$L" remove rix --yes >/dev/null
+  "$L" remove summ --yes >/dev/null; "$L" remove summ2 --yes >/dev/null; "$L" remove rix --yes --really >/dev/null
   pass "rix"
 
   echo "== oauth inheritance: a new home copies an existing sign-in for the same provider"
@@ -605,7 +657,7 @@ if command -v hermes >/dev/null; then
   "$L" rix setup anthropic >/dev/null; ( source "$ROOT/lib/agents/hermes.sh"; source "$ROOT/lib/backends.sh"; source "$ROOT/lib/rix.sh"; OAL_ROOT="$ROOT"; agent_provision rix )
   [[ $(jq -r .signed_in "$(profile_path rix)") == true ]] || tfail "rix inherits the sign-in"
   "$L" rix setup anthropic >/dev/null; [[ $(jq -r .signed_in "$(profile_path rix)") == true ]] || tfail "rix setup must keep signed_in for the same provider"
-  "$L" remove heir --yes >/dev/null; "$L" remove donor --yes >/dev/null; "$L" remove rix --yes >/dev/null
+  "$L" remove heir --yes >/dev/null; "$L" remove donor --yes >/dev/null; "$L" remove rix --yes --really >/dev/null
   pass "oauth inheritance, backend readiness"
 else
   echo "  skip (hermes not installed): rix"
@@ -665,7 +717,7 @@ if command -v hermes >/dev/null; then
   [[ $(grep -c '^## Sentinel advisories' "$(job_path rix)") == 1 ]] || tfail "an existing Rix job gets the duty appended"
   ( source "$ROOT/lib/agents/hermes.sh"; source "$ROOT/lib/backends.sh"; source "$ROOT/lib/rix.sh"; source "$ROOT/lib/sentinel.sh"; OAL_ROOT="$ROOT"; agent_provision rix ) >/dev/null
   [[ $(grep -c '^## Sentinel advisories' "$(job_path rix)") == 1 ]] || tfail "the duty is appended only once"
-  "$L" remove rix --yes >/dev/null
+  "$L" remove rix --yes --really >/dev/null
 fi
 export OAL_SENTINEL_BIN=oal-test-no-sentinel
 pass "sentinel advisories"

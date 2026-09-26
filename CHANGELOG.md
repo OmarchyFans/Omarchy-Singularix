@@ -3,6 +3,13 @@
 The dashboard reads the newest sections of this file to tell you what changed
 when an update is available. Keep one short line per bullet.
 
+## 0.19.9
+
+- **Rix and Sentinel can no longer be removed by accident.** Removing either deletes its sign-ins, memory and history, and it is never the way to switch a model. Rix was removed three times on Sep 19–20, each time followed a few seconds later by a fresh setup. The Agents tab no longer shows Remove for them, and `remove rix` now refuses without an extra `--really`. No agent session can remove Rix, Sentinel, or itself at all.
+- **Every removal now names who asked for it** ("Agent removed by the dashboard", "…by agent rix"). Until now the log said only "Agent removed", so nobody could tell after the fact.
+- **Z.ai (GLM) is a provider.** A saved `ZAI_API_KEY` had nowhere to show up because there was no Z.ai row. It now appears in the picker with GLM-5.3, 5.2, 5.1 and 4.7 (more from the live catalogue).
+- **A local agent tells the truth about its model.** The local GPU server serves one model and ignores the name in a request, so a local agent's profile could name anything and Hermes would print it. One said "astra" while every answer came from the local Qwen. Local agents are now configured with the model the server actually serves.
+
 ## 0.19.8
 
 - **Cloud API responses are size-bounded before capture.** HANCORE-linux's second-pass review on #7248 found `cloud_http`/`cloud_api` in `lib/runtimes/cloud.sh` captured a curl response fully into a shell variable with only a time ceiling (`--max-time`), no byte ceiling — a malicious or malfunctioning `api.omarchy.fans` endpoint could stream an unbounded body and exhaust client memory before `jq`/command substitution ever saw it. Both now add `--max-filesize` (default 8MB, `OFC_HTTP_MAX_BYTES` override); curl 8.4+ enforces this even on chunked responses with no Content-Length. Verified against a local test server: an oversized chunked response is refused in milliseconds, a normal response still round-trips correctly.

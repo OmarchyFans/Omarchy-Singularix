@@ -37,6 +37,14 @@ agent_provision() { # agent_provision <name>
   mode=$(profile_get "$name" mode)
   local role backend_id; role=$(profile_get "$name" role); backend_id=$(profile_get "$name" backend)
   local hp; hp=$(provider_hermes "$provider")
+  # The local llama.cpp server serves exactly one model and ignores the name in a
+  # request, so a local profile's model field can say anything -- and Hermes prints it
+  # in its footer. The `singularix` agent said "astra" while every call went to Qwen 4B
+  # (2026-09-26). Tell Hermes the served model; the profile's stale name is not a model.
+  if [[ $provider == local ]] && declare -F local_models_json >/dev/null && local_online 2>/dev/null; then
+    local served; served=$(local_models_json 2>/dev/null | jq -r '.[0].id // empty' 2>/dev/null)
+    [[ -n $served ]] && model=$served
+  fi
 
   run mkdir -p "$home/skills" "$home/sessions" "$home/logs" "$home/memories"
   (( OAL_DRY_RUN )) && { info "[dry-run] would write $home/{config.yaml,.env,SOUL.md,job.md,.no-bundled-skills}"; return 0; }

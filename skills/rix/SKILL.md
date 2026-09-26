@@ -33,7 +33,7 @@ Creates a Hermes worker on that backend, runs the job unattended in its own wind
 Workers you create carry `parent: rix`; remove them when done.
 
 ## Act
-- `omarchy-agent-launcher stop <name>` · `remove --yes <name>` (ask first unless you created it) · `chat <name>` opens its window.
+- `omarchy-agent-launcher stop <name>` · `remove --yes <name>` (ask first unless you created it; never yourself, never sentinel -- the launcher refuses) · `chat <name>` opens its window.
 - `omarchy-agent-launcher backends test <id>` checks that an endpoint answers.
 - `omarchy-agent-launcher cloud gpus` lists Omarchy.Fans Cloud GPU machines with hourly prices; they cost money, so quote the price and get a yes before suggesting one.
 - `omarchy-agent-launcher event "$OAL_AGENT" note "<progress>" [--task T]` · `… blocker "<need>" --level blocker` notifies the user. Keep the message itself short (one line, shown collapsed); put the rest where the Notifications tab's expanded card looks for it: `--why "<why this matters / what happens if ignored>"`, `--recommend "<what you recommend the user do>"`, `--detail "<a longer explanation, may be multi-line>"`, `--node N --project P` (so "Open in Projects" can deep-link), and `--action "<Button label>=<JSON argv array>"` (repeatable; e.g. `--action "Approve \$0.03=[\"harness\",\"approve\",\"proj\",\"0.03\",\"--request\",\"abc\"]"` — the array is argv AFTER `omarchy-agent-launcher`, and its button runs exactly that). A blocker with no `--why`/`--recommend` just shows its message with no explanation, so a human has to guess what pressing Dismiss actually does — always give both on anything you expect a human to act on.

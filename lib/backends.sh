@@ -29,6 +29,7 @@ BACKEND_POLICY=(
   "local|coding|true|false"                  # llama.cpp, offline
   "ollama|coding|true|false"                 # local, no key, no network egress
   "deepseek|coding|false|true"               # third-party API key, metered
+  "zai|coding|false|true"                    # Z.ai GLM API key, metered; processing country unpublished
   "openai|coding|false|true"
   "xai|coding|false|true"
   "nous|coding|false|true"

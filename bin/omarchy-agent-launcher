@@ -459,13 +459,40 @@ cmd_job() {
   say "job updated for $name"
 }
 
+# Who asked for this, so an event log never again says only "Agent removed". Rix was
+# removed three times on 2026-09-19/20 and nothing recorded by whom: no agent was active
+# in any of those minutes, and Rix's own home -- with its history -- went with it.
+remove_caller() {
+  if [[ -n ${OAL_AGENT:-} ]]; then printf 'agent %s' "$OAL_AGENT"; return; fi
+  local parent; parent=$(ps -o comm= -p "$PPID" 2>/dev/null | tr -d ' ')
+  case $parent in
+    quickshell|qs) printf 'the dashboard' ;;
+    "")            printf 'unknown' ;;
+    *)             printf '%s' "$parent" ;;
+  esac
+}
+# Agents that hold the desktop together. Removing one deletes its home -- sign-ins,
+# memory, history -- and it is never the way to change its model (a pick applies on
+# the next start; Stop then Chat, or `rix setup`).
+remove_protected() { [[ $1 == "$RIX_NAME" || $1 == sentinel ]]; }
+
 cmd_remove() {
   local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
+  # An agent session may never remove the chief of staff, Sentinel, or itself: Rix's
+  # skill lets it remove the workers it made, and a remove run inside a session kills
+  # that session mid-command.
+  if [[ -n ${OAL_AGENT:-} ]] && { remove_protected "$name" || [[ $name == "$OAL_AGENT" ]]; }; then
+    fail "an agent may not remove '$name' (asked by $OAL_AGENT); only you can, from a terminal"
+  fi
+  if remove_protected "$name" && ! opt_flag --really; then
+    fail "'$name' is protected: removing it deletes its sign-ins and history. To change its model, pick one and restart it (Stop, then Chat). To remove it anyway: omarchy-agent-launcher remove $name --yes --really"
+  fi
   if ! opt_flag --yes; then ui_need; confirm "Forget '$name' and delete its local agent home?" || exit 130; fi
+  local by; by=$(remove_caller)
   session_kill "$name" || true
   run rm -rf "$(stage_dir "$name")"
   run rm -f "$(profile_path "$name")" "$(job_path "$name")"
-  event_emit "$name" removed "Agent removed"
+  event_emit "$name" removed "Agent removed by $by" --detail "caller: $by"
   [[ -s $OAL_STATE/kanban-cursors.json ]] && { tmp=$(mktemp); jq --arg n "$name" 'del(.[$n])' "$OAL_STATE/kanban-cursors.json" >"$tmp" && mv -f "$tmp" "$OAL_STATE/kanban-cursors.json"; }
   say "removed $name"
 }

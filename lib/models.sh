@@ -16,7 +16,8 @@ models_catalog_key() {
     anthropic) echo anthropic ;;  openai|openai-codex) echo openai ;;
     xai|xai-oauth) echo xai ;;    openrouter) echo openrouter ;;
     gemini) echo google ;;        deepseek) echo deepseek ;;
-    nous) echo nous ;;            *) echo - ;;
+    nous) echo nous ;;            zai) echo zai ;;
+    *) echo - ;;
   esac
 }
 

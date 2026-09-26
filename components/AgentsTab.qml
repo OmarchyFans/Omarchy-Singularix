@@ -123,7 +123,12 @@ Item {
         Button { text: "Chat"; iconText: "󰭹"; selected: true; tooltipText: "Focus the agent's window, or reattach to its session"; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: dash.chat(row.agent.name) }
         PanelActionButton { iconText: "󰓛"; tooltipText: "Stop the session (keeps the agent)"; visible: row.agent && row.agent.running; hoverColor: dash.urgent; onClicked: dash.act([dash.launcher, "stop", row.agent.name]) }
         PanelActionButton { iconText: "󰷈"; tooltipText: "Edit the job description"; onClicked: dash.act([dash.launcher, "--popup", "job", row.agent.name]) }
-        PanelActionButton { iconText: "󰩺"; tooltipText: "Remove this agent"; hoverColor: dash.urgent; onClicked: { tab.pendingRemove = row.agent.name; confirm.opened = true } }
+        // Rix and Sentinel are protected (cmd_remove refuses them without --really):
+        // removing either deletes its sign-ins and history, and it is never how to switch
+        // a model. Rix was removed three times that way on 2026-09-19/20.
+        PanelActionButton { iconText: "󰩺"; tooltipText: "Remove this agent"; hoverColor: dash.urgent
+                            visible: row.agent && row.agent.role !== "chief-of-staff" && row.agent.name !== "sentinel"
+                            onClicked: { tab.pendingRemove = row.agent.name; confirm.opened = true } }
       }
     }
   }
