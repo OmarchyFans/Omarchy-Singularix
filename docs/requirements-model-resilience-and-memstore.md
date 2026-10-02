@@ -1,5 +1,7 @@
 # Requirements: Model Resilience, History, and PageIndex Memstore
 
+> Design for Projects B and C (2026-10-01): [design-pageindex-memstore.md](design-pageindex-memstore.md).
+
 Status: DRAFT — awaiting user approval. Nothing described here has been built.
 Scope confirmed with user: 4 separate projects, build order A -> D -> B -> C
 (A can run in parallel with D; C depends on B).
