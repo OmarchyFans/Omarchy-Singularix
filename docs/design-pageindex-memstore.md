@@ -291,9 +291,11 @@ Requirements:
 
 > **Spike N0 outcome (2026-10-02, [results](spike-n0-results.md)):** the pure crawl below did not
 > pass the gate (+8 points over keyword search, +10 required). The v1 Navigator is the gate's
-> fallback: BM25 seeds mapped to project-tree units, re-ranked by the local model's yes/no on each
-> unit's title and preview, then a short crawl from there (N0 arm C_hyb: hit@3 0.72 and 0.60
-> on the two question sets vs 0.64 and 0.47 for BM25). When the crawl does choose among siblings,
+> fallback, exactly as measured: BM25's top 16 leaves → their project-tree units (deduplicated)
+> → one local-model yes/no per unit on its title and preview → the top 3 by probability (N0 arm
+> C_hyb at τ = 0.05: hit@3 0.72 and 0.60 on the two question sets vs 0.64 and 0.47 for BM25).
+> In those runs the seeds always filled the quota, so no crawl step ran; continuing a crawl from
+> the accepted seeds' parents is an untested extension. When the crawl does choose among siblings,
 > the permuted `choice` beat per-child `noul` (0.68 vs 0.40). Navigation summaries (5.4) were
 > dropped. The pure crawl remains available to frontier models through the tools in 7.6.
 
@@ -557,7 +559,7 @@ Behaviour:
 | What the Navigator reads | Title + deterministic preview (+ `key_items`); optional navigation summary only if N0 earns it | PageIndex navigates on title + summary; previews give content without an LLM. |
 | Tree shape | PageIndex's search-cost merge/expand rule, in tokens, with search-cost metrics per run | A principled, measurable answer to "how deep, how wide". |
 | Store engine | Own SQLite store with stable content ids; PageIndex algorithms ported with attribution, not the library | PageIndex ids are positional, its local corpus is a flat list, and its builder needs an LLM for unstructured input. |
-| Crawl primitive | Independent `noul` per child on the running Qwen; `choice` only with permutation averaging | Removes the measured order bias; works today with no extra VRAM; backends are swappable. |
+| Crawl primitive | ~~Independent `noul` per child~~ **After N0:** `noul` to re-rank keyword-seeded units (the v1 Navigator); permuted `choice` when routing among siblings (0.68 vs 0.40) | Both remove the measured order bias; work today with no extra VRAM; backends are swappable. |
 | Frontier consumers | PageIndex-style tools (browse/structure/content/search) with pointer validation | Big models do the agentic loop well; the 4B does decisions. |
 | Packet content | Verbatim excerpts with citations, fixed slots, per-model budgets, injection hardening | Stops the telephone game, allows mechanical groundedness checks, caches well. |
 | Hermes compaction | Out-race it (30 s poll), don't patch Hermes | Upstream bug; patching vendored Hermes would break on `hermes update`. |
@@ -569,9 +571,7 @@ Behaviour:
 1. Passkey unlock: per-read prompt, or unlock once per login session with a timeout? (requirements C.1/C.2)
 2. Retention: keep everything forever (the default here), or a size cap?
 3. Should `~/Projects` be scribed as well as `~/Work`?
-4. If N0 shows local-model navigation summaries (5.4) clearly beat deterministic previews, may
-   the local model write them? They are signposts only and never enter a packet, but they are
-   model-written text in the store.
+4. ~~May the local model write navigation summaries?~~ Answered by N0: they did not earn their place (+4 then −7 points), so they are dropped.
 
 ## 14. Work breakdown (mirrored on the boards)
 

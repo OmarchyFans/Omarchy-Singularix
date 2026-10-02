@@ -126,19 +126,25 @@ the tree's titles and previews, not the bigger unit size.
    User question Q4 is moot.
 3. **Fusion F (pre-registered):** +7 on validation, hit@1 equal — below +10. **Does not ship.**
 4. **Fallback (§14.1):** "BM25 plus a re-rank of the top hits". C_hyb is exactly that: BM25's
-   top 16 leaves mapped to project-tree units, each scored by the local model on its title and
-   preview, best first. It has the best hit@3 on both sets (0.72 on the 25, tied with D_choice
+   top 16 leaves mapped to project-tree units (deduplicated, ~14 per question), each scored once
+   by the local model's yes/no on its title and preview, top 3 by probability. At its τ of 0.05
+   the seeds always filled the quota, so C_hyb's crawl step never ran. It has the best hit@3 on both sets (0.72 on the 25, tied with D_choice
    and D_hyb; 0.60 alone on the 15) and is +10 points pooled. Its hit@1 on the 25 (0.60) is
    below BM25's 0.64; on the 15 it is above (0.47 vs 0.27). **This is the v1 Navigator.**
 
 Caveats: 25 and 15 questions are small samples; one question is 4 and 7 points respectively,
 so differences under ~10 points are within noise. Gold labels are session-level and were set by
 the experimenter. The summaries were written by the same model that later read them.
+The 15 validation questions were written after seeing that the crawl wins conversation questions
+and BM25 wins commit questions, and their mix shifted toward conversations (7 conversation, 6
+commit, 2 machine vs 10/10/5 in the 25). That tilts the validation set toward the arms that beat
+BM25, and is consistent with BM25 dropping from 0.64 to 0.47 there. Treat the validation gains as
+an upper bound; the 25-question set is the cleaner comparison.
 
 ## What this changes in the design
 
-- **§7 Navigator:** default = keyword seeds → map to units → local-model yes/no re-rank on
-  title + preview → top units; then continue a short crawl from the best seeds' parents. The
+- **§7 Navigator:** default = BM25 top 16 leaves → their units → one local-model yes/no per unit
+  on title + preview → top 3. A follow-on crawl from the accepted seeds' parents is untested. The
   pure crawl stays available to frontier models through the tools in §7.6, not as the default.
 - **§7.1:** for re-ranking, independent yes/no works well; for choosing among siblings in a
   crawl, the permuted choice beats yes/no (0.68 vs 0.40).
