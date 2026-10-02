@@ -253,9 +253,11 @@ If enabled:
   wrong summary can cost a bad turn in the crawl but cannot become a "fact".
 - Prompts are ported from PageIndex `_leaf_summary` / `_parent_summary` (≤ 60 words). The
   fallback when a call fails is the deterministic preview (PageIndex falls back to child titles).
-- Cost: about 6 s per node on the GPU (40 tok/s generation). A backfill of ~3,000 interior
-  nodes is roughly 5 GPU-hours, run only when the machine is idle on AC power; after that only
-  dirty nodes are redone.
+- Cost: a ≤ 60-word summary is ~80 output tokens, about 2–3 s per node on the GPU (40 tok/s
+  generation plus prefill of the children's titles and previews). A backfill of ~3,000 interior
+  nodes is roughly 2–3 GPU-hours, run only when the machine is idle on AC power; after that only
+  dirty nodes are redone. (PageIndex's default is 150 words; we keep summaries shorter because
+  they only steer the crawl.)
 
 ## 6. The Scribe (Project B, plus machine changes)
 
@@ -590,8 +592,10 @@ Decision rules, written down before running so the result can't be argued afterw
   (section 13, Q4).
 - `noul` vs permuted `choice`: keep whichever is better at equal time.
 
-Needs the GPU on: set supergfx to Hybrid (edit `/etc/supergfxd.conf`, then reboot) and confirm
-`nvidia-smi` before measuring.
+Needs the GPU on: set supergfx to Hybrid (edit `/etc/supergfxd.conf`, then reboot). `nvidia-smi`
+passing is not enough, because the local-agent service can start before the nvidia driver at boot
+and stay CPU-only. Restart `omarchy-local-agent` after boot and confirm llama-server itself is on
+the GPU: its journal shows layers offloaded to CUDA and prompt eval runs at ~1,000 tok/s, not ~25.
 
 ### 14.2 Tasks
 
