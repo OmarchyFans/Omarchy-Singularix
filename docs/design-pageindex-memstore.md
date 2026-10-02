@@ -193,7 +193,7 @@ Backends:
 | Backend | Status | Notes |
 |---|---|---|
 | **`llama-logprob`** (default) | Works today (tested 10-01) | Prompt lists options with single-token labels (A–P). Call `/completion` with `n_probs` or chat with `logprobs`/`top_logprobs`, `max_tokens: 1`, a GBNF grammar restricted to the label set, and `--reasoning off` (the test leaked 0.2% to `<think>`). Renormalize over the labels. More than 16 options → a tournament of 16-way calls. `score` = choice over level labels plus the expected value; `noul` = choice over Yes/No. |
-| `strands-decider` | Spike (task N7) | StrandsAgents/strands-decider-2B (Apache 2.0, Qwen-based, pointer head, sub-100 ms on an RTX 3090). Its runtime is not llama.cpp, and it cannot share our 4 GB GPU with the 4B, so it would run on CPU or swap models. Its reported 72% on JevBench comes with no head-to-head against Jev. Measure it before trusting it. |
+| `strands-decider` | Spike (task N7) | `StrandsAgents/strands-decider-2B-hobson-v19` on Hugging Face (Apache 2.0, Qwen-based, pointer head). The vendor reports "tens of ms, under 100 ms" on short tasks; the measured v18 figure is 106 ms median / 296 ms p95 on an RTX 3090. Its runtime is not llama.cpp, and it cannot share our 4 GB GPU with the 4B, so it would run on CPU or swap models. Its reported 72% on JevBench comes with no head-to-head against Jev. Measure it before trusting it. |
 | `jev-api` | Off by default | TypeSafe Jev via OpenRouter (`typesafe/jev-1.13`, ~$0.042 per million input tokens). Metered and sends text off the machine, so it sits behind the cost gate and the IP gate. Never used on private sections. |
 
 Calibration: every backend runs the same eval set (task N1). The Navigator uses probabilities
