@@ -1,6 +1,6 @@
 # Design: PageIndex Memstore, Scribe, Navigator and Context Packets
 
-Status: **Phase 2 design v2, awaiting the user's review** (2026-10-01). v2 replaces the
+Status: **Phase 2 design v2, approved 2026-10-02; spike N0 done** (see §7 and §14.1 notes). v2 replaces the
 date-ordered tree with a project tree and content previews, ports PageIndex's tree-shaping and
 hardening, removes the decider's list-order bias, and gates the Navigator on spike N0.
 Covers Project B (full-text chat history) and Project C (PageIndex memstore) from
@@ -289,6 +289,14 @@ Requirements:
 
 ## 7. The Navigator (local model, decisions only)
 
+> **Spike N0 outcome (2026-10-02, [results](spike-n0-results.md)):** the pure crawl below did not
+> pass the gate (+8 points over keyword search, +10 required). The v1 Navigator is the gate's
+> fallback: BM25 seeds mapped to project-tree units, re-ranked by the local model's yes/no on each
+> unit's title and preview, then a short crawl from there (N0 arm C_hyb: hit@3 0.72 and 0.60
+> on the two question sets vs 0.64 and 0.47 for BM25). When the crawl does choose among siblings,
+> the permuted `choice` beat per-child `noul` (0.68 vs 0.40). Navigation summaries (5.4) were
+> dropped. The pure crawl remains available to frontier models through the tools in 7.6.
+
 ### 7.1 The decider interface
 
 A backend-agnostic interface that mirrors the three primitives decision models expose:
@@ -568,6 +576,9 @@ Behaviour:
 ## 14. Work breakdown (mirrored on the boards)
 
 ### 14.1 Gate: spike N0 (before S1 and N1)
+
+> **Done 2026-10-02.** Outcome and the rules as applied: [spike-n0-results.md](spike-n0-results.md).
+> N9 archived; S6's done-when replaced (search cost is the wrong test); N1/N2 follow the C_hyb shape.
 
 Build a throwaway prototype index over **the last 14 days** of real data (Claude Code
 transcripts, Hermes sessions, `~/Work` commits) in a scratch database, four ways:

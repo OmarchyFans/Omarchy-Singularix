@@ -1,6 +1,6 @@
 # Spike N0: does crawling the memstore tree beat keyword search?
 
-Status: **in progress** (2026-10-02). Gate defined in
+Status: **complete** (2026-10-02). Decision: **the Navigator ships as keyword search + a local-model re-rank over the project tree's units; the pure crawl and the navigation summaries do not ship.** Gate defined in
 [design-pageindex-memstore.md §14.1](design-pageindex-memstore.md). Code: `spikes/n0/`.
 This page publishes aggregate numbers only. The question set, gold labels and the scratch
 database hold private history and stay in `~/.local/share/omarchy-memstore/spike-n0/`
@@ -48,7 +48,9 @@ the 5 tuning questions, then frozen.
 | C (project tree, yes/no) | 0.24 | **0.40** | 0.31 | 39.6 | 7.4 | 3,027 | 0.3 |
 | **C_choice** (project tree, permuted choice) | 0.52 | **0.68** | 0.58 | 14.2 | 7.4 | 3,976 | 0.5 |
 | C_hyb (C + BM25 seeds) | 0.60 | **0.72** | 0.66 | 13.8 | 3.8 | 7,878 | 0.05 |
-| D / D_choice / D_hyb | pending | | | | | | |
+| D (C + summaries, yes/no) | 0.12 | **0.28** | 0.20 | 21.8 | 6.9 | 1,212 | 0.5 |
+| D_choice | 0.44 | **0.72** | 0.55 | 14.8 | 9.9 | 4,194 | 0.5 |
+| D_hyb | 0.60 | **0.72** | 0.66 | 13.8 | 4.0 | 7,878 | 0.05 |
 
 By question type (hit@3):
 
@@ -64,6 +66,7 @@ Search cost (PageIndex's `tree_optimize` measure, in tokens: routing views read 
 |---|---|---|---|
 | B (date) | 5,943 | 3,943 | 291 |
 | C (project + previews) | 11,200 | 6,134 | 5 |
+| D (C + summaries) | 13,347 | 8,879 | 5 |
 
 ## Findings so far
 
@@ -97,6 +100,55 @@ argued from the set that suggested it:
 - **Rule:** F ships as the Navigator if, on the validation set, it beats A_leaf's hit@3 by
   ≥ 10 points **and** does not lose on hit@1. Otherwise the Navigator is BM25 + re-rank.
 
-## Decision
+## Validation run (15 new questions, frozen before running)
 
-Pending arm D and the validation run.
+| Arm | hit@1 | **hit@3** | MRR | calls/q | s/q | tokens |
+|---|---|---|---|---|---|---|
+| A_leaf (baseline) | 0.27 | **0.47** | 0.33 | 0 | 0.01 | 737 |
+| A_unit | 0.27 | **0.47** | 0.33 | 0 | 0.02 | 9,151 |
+| C_choice | 0.33 | **0.53** | 0.42 | 14.6 | 9.5 | 2,869 |
+| D_choice | 0.33 | **0.47** | 0.40 | 12.4 | 8.8 | 2,780 |
+| F_D_choice (pre-registered fusion) | 0.27 | **0.53** | 0.39 | 12.4 | 8.8 | 1,752 |
+| F_C_choice | 0.27 | **0.53** | 0.40 | 14.6 | 9.5 | 2,075 |
+| **C_hyb** (keyword hits re-ranked by the local model, then crawl) | **0.47** | **0.60** | 0.53 | 13.6 | 4.0 | 8,533 |
+
+(F used its crawl arm's frozen τ = 0.5; the summary file prints the default.)
+
+Both sets pooled (40 questions): A_leaf hit@3 **0.575**, hit@1 0.50; C_hyb hit@3 **0.675**,
+hit@1 0.55. A_unit equals A_leaf on both sets, so the gain is the local model's re-ranking with
+the tree's titles and previews, not the bigger unit size.
+
+## Decision (rules applied as written)
+
+1. **Pure crawl (§14.1):** best pure tree arm on the 25 is D_choice at 0.72, +8 over BM25 —
+   below +10. **Does not ship.**
+2. **Summaries (arm D vs C):** +4 on the 25, −7 on validation. **Do not ship; N9 is archived.**
+   User question Q4 is moot.
+3. **Fusion F (pre-registered):** +7 on validation, hit@1 equal — below +10. **Does not ship.**
+4. **Fallback (§14.1):** "BM25 plus a re-rank of the top hits". C_hyb is exactly that: BM25's
+   top 16 leaves mapped to project-tree units, each scored by the local model on its title and
+   preview, best first. It has the best hit@3 on both sets (0.72 on the 25, tied with D_choice
+   and D_hyb; 0.60 alone on the 15) and is +10 points pooled. Its hit@1 on the 25 (0.60) is
+   below BM25's 0.64; on the 15 it is above (0.47 vs 0.27). **This is the v1 Navigator.**
+
+Caveats: 25 and 15 questions are small samples; one question is 4 and 7 points respectively,
+so differences under ~10 points are within noise. Gold labels are session-level and were set by
+the experimenter. The summaries were written by the same model that later read them.
+
+## What this changes in the design
+
+- **§7 Navigator:** default = keyword seeds → map to units → local-model yes/no re-rank on
+  title + preview → top units; then continue a short crawl from the best seeds' parents. The
+  pure crawl stays available to frontier models through the tools in §7.6, not as the default.
+- **§7.1:** for re-ranking, independent yes/no works well; for choosing among siblings in a
+  crawl, the permuted choice beats yes/no (0.68 vs 0.40).
+- **§5 tree:** still needed. Its units, titles and previews are what the re-rank reads, its
+  structure feeds the packet's "where you are" slot and the agentic tools. Keep v2 (project
+  tree + deterministic previews); the date tree is dropped even as a secondary navigation view.
+- **§5.4 / N9:** navigation summaries dropped.
+- **S6 done-when:** replace "beats the date tree's search cost" with "C_hyb-style retrieval on
+  this question set does not regress (hit@3 ≥ 0.70 on the 25, ≥ 0.60 on the 15)". PageIndex's
+  search-cost metric rewards uninformative trees.
+- **Open lead, not a decision:** keyword search and the crawl miss different questions (union
+  0.92 on the 25). A better fusion than F's simple interleave may close the gap; it would need a
+  third, fresh question set.
