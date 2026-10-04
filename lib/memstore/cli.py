@@ -6,6 +6,7 @@
   packet QUESTION [--for frontier|local] [--sections a,b]   cited context for the next model call
   ask QUESTION [--sections a,b]  answer offline with the local model, citations checked
   search TERMS | browse [SECTION] | structure ID [--depth N] | content ID   PageIndex-style tools
+  solve --config-root DIR --target FILE --type hypr|jsonc|toml DESCRIPTION   N6 solver loop v0
   install [--no-service] [--no-rix] | uninstall
 Every node id given to a command is validated: unknown or out-of-section ids are rejected.
 """
@@ -26,6 +27,7 @@ from .ingest import ingest_all, ingest_claude, ingest_commits, ingest_config, in
 from .navigator import navigate, terms
 from .packet import check_citations, compile_packet, sanitize
 from .shape import dirty, shape
+from .solver import Step, propose_live, solve
 from .store import DEFAULT_DIR, Store
 
 HOME = os.path.expanduser("~")
@@ -185,6 +187,25 @@ def cmd_content(a):
     print("```")
 
 
+def cmd_solve(a):
+    s = open_store()
+    d = Decider()
+    if not d.health()["ok"]:
+        raise SystemExit(f"local model unavailable: {d.health()['reason']}")
+
+    def accept(text: str) -> tuple[bool, str]:
+        missing = [sub for sub in a.must_contain if sub not in text]
+        if missing:
+            return False, "missing required text: " + ", ".join(repr(m) for m in missing)
+        return True, "contains all required text"
+
+    step = Step(id="step1", task=a.task or "cli-task", description=a.description, target=a.target,
+               file_type=a.file_type, acceptance=accept)
+    out = solve(s, a.config_root, [step], propose_live(d), task=a.task or "cli-task",
+               max_rounds=a.max_rounds, apply_live=a.apply_live)
+    print(json.dumps(out, indent=1) if a.json else "\n".join(f"{k}: {v}" for k, v in out.items()))
+
+
 SERVICE = """[Unit]
 Description=Omarchy memstore scribe: records agent sessions and machine changes for Rix and Help
 After=default.target
@@ -272,6 +293,17 @@ def main(argv=None) -> int:
     x = sub.add_parser("browse"); x.add_argument("node", nargs="?"); x.add_argument("--section"); x.set_defaults(f=cmd_browse)
     x = sub.add_parser("structure"); x.add_argument("id"); x.add_argument("--depth", type=int, default=2); x.add_argument("--sections"); x.set_defaults(f=cmd_structure)
     x = sub.add_parser("content"); x.add_argument("id"); x.add_argument("--sections"); x.set_defaults(f=cmd_content)
+    x = sub.add_parser("solve")
+    x.add_argument("description")
+    x.add_argument("--config-root", required=True)
+    x.add_argument("--target", required=True, help="file path relative to --config-root")
+    x.add_argument("--type", dest="file_type", required=True, choices=("hypr", "jsonc", "toml"))
+    x.add_argument("--must-contain", action="append", default=[], help="substring the result must contain (repeatable)")
+    x.add_argument("--task")
+    x.add_argument("--max-rounds", type=int, default=3)
+    x.add_argument("--apply-live", action="store_true")
+    x.add_argument("--json", action="store_true")
+    x.set_defaults(f=cmd_solve)
     x = sub.add_parser("install"); x.add_argument("--no-service", action="store_true"); x.add_argument("--no-rix", action="store_true"); x.set_defaults(f=cmd_install)
     x = sub.add_parser("uninstall"); x.set_defaults(f=cmd_uninstall)
     a = p.parse_args(argv)
