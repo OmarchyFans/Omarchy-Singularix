@@ -311,3 +311,17 @@ load_runtime() { source "$OAL_LIB/runtimes/$1.sh"; }
 # system prompt / workspace instructions.
 KICKOFF_INTERACTIVE="Read your job description in your instructions. Introduce yourself in two sentences, list the first three steps you will take, then begin."
 KICKOFF_UNATTENDED="Carry out the job described in your instructions now, end to end. Report what you did and anything that still needs a human."
+
+# ---- memstore (N5: model-switch handoff, design section 10) ----------------
+# The dev entry point, so this works before `omarchy-memstore install` ever runs
+# (hermes.sh's Rix-skill copy is the only thing gated on an installed copy) and
+# in tests, where MEMSTORE_DB points it at a throwaway store instead of the
+# real ~/.local/share/omarchy-memstore/memstore.db.
+memstore_bin() { printf '%s/bin/omarchy-memstore' "$OAL_ROOT"; }
+memstore_available() { [[ -x $(memstore_bin) ]]; }
+# True when a handoff is waiting for <agent>. Only peeks: never consumes it.
+memstore_handoff_pending() { # memstore_handoff_pending <agent>
+  memstore_available || return 1
+  local out; out=$("$(memstore_bin)" handoff show --agent "$1" --json 2>/dev/null) || return 1
+  [[ -n $out && $out != "null" ]]
+}

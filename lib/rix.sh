@@ -148,7 +148,20 @@ rix_setup() {
     warn "the local GPU server is not ready for agents yet: run  omarchy-agent-launcher local-server tune --ctx 32768  (or pick another backend)"
   fi
   if session_alive "$RIX_NAME"; then
-    say "Saved. Rix is still running $(agent_field_now "$RIX_NAME" model) in its open session:"
+    local live_model live_backend
+    live_model=$(agent_field_now "$RIX_NAME" model); live_backend=$(agent_field_now "$RIX_NAME" backend)
+    # N5 (the 09-28 failure): a switch with an open session used to wait silently for a
+    # restart, and the outgoing model kept answering knowing nothing about it. Save a
+    # deterministic handoff -- built from the session itself, no model call -- so the
+    # next session's first packet can pick up where this one left off (design section 10).
+    if [[ $live_model != "$m" || $live_backend != "$backend" ]] && memstore_available; then
+      if "$(memstore_bin)" handoff write --agent "$RIX_NAME" --from "$live_backend/$live_model" --to "$backend/$m" >/dev/null 2>&1; then
+        say "  A handoff note for this session was saved (shared/handoffs); Rix's next session starts from it."
+      else
+        warn "could not save a model-switch handoff note for Rix (non-fatal; it still switches on restart)"
+      fi
+    fi
+    say "Saved. Rix is still running $live_model in its open session:"
     say "  it switches to $backend / $m when you restart it (Stop, then Chat)."
   else
     say "Rix runs on $backend / $m  (change with: omarchy-agent-launcher rix setup BACKEND [MODEL])"
@@ -222,7 +235,7 @@ rix_status_json() {
     --arg pm "$pending_model" --arg pb "$pending_backend" \
     --argjson workers "$(profile_list | while IFS= read -r n; do [[ -n $n && $(profile_get "$n" parent 2>/dev/null) == "$RIX_NAME" ]] && echo "$n"; done | jq -R . | jq -sc .)" \
     '{name:$name, configured:$configured, running:$running, model:$model, backend:$backend, provider:$provider, default_backend:$default, workers:$workers,
-      pending_model:$pm, pending_backend:$pb}'
+      pending_model:$pm, pending_backend:$pb, switch_deferred:($pm != "")}'
 }
 
 # Pre-0.9 names, kept for one release.

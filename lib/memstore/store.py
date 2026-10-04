@@ -42,6 +42,8 @@ CREATE INDEX IF NOT EXISTS unit_leaves_leaf ON unit_leaves(leaf);
 CREATE TABLE IF NOT EXISTS shape_runs(
   id INTEGER PRIMARY KEY, started REAL, finished REAL, nodes INTEGER, units INTEGER,
   duplicate_views INTEGER, status TEXT, note TEXT);
+CREATE TABLE IF NOT EXISTS handoffs(id TEXT PRIMARY KEY, agent TEXT, created REAL, consumed REAL);
+CREATE INDEX IF NOT EXISTS handoffs_agent ON handoffs(agent, consumed);
 """
 
 
@@ -129,6 +131,29 @@ class Store:
     def refresh_counts(self) -> None:
         self.db.execute("UPDATE sessions SET n_leaves=(SELECT count(*) FROM leaves WHERE leaves.session=sessions.id) "
                         "WHERE dirty=1")
+
+    # -------------------------------------------------------- N5: handoffs
+    def add_handoff(self, agent: str, session_id: str, ts: float | None = None) -> None:
+        """Record a new pending handoff for an agent (design section 10 / storage
+        conventions). A later write for the same agent just adds a newer row;
+        pending_handoff always returns the newest unconsumed one."""
+        self.db.execute("INSERT OR REPLACE INTO handoffs(id, agent, created, consumed) VALUES(?,?,?,NULL)",
+                        (session_id, agent, ts if ts is not None else time.time()))
+
+    def pending_handoff(self, agent: str) -> dict | None:
+        """-> {'session', 'created', 'text'} for the newest unconsumed handoff, or None."""
+        row = self.db.execute("SELECT id, created FROM handoffs WHERE agent=? AND consumed IS NULL "
+                              "ORDER BY created DESC LIMIT 1", (agent,)).fetchone()
+        if not row:
+            return None
+        sid, created = row
+        text = "\n".join(lf["text"] for lf in self.leaves_of(sid))
+        return {"session": sid, "created": created, "text": text}
+
+    def consume_handoff(self, agent: str) -> bool:
+        cur = self.db.execute("UPDATE handoffs SET consumed=? WHERE agent=? AND consumed IS NULL",
+                              (time.time(), agent))
+        return bool(cur.rowcount)
 
     def cursor(self, source: str, default=None):
         row = self.db.execute("SELECT cursor FROM cursors WHERE source=?", (source,)).fetchone()

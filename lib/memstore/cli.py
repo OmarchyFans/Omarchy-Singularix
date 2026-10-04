@@ -3,8 +3,10 @@
   status                         what is stored, last ingest and shape, local model state
   scribe [--loop] [--no-shape]   ingest every source once (or forever, as the systemd service does)
   shape                          rebuild the project tree now
-  packet QUESTION [--for frontier|local] [--sections a,b]   cited context for the next model call
+  packet QUESTION [--for frontier|local] [--sections a,b] [--agent NAME]   cited context for the next model call
   ask QUESTION [--sections a,b]  answer offline with the local model, citations checked
+  handoff write --agent NAME [--session ID] [--from M] [--to M]   save a model-switch handoff (N5)
+  handoff show --agent NAME [--consume]    show (and optionally consume) the pending handoff
   search TERMS | browse [SECTION] | structure ID [--depth N] | content ID   PageIndex-style tools
   install [--no-service] [--no-rix] | uninstall
 Every node id given to a command is validated: unknown or out-of-section ids are rejected.
@@ -22,6 +24,8 @@ import time
 
 from . import __version__
 from .decider import Decider
+from .handoff import latest_session_for_agent
+from .handoff import write as handoff_write
 from .ingest import ingest_all, ingest_claude, ingest_commits, ingest_config, ingest_hermes, ingest_pacman
 from .navigator import navigate, terms
 from .packet import check_citations, compile_packet, sanitize
@@ -103,8 +107,35 @@ def cmd_shape(a):
 def cmd_packet(a):
     s = open_store()
     nav = navigate(s, a.question, k=a.k, sections=sections_arg(a.sections), use_model=not a.no_model)
-    pk = compile_packet(s, a.question, nav, consumer=a.consumer)
+    pending = s.pending_handoff(a.agent) if getattr(a, "agent", None) else None
+    pk = compile_packet(s, a.question, nav, consumer=a.consumer, handoff=pending["text"] if pending else None)
     print(json.dumps(pk) if a.json else pk["text"])
+
+
+def cmd_handoff_write(a):
+    """N5: write a model-switch handoff (design section 10). Deterministic by default
+    (no model call); `--session` overrides auto-detecting the agent's latest session."""
+    s = open_store()
+    sid = a.session or latest_session_for_agent(s, a.agent)
+    if not sid:
+        print(f"no session found for agent '{a.agent}' to hand off from; nothing written")
+        return
+    hid = handoff_write(s, a.agent, sid, from_model=a.from_model, to_model=a.to_model)
+    print(json.dumps({"handoff": hid, "session": sid}) if a.json else f"handoff saved: {hid} (from session {sid})")
+
+
+def cmd_handoff_show(a):
+    s = open_store()
+    pending = s.pending_handoff(a.agent)
+    if a.json:
+        print(json.dumps(pending))
+    elif not pending:
+        print(f"no pending handoff for {a.agent}")
+    else:
+        print(pending["text"])
+    if pending and a.consume:
+        with s.batch():
+            s.consume_handoff(a.agent)
 
 
 ASK_SYS = ("You answer questions about past work on this Linux laptop using only a memstore packet. "
@@ -267,11 +298,27 @@ def main(argv=None) -> int:
             x.add_argument("-k", type=int, default=3)
             x.add_argument("--json", action="store_true")
             x.add_argument("--no-model", action="store_true", help="keyword order only, no local model")
+            x.add_argument("--agent", help="include this agent's pending model-switch handoff, if any (N5)")
         x.set_defaults(f=f)
     x = sub.add_parser("search"); x.add_argument("terms"); x.add_argument("-k", type=int, default=10); x.add_argument("--sections"); x.set_defaults(f=cmd_search)
     x = sub.add_parser("browse"); x.add_argument("node", nargs="?"); x.add_argument("--section"); x.set_defaults(f=cmd_browse)
     x = sub.add_parser("structure"); x.add_argument("id"); x.add_argument("--depth", type=int, default=2); x.add_argument("--sections"); x.set_defaults(f=cmd_structure)
     x = sub.add_parser("content"); x.add_argument("id"); x.add_argument("--sections"); x.set_defaults(f=cmd_content)
+    # N5: model-switch handoff (design section 10).
+    x = sub.add_parser("handoff")
+    hsub = x.add_subparsers(dest="handoff_cmd", required=True)
+    h = hsub.add_parser("write")
+    h.add_argument("--agent", required=True)
+    h.add_argument("--session", help="defaults to the agent's own latest session")
+    h.add_argument("--from", dest="from_model", default="")
+    h.add_argument("--to", dest="to_model", default="")
+    h.add_argument("--json", action="store_true")
+    h.set_defaults(f=cmd_handoff_write)
+    h = hsub.add_parser("show")
+    h.add_argument("--agent", required=True)
+    h.add_argument("--consume", action="store_true", help="mark it consumed after printing it")
+    h.add_argument("--json", action="store_true")
+    h.set_defaults(f=cmd_handoff_show)
     x = sub.add_parser("install"); x.add_argument("--no-service", action="store_true"); x.add_argument("--no-rix", action="store_true"); x.set_defaults(f=cmd_install)
     x = sub.add_parser("uninstall"); x.set_defaults(f=cmd_uninstall)
     a = p.parse_args(argv)

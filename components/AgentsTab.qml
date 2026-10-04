@@ -114,6 +114,14 @@ Item {
           color: row.agent && row.agent.last && row.agent.last.level === "blocker" ? dash.urgent : dash.dim
           font.family: dash.fontFamily; font.pixelSize: Style.font.caption
         }
+        // N5: a model pick made while this session is up does not move it; it switches on
+        // restart (status --json .agents[].switch_deferred / .pending_model).
+        Text {
+          width: parent.width; elide: Text.ElideRight
+          visible: row.agent && row.agent.switch_deferred
+          text: "Model switch deferred until restart (pending: " + (row.agent ? row.agent.pending_model : "") + ")"
+          color: dash.warnColor; font.family: dash.fontFamily; font.pixelSize: Style.font.caption
+        }
       }
 
       Row {
@@ -121,6 +129,7 @@ Item {
         spacing: Style.spacing.sm
         anchors.verticalCenter: parent.verticalCenter
         Button { text: "Chat"; iconText: "󰭹"; selected: true; tooltipText: "Focus the agent's window, or reattach to its session"; foreground: dash.foreground; fontFamily: dash.fontFamily; onClicked: dash.chat(row.agent.name) }
+        PanelActionButton { iconText: ""; tooltipText: "Restart now: stop and relaunch to pick up the new model"; visible: row.agent && row.agent.switch_deferred; onClicked: dash.act([dash.launcher, "restart", row.agent.name]) }
         PanelActionButton { iconText: "󰓛"; tooltipText: "Stop the session (keeps the agent)"; visible: row.agent && row.agent.running; hoverColor: dash.urgent; onClicked: dash.act([dash.launcher, "stop", row.agent.name]) }
         PanelActionButton { iconText: "󰷈"; tooltipText: "Edit the job description"; onClicked: dash.act([dash.launcher, "--popup", "job", row.agent.name]) }
         // Rix and Sentinel are protected (cmd_remove refuses them without --really):
