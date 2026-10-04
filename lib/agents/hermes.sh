@@ -127,6 +127,10 @@ agent_provision() { # agent_provision <name>
     [[ -f $home/SOUL.md ]] || rix_soul "$name" >"$home/SOUL.md"
     # The bundled skill that teaches Rix the launcher's commands (refreshed every launch).
     rm -rf "$home/skills/omarchy/rix" "$home/skills/omarchy/jarvis"; mkdir -p "$home/skills/omarchy"; cp -R "$OAL_ROOT/skills/rix" "$home/skills/omarchy/rix"
+    # The memstore skill (what happened on this machine), only once the memstore is installed.
+    if command -v omarchy-memstore >/dev/null 2>&1 && [[ -d $OAL_ROOT/skills/memstore ]]; then
+      rm -rf "$home/skills/omarchy/memstore"; cp -R "$OAL_ROOT/skills/memstore" "$home/skills/omarchy/memstore"
+    fi
     # Jobs written before Sentinel was installed learn the advisory duty once.
     if declare -F sentinel_installed >/dev/null && sentinel_installed && [[ -f $(job_path "$name") ]] && ! grep -q '^## Sentinel advisories' "$(job_path "$name")"; then
       rix_sentinel_duty >>"$(job_path "$name")"
