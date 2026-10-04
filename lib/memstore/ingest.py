@@ -128,7 +128,7 @@ def _claude_file(store: Store, path: str, win: Window) -> int:
                 continue
             if role == "user" and not s.get("first_user") and not text.startswith("<"):
                 s["first_user"] = text[:200]
-            if t == "assistant":
+            if t == "assistant" and not sub:  # a subagent's model is not the session's
                 s["model"] = (r.get("message") or {}).get("model") or s.get("model")
             touched += _paths(text) if role != "tool" else []
             touched = [p for p in touched if not excluded(p)]
