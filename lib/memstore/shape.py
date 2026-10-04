@@ -99,6 +99,8 @@ def assign(s):
         return s["id"].split(":")[1], "commits"
     if s["source"] == "machine":
         return f"machine/{s['agent']}", "changes"
+    if s["source"] == "shared":  # N5: model-switch handoffs (design section 10)
+        return "shared/handoffs", s["agent"] or "misc"
     w = Counter()
     for f, n in s["files"].items():
         p = project_of(f)
@@ -240,7 +242,10 @@ def build(sessions: dict) -> Node:
         tree[p][w].append(s)
     projects = []
     for p, wss in tree.items():
-        pn = Node("p:" + p, "project", p, section="project/" + p)
+        # shared/handoffs is already an access-control section of its own (design section
+        # 5.1), not a project: give it that section directly so `--sections shared` finds it.
+        sec = p if p.startswith("shared/") else "project/" + p
+        pn = Node("p:" + p, "project", p, section=sec)
         wnodes = []
         for w, ss in wss.items():
             wn = Node(f"p:{p}:w:{w}", "workstream", f"{p} · {w}", section=pn.section)

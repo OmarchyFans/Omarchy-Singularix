@@ -431,7 +431,10 @@ Item {
           width: parent.width; spacing: Style.spacing.controlGap
           visible: tab.rix && tab.rix.pending_model && tab.rix.pending_model !== ""
           Dim { anchors.verticalCenter: parent.verticalCenter
-                text: "Rix is still running " + (tab.rix ? tab.shortModel(tab.rix.model, tab.rix.backend) : "") + " in its open session. Stop it and Chat again to switch." }
+                text: "Rix is still running " + (tab.rix ? tab.shortModel(tab.rix.model, tab.rix.backend) : "") + " in its open session. The switch is deferred until restart." }
+          Button { text: "Restart now"; iconText: "\uf2f1"; selected: true; foreground: dash.foreground; fontFamily: dash.fontFamily
+                   tooltipText: "Stop the session and relaunch it on the new model"
+                   onClicked: dash.act([tab.launcher, "restart", tab.rix.name]) }
           Button { text: "Stop Rix"; iconText: "\uf4db"; foreground: dash.foreground; fontFamily: dash.fontFamily
                    onClicked: dash.act([tab.launcher, "stop", tab.rix.name]) }
         }

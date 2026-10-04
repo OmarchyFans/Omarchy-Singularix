@@ -13,6 +13,10 @@ unset "${!OAL_@}" 2>/dev/null || true
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export XDG_CONFIG_HOME="$T/config" XDG_DATA_HOME="$T/data" XDG_STATE_HOME="$T/state" HOME_REAL="$HOME"
+# N5 (model-switch handoff): never the real ~/.local/share/omarchy-memstore/memstore.db --
+# every test that touches it (rix_setup's handoff write, hermes.sh's handoff peek) gets a
+# throwaway store instead, same spirit as the XDG redirection above.
+export MEMSTORE_DB="$T/memstore.db"
 export OAL_SENTINEL_BIN=oal-test-no-sentinel   # never the real Sentinel install; the sentinel block uses a stub
 export OAL_OFFLINE=1 OAL_UI_STUBS="$ROOT/tests/ui-stubs.sh" OAL_ANSWERS="$T/answers" OAL_ASKED="$T/asked"
 export EDITOR="$T/fake-editor"
@@ -379,6 +383,59 @@ grep -qE '"agent":"byagent".*"kind":"removed".*"message":"Agent removed by agent
 grep -qE '"agent":"rix".*"kind":"removed".*"message":"Agent removed by ' "$OAL_EVENTS" || tfail "a user removal also names its caller"
 "$L" remove selfrm --yes >/dev/null 2>&1 || true
 pass "rix/sentinel need --really, agents can never remove them or themselves, and every removal names its caller"
+
+echo "== N5: a model switch with an open session writes a handoff and defers until restart"
+# 2026-09-28: the user switched Rix to gpt-5.6-terra while its session was open. The switch
+# silently waited for a restart and the old local model kept answering, knowing nothing. Now
+# it must: (1) write a handoff under shared/handoffs, built from the live session itself, no
+# model call; (2) status --json must say the switch is deferred; (3) the next session's first
+# prompt must point at the pending handoff; (4) `restart` must compose stop + relaunch.
+if command -v tmux >/dev/null; then
+  mkdir -p "$T/fakebin"; printf '#!/bin/bash\nexit 0\n' >"$T/fakebin/hermes"; chmod +x "$T/fakebin/hermes"
+  PATH="$T/fakebin:$PATH" "$L" rix setup anthropic claude-sonnet-5 >/dev/null || tfail "rix setup (initial)"
+  N5SOCK="$OAL_STATE/tmux/oal-rix.sock"; mkdir -p "$(dirname "$N5SOCK")"
+  tmux -S "$N5SOCK" new-session -d -s oal-rix -- sleep 60
+  ( source "$ROOT/lib/common.sh"; source "$ROOT/lib/events.sh"; run_stamp_write rix )
+  [[ -f "$OAL_STATE/running/rix.json" ]] || tfail "run_stamp_write must stamp the live session"
+  # A prior "rix" session already in the memstore, so the handoff has something to build from
+  # (never through ingest_hermes: that reads the real ~/.hermes, which must stay untouched).
+  python3 -c "
+import sys, time
+sys.path.insert(0, '$ROOT/lib')
+from memstore.store import Store
+s = Store('$MEMSTORE_DB')
+t = time.time() - 120
+with s.batch():
+    s.upsert_session({'id': 'hermes:rix:n5', 'source': 'hermes', 'agent': 'rix', 'model': 'claude-sonnet-5',
+                      'title': 'n5 fixture', 'ts_min': t, 'ts_max': t + 2, 'section': 'agent/rix'})
+    s.add_leaf('hermes:rix:n5:0', 'hermes:rix:n5', t, t, 'user', 'keep going on the fallback policy', [])
+    s.add_leaf('hermes:rix:n5:1', 'hermes:rix:n5', t + 1, t + 1, 'assistant', 'TOOL Edit: lib/rix.sh', ['lib/rix.sh'])
+s.db.commit()
+" || tfail "could not seed the memstore fixture"
+  out=$(PATH="$T/fakebin:$PATH" "$L" rix setup anthropic claude-haiku-5 2>&1) || { echo "$out"; tfail "rix setup (switch while alive)"; }
+  grep -q "still running" <<<"$out" || { echo "$out"; tfail "rix setup must say the live session keeps its old model"; }
+  grep -q "handoff note" <<<"$out" || { echo "$out"; tfail "rix setup with an open session must save a handoff"; }
+  "$ROOT/bin/omarchy-memstore" handoff show --agent rix | grep -q "keep going on the fallback policy" \
+    || tfail "the saved handoff must be built from the live session's own leaves"
+  st=$("$L" status --json)
+  [[ $(jq -r '.rix.switch_deferred' <<<"$st") == true ]] || { echo "$st" | jq .rix; tfail "rix.switch_deferred must be true with a pending switch"; }
+  [[ $(jq -r '.agents[]|select(.name=="rix")|.switch_deferred' <<<"$st") == true ]] \
+    || tfail "agents[].switch_deferred must also be true for rix"
+  out=$("$L" --dry-run --inline launch rix 2>&1)
+  # show_cmd prints argv through printf %q, so a space inside the kickoff string comes out
+  # as a literal "\ " -- strip that before matching the words.
+  grep -q -- "handoff show --agent rix --consume" <(sed 's/\\ / /g' <<<"$out") \
+    || { echo "$out"; tfail "the next session's first prompt must point at the pending handoff"; }
+  out=$("$L" --dry-run restart rix 2>&1)
+  grep -q "would stop rix" <<<"$out" || { echo "$out"; tfail "restart must announce the stop under --dry-run"; }
+  grep -qE "would (launch|open window)" <<<"$out" || { echo "$out"; tfail "restart must also announce the relaunch"; }
+  tmux -S "$N5SOCK" kill-session -t oal-rix 2>/dev/null || true
+  ( source "$ROOT/lib/common.sh"; source "$ROOT/lib/events.sh"; run_stamp_clear rix )
+  "$L" remove rix --yes --really >/dev/null 2>&1 || true
+  pass "N5: handoff on switch, switch_deferred in status --json, pending handoff in the next first prompt, restart = stop+launch"
+else
+  echo "  skip (tmux not installed): N5 model-switch handoff"
+fi
 
 echo "== Z.ai (GLM) is a provider, so a saved ZAI_API_KEY reaches the picker"
 # The user's machine held a working ZAI_API_KEY and the picker had no Z.ai row to show it.

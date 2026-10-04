@@ -20,6 +20,8 @@
 #   omarchy-agent-launcher destroy <name>  also destroy its container / cloud agent
 #   omarchy-agent-launcher console <name>  attach to a cloud agent's console
 #   omarchy-agent-launcher stop <name>     end the agent's session (the saved agent stays)
+#   omarchy-agent-launcher restart <name>  stop (if running) and relaunch -- picks up a deferred
+#                                          model switch (status --json .agents[].switch_deferred)
 #   omarchy-agent-launcher switch          graphical picker: jump to an agent's chat
 #   omarchy-agent-launcher status --json   every agent with status, window, blockers, tasks
 #   omarchy-agent-launcher event <agent> <kind> "<message>" [--task T] [--level info|warn|blocker] [--key K]
@@ -507,6 +509,22 @@ cmd_stop() {
     session_kill "$name"; say "stopped $name"
   else say "$name is not running"; fi
 }
+# N5: the dashboard's "Restart now" action on a deferred model switch (switch_deferred in
+# status --json) -- the same "Stop, then Chat" the launcher has always told people to do,
+# as one command. Never force-kills under --dry-run: it only shows what it would do.
+cmd_restart() {
+  local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
+  if session_alive "$name"; then
+    if (( OAL_DRY_RUN )); then
+      say "[dry-run] would stop $name, wait for its session to end, then relaunch it"
+    else
+      cmd_stop "$name"
+      local waited=0
+      while session_alive "$name" && (( waited < 50 )); do sleep 0.1; waited=$((waited + 1)); done
+    fi
+  fi
+  cmd_launch "$name"
+}
 cmd_destroy() {
   local name=$1; profile_exists "$name" || fail "no saved agent named '$name'"
   load_profile_adapters "$name"
@@ -756,6 +774,7 @@ cmd_status_json() {
             model_pinned: (.model // ""),
             model: (if (.provider == "local" and $served != "") then $served else ($rmodel // .model) end),
             pending_model: $pending,
+            switch_deferred: ($pending != ""),
             signed_in: ((.signed_in // false) == true),
             last: ($ev | last // null | if . == null then null else {t, ts, kind, level, message} end),
             open_blockers: $open,
@@ -1176,6 +1195,7 @@ case "${CMD[0]:-menu}" in
   destroy) cmd_destroy "${CMD[1]:?destroy needs a name}" ;;
   console) cmd_console "${CMD[1]:?console needs a name}" ;;
   stop)    cmd_stop "${CMD[1]:?stop needs a name}" ;;
+  restart) cmd_restart "${CMD[1]:?restart needs a name}" ;;
   status)  cmd_status ;;
   event)   cmd_event ;;
   notify)  cmd_notify ;;

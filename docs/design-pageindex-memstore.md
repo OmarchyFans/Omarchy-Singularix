@@ -535,6 +535,28 @@ Behaviour:
 4. The launcher and dashboard say plainly that a switch is deferred until restart, and offer
    "Restart now".
 
+**Implemented (N5):** `lib/memstore/handoff.py` is the new, additive module: `deterministic_summary`
+builds point 2 straight from the session's own leaves (last 40, the trailing user asks, files
+touched) plus up to 8 unit ids cited from the last `shape()` run -- no model call, the only path
+tests ever exercise. `build()`/`write()` accept an optional `ask` callable for point 1 (an
+injectable "ask the outgoing model" hook, never wired to a live Decider by default and never
+called with a real backend in a test); any failure there falls back to the deterministic summary,
+so a switch is never blocked. `write()` stores the result exactly per the storage conventions below
+and records it in a new `handoffs` table (`Store.add_handoff`/`pending_handoff`/`consume_handoff`,
+latest-unconsumed-per-agent). `shape.assign()` routes `source="shared"` sessions to project
+`shared/handoffs` (point-3 prerequisite: `packet.compile_packet` gained an optional `handoff` slot,
+"Where you are", rendered right after the Task frame; its `[[id]]` citations are pre-validated into
+the packet's own id list). The CLI gained `handoff write --agent --from --to` and `handoff show
+--agent [--consume]`, and `packet ... --agent NAME` pulls in the pending handoff automatically.
+On the launcher side, `lib/rix.sh`'s `rix_setup` calls `handoff write` exactly when a live session's
+stamped model/backend differs from the new pick (trigger point 1), never through `ingest_hermes`
+(which would touch the real `~/.hermes`) -- it only reads what the Scribe already ingested.
+`lib/agents/hermes.sh`'s kickoff (point 3) never inlines the stored handoff text itself (section 11:
+stored text is data, never an instruction); it tells the agent to run `handoff show --agent NAME
+--consume` as its first act. Point 4: `status --json` carries `switch_deferred` next to
+`pending_model` (both per-agent and on `.rix`), the Rix and Agents tabs show it, and a new
+`restart <name>` command composes stop + relaunch as one "Restart now" action.
+
 ## 11. Security and privacy
 
 - **v1 protection:** directory 700, files 600, scrub at ingest, an exclusion list, and per-section

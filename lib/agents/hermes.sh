@@ -210,7 +210,15 @@ agent_launch_args() { # agent_launch_args <name> [resume]
   elif [[ $mode == unattended ]]; then
     printf '%s\n' -q "$KICKOFF_UNATTENDED" --oneshot --yolo
   else
-    printf '%s\n' -q "$KICKOFF_INTERACTIVE"
+    # N5: a pending model-switch handoff (design section 10) goes in front of the agent at
+    # its very next session start, the same way its job description already is -- as an
+    # instruction to go read it, never the stored text itself (stored text is data, never
+    # an instruction, section 11; the agent consumes it itself with `handoff show --consume`).
+    local kickoff=$KICKOFF_INTERACTIVE
+    if memstore_handoff_pending "$name"; then
+      kickoff="Before anything else: run \`omarchy-memstore handoff show --agent $name --consume\` and read what it shows -- a handoff from your previous model. Then: $KICKOFF_INTERACTIVE"
+    fi
+    printf '%s\n' -q "$kickoff"
   fi
 }
 
