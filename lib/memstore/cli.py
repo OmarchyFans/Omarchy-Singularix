@@ -293,6 +293,8 @@ def main(argv=None) -> int:
     x = sub.add_parser("browse"); x.add_argument("node", nargs="?"); x.add_argument("--section"); x.set_defaults(f=cmd_browse)
     x = sub.add_parser("structure"); x.add_argument("id"); x.add_argument("--depth", type=int, default=2); x.add_argument("--sections"); x.set_defaults(f=cmd_structure)
     x = sub.add_parser("content"); x.add_argument("id"); x.add_argument("--sections"); x.set_defaults(f=cmd_content)
+    x = sub.add_parser("install"); x.add_argument("--no-service", action="store_true"); x.add_argument("--no-rix", action="store_true"); x.set_defaults(f=cmd_install)
+    x = sub.add_parser("uninstall"); x.set_defaults(f=cmd_uninstall)
     x = sub.add_parser("solve")
     x.add_argument("description")
     x.add_argument("--config-root", required=True)
@@ -304,8 +306,6 @@ def main(argv=None) -> int:
     x.add_argument("--apply-live", action="store_true")
     x.add_argument("--json", action="store_true")
     x.set_defaults(f=cmd_solve)
-    x = sub.add_parser("install"); x.add_argument("--no-service", action="store_true"); x.add_argument("--no-rix", action="store_true"); x.set_defaults(f=cmd_install)
-    x = sub.add_parser("uninstall"); x.set_defaults(f=cmd_uninstall)
     a = p.parse_args(argv)
     a.f(a)
     return 0
