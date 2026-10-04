@@ -1,6 +1,6 @@
 # Design: PageIndex Memstore, Scribe, Navigator and Context Packets
 
-Status: **Phase 2 design v2, approved 2026-10-02; spike N0 done** (see §7 and §14.1 notes). v2 replaces the
+Status: **v2 approved 2026-10-02; spike N0 done; memstore 0.1.0 (S1–S6, N1–N4) built and installed 2026-10-04.** See §7 and §14.1 notes. v2 replaces the
 date-ordered tree with a project tree and content previews, ports PageIndex's tree-shaping and
 hardening, removes the decider's list-order bias, and gates the Navigator on spike N0.
 Covers Project B (full-text chat history) and Project C (PageIndex memstore) from
