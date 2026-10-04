@@ -453,6 +453,35 @@ Saved agents and secrets stay in `~/.config/omarchy-agent-launcher/` and
 `~/.local/share/omarchy-agent-launcher/` until you delete them; `destroy` an
 agent first if it has a container or a VM.
 
+## Memstore: Rix remembers what happened
+
+`omarchy-memstore` records what happens on this machine so Rix (on any model) can answer "what
+happened, when, where was that decided" with cited excerpts instead of guessing. A small
+background service (`omarchy-memstore-scribe`, low priority) copies, verbatim and with secrets
+masked:
+
+- every Claude Code session (including subagents) and every Hermes agent session, faster than
+  Hermes compaction deletes the originals;
+- commits in every `~/Work` repository, pacman transactions, and changes to allowlisted
+  `~/.config` text files (never `secrets.env`, `auth.json`, keys, or credential stores).
+
+Nothing leaves the machine. The store is `~/.local/share/omarchy-memstore/memstore.db`
+(mode 600). Questions are answered by keyword search plus a re-rank by the local GPU model,
+the method spike N0 measured as best ([results](docs/spike-n0-results.md);
+[design](docs/design-pageindex-memstore.md)).
+
+```bash
+omarchy-memstore status                          # what is stored; is the recorder running
+omarchy-memstore packet "where did we pin docker images by digest?"   # cited context for a model
+omarchy-memstore ask "why did the GPU stop working?"                  # offline answer, local model
+omarchy-memstore search|browse|structure|content ...                  # PageIndex-style tools
+omarchy-memstore install    # from a checkout: python3 bin/omarchy-memstore install
+omarchy-memstore uninstall  # removes the command, service and Rix skill; keeps the data
+```
+
+Rix gets a `memstore` skill that tells it to answer history questions from a packet and cite
+the `[[ids]]`.
+
 ## Contributing
 
 Issues and pull requests are welcome at
