@@ -520,6 +520,50 @@ Offline Omarchy edits use the same loop with fixed recipes: snapshot, edit, chec
 back on failure. Help's existing command-safety allowlist applies. Note that Hyprland's dispatch
 exits 0 even on a parse error, so read the config-error output instead.
 
+> **Implemented (N6), 2026-10-04:** `lib/memstore/solver.py`, `solve` subcommand in `cli.py`.
+> A `Step` is one fixed-recipe edit to one file (`target`, `file_type`, a plain-English
+> `description`, a task-specific `acceptance(text) -> (ok, msg)` check, optional `depends_on`).
+> `solve()` topologically orders a task's steps and, per step: reads the file once (the
+> snapshot), builds a fresh markdown packet (task frame, the current file verbatim, up to 5
+> lessons from this step's own failed rounds, up to 3 related memstore facts by BM25), asks the
+> model for a JSON array of 1-3 candidates (`{"path", "edits":[{"op":"replace","find","replace"}
+> | {"op":"append","text"}]}`), and tries them in order. A candidate is rejected without ever
+> touching disk if its declared `path` does not match the step's own target (the path-escape
+> case), if a `find` is missing or not unique, or if the edited text fails the file-type
+> validator or the acceptance check; only a fully-passing candidate is written. After
+> `max_rounds` (default 3) with nothing verified, the file is restored to the exact snapshot
+> bytes, the round's rejection messages become one-line lessons in `shared/lessons`, and the step
+> is marked `rolled_back`; every step that `depends_on` it is `retracted` without being touched
+> (TMS-style). A verified step is promoted to `shared/solutions` with `verified_by` set to the
+> check that passed. The whole run's events (start, proposed, candidate, verified/rolled_back,
+> retracted) are leaves of a `scratch:<task>` session, section `scratch/<task>` — no schema
+> change, just the existing `sessions` + `leaves` API.
+>
+> File-type validators: **hypr** prefers the real `Hyprland --verify-config` on a standalone
+> temp file when the binary is on `PATH` (confirmed working on this machine, Hyprland 0.56.2,
+> including rejecting unknown dispatchers and the now-deprecated one-line `windowrule =`/
+> `windowrulev2 =` forms — current syntax is the block form
+> `windowrule { float; match { class = ^(...)$ } }`, which can be written on one line); otherwise
+> a hand-written structural checker for the bind/windowrule(block or legacy)/monitor/brace-block
+> subset, including a dispatcher allowlist. **jsonc** (waybar) strips `//`/`/* */` comments and
+> trailing commas, then `json.loads`. **toml** (alacritty) is `tomllib.loads`.
+>
+> Safety: `safe_path()` resolves (following symlinks) under an explicit `--config-root`, refusing
+> anything that escapes the root or matches `scrub.excluded()`; `check_root_safety()` refuses the
+> live `~/.config` unless `--apply-live` is passed. The model is never shell-executed; it only
+> ever produces JSON that this module parses itself.
+>
+> Tested two ways (`tests/memstore/test_solver.py`, fixtures under
+> `tests/memstore/fixtures/solver/`, synthetic — never the user's real configs): a CI layer with
+> a scripted stub model (including a path-escape attempt, a wrong edit, and syntax that drops a
+> closing brace) covering all 10 tasks from the N6 done-when, plus unit tests for the parser,
+> both validators and `safe_path`; and a live layer (`MEMSTORE_LIVE=1`, skipped otherwise) running
+> the same 10 tasks against the real local Qwen3.8-4B. Live run on this machine, 2026-10-04:
+> **9 verified, 1 rolled back** (the deliberately impossible dispatcher) — every run ended
+> verified or rolled back, no run left a broken file. Known v0 limits: decomposition is fixed
+> (no model-proposed multi-step plans yet), and the memstore-facts slot is a plain BM25 lookup,
+> not a Navigator crawl.
+
 ## 10. Model-switch handoff (the 09-28 failure)
 
 Trigger points:

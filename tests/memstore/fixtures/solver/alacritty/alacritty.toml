@@ -1,0 +1,6 @@
+# Synthetic fixture for memstore solver tests (N6). Not a real user config.
+[font]
+size = 10.0
+
+[font.normal]
+family = "monospace"
