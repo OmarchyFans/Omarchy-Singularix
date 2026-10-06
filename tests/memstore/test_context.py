@@ -68,6 +68,28 @@ class ContextTest(unittest.TestCase):
                 reply = json.loads(buf.getvalue())
                 self.assertEqual("context" in reply, expect_ctx, stdin[:20])
 
+    def test_hook_never_waits_on_a_writer(self):
+        # a short message is answered without opening the store at all
+        with mock.patch.object(context, "Store", side_effect=AssertionError("store opened")), \
+                mock.patch("sys.stdin", io.StringIO(json.dumps({"extra": {"user_message": "ok"}}))), \
+                contextlib.redirect_stdout(io.StringIO()) as buf:
+            context.hook_main([])
+        self.assertEqual(buf.getvalue().strip(), "{}")
+        # a real message while another connection holds the write lock: read-only, so no wait
+        writer = sqlite3.connect(self.path)
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute("INSERT INTO meta VALUES('lock-test', 'x')")
+        payload = json.dumps({"session_id": "W", "extra": {"user_message": "where did we fix the duplicate waybar button?"}})
+        t0 = time.time()
+        with mock.patch.dict(os.environ, {"MEMSTORE_DB": self.path}), \
+                mock.patch.object(context, "navigate", lambda st, need, **k: navigate(st, need, k=6, decider=StubDecider())), \
+                mock.patch("sys.stdin", io.StringIO(payload)), contextlib.redirect_stdout(io.StringIO()) as buf:
+            context.hook_main([])
+        writer.rollback()
+        writer.close()
+        self.assertLess(time.time() - t0, 3)
+        self.assertIn("context", json.loads(buf.getvalue()))
+
     def test_injected_block_is_not_recorded(self):
         home = os.path.join(self.tmp.name, "rix", "hermes")
         os.makedirs(home)
