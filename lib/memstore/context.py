@@ -99,7 +99,11 @@ def hook_main(argv=None) -> int:
         msg = extra.get("user_message") or ""
         if isinstance(msg, list):  # multimodal content parts
             msg = " ".join(p.get("text", "") for p in msg if isinstance(p, dict))
-        out = ambient(Store(os.environ.get("MEMSTORE_DB") or None), str(msg), agent,
+        msg = strip(str(msg))
+        if len(msg.strip()) < MIN_CHARS or len(terms(msg)) < 2:  # answer before touching the store
+            print("{}")
+            return 0
+        out = ambient(Store(os.environ.get("MEMSTORE_DB") or None, readonly=True), msg, agent,
                       str(payload.get("session_id") or extra.get("session_id") or ""))
         print(json.dumps({"context": out["context"]} if out["context"] else {}))
     except Exception:  # noqa: BLE001 -- fail open: a broken hook must never block Rix's turn

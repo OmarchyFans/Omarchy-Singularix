@@ -53,7 +53,14 @@ def tokens_of(text: str) -> int:
 
 
 class Store:
-    def __init__(self, path: str | None = None):
+    def __init__(self, path: str | None = None, readonly: bool = False):
+        self.added = 0
+        self.full_added = 0
+        if readonly:  # for hot paths (the per-turn hook): never writes, never waits on a writer
+            self.path = path or os.path.join(DEFAULT_DIR, "memstore.db")
+            self.db = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=3)
+            self.db.execute("PRAGMA query_only=1")
+            return
         d = os.path.dirname(path) if path else DEFAULT_DIR
         os.makedirs(d, mode=0o700, exist_ok=True)
         os.chmod(d, 0o700)
