@@ -23,6 +23,8 @@ from .scrub import clean, excluded
 from .store import Store
 
 HOME = os.path.expanduser("~")
+COMMIT_EVERY = 1000  # lines per transaction: keeps any single write lock short
+HERMES_BATCH = 2000  # messages per agent per pass
 CAP = {"user": 6000, "assistant": 4000, "tool_use": 600, "tool": 1500, "commit": 2000, "change": 2400,
        "subagent_task": 6000, "packages": 3000}
 PATH_RE = re.compile(r"(?:/home/[A-Za-z0-9_.-]+|~)/[\w.@%+=:,/-]+")
@@ -98,10 +100,23 @@ def _claude_file(store: Store, path: str, win: Window) -> int:
     before = store.added
     sessions: dict[str, dict] = {}
     files: dict[str, Counter] = {}
+    def flush(at):
+        for s in sessions.values():
+            if s["ts_min"] is not None or s.get("title"):
+                store.upsert_session(s)
+                store.merge_files(s["id"], files.get(s["id"], {}))
+        files.clear()
+        store.set_cursor(key, {"offset": at})
+        store.db.commit()
+
     with open(path, "rb") as fh, store.batch():
         fh.seek(cur["offset"])
         pos = cur["offset"]
+        n_lines = 0
         for raw in fh:
+            n_lines += 1
+            if n_lines % COMMIT_EVERY == 0:
+                flush(pos)  # pos = end of the last complete line already processed
             if not raw.endswith(b"\n"):
                 break  # partial last line: next run picks it up
             line_off, pos = pos, pos + len(raw)
@@ -147,11 +162,7 @@ def _claude_file(store: Store, path: str, win: Window) -> int:
                 s["ts_max"] = max(x for x in (s["ts_max"], ts) if x is not None)
             store.add_leaf(f"claude:{sid}:{tag}:{line_off}", s["id"], ts or 0.0, ts, role,
                            text[: CAP.get(role, 2000)], touched, full=full)
-        for s in sessions.values():
-            if s["ts_min"] is not None or s.get("title"):
-                store.upsert_session(s)
-                store.merge_files(s["id"], files.get(s["id"], {}))
-        store.set_cursor(key, {"offset": pos})
+        flush(pos)
     return store.added - before
 
 
@@ -224,7 +235,7 @@ def ingest_hermes(store: Store, win: Window | None = None, homes=None) -> int:
             reason = "coalesce(m.reasoning_content, m.reasoning)" if {"reasoning", "reasoning_content"} <= cols \
                 else ("m.reasoning" if "reasoning" in cols else "NULL")
             rows = c.execute(f"SELECT m.id, m.session_id, m.role, m.content, m.tool_calls, m.timestamp, {reason} "
-                             "FROM messages m WHERE m.id > ? ORDER BY m.id LIMIT 20000", (last,)).fetchall()
+                             "FROM messages m WHERE m.id > ? ORDER BY m.id LIMIT ?", (last, HERMES_BATCH)).fetchall()
             meta = {}
             for sid in {r[1] for r in rows}:
                 m = c.execute("SELECT model, title, cwd, git_branch, started_at FROM sessions WHERE id=?",

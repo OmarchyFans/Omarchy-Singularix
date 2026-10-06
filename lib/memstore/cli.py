@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -97,16 +98,30 @@ def cmd_scribe(a):
         now = time.time()
         due = [k for k, sec in every.items() if now - last.get(k, 0) >= sec]
         if due:
-            out = ingest_all(s, DEFAULT_DIR, sources=tuple(due))
+            try:
+                out = ingest_all(s, DEFAULT_DIR, sources=tuple(due))
+            except sqlite3.OperationalError as e:  # another writer (e.g. backfill-full) holds the lock: retry next cycle
+                s.db.rollback()
+                print(json.dumps({"busy": str(e)}), flush=True)
+                time.sleep(2)
+                continue
             for k in due:
                 last[k] = now
             if any(isinstance(v, int) and v for v in out.values()):
-                out["recent"] = fresh(s)
+                try:
+                    out["recent"] = fresh(s)
+                except sqlite3.OperationalError as e:
+                    s.db.rollback()
+                    out["recent"] = f"busy: {e}"
             if not a.loop or any(v for k, v in out.items() if k != "recent"):
                 print(json.dumps({"ingested": out}), flush=True)
         if not a.no_shape and dirty(s) and (not a.loop or now - last_shape >= 600 or last_shape == 0):
-            print(json.dumps({"shaped": shape(s)}), flush=True)
-            last_shape = time.time()
+            try:
+                print(json.dumps({"shaped": shape(s)}), flush=True)
+                last_shape = time.time()
+            except sqlite3.OperationalError as e:  # shape() already recorded the failed run; try again later
+                print(json.dumps({"shape_busy": str(e)}), flush=True)
+                last_shape = time.time() - 540  # retry in about a minute
         if not a.loop:
             return
         time.sleep(2)
@@ -261,11 +276,14 @@ def cmd_backfill_full(a):
         s.db.execute("DELETE FROM cursors WHERE source LIKE 'claude:%' OR source LIKE 'hermes:%' OR source LIKE 'commits:%'")
     ingest_mod._SEEN.clear()  # the unchanged-file cache would otherwise skip every file
     rounds, before = 0, s.full_added
-    while True:
+
+    def hermes_cursors():
+        return dict(s.db.execute("SELECT source, cursor FROM cursors WHERE source LIKE 'hermes:%'").fetchall())
+    while True:  # 2,000 messages per agent per pass: loop until no cursor moves
         rounds += 1
-        n = s.full_added
-        ingest_hermes(s)  # 20,000 messages per call: loop until a pass adds nothing new
-        if s.full_added == n or rounds > 200:
+        was = hermes_cursors()
+        ingest_hermes(s)
+        if hermes_cursors() == was or rounds > 2000:
             break
     ingest_claude(s)
     ingest_commits(s)
