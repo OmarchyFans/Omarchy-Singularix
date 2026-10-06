@@ -74,6 +74,8 @@ def excerpt(store: Store, unit_id: str, need_terms: list[str], budget: int) -> t
         cited.append(leaves[j][0])
     if len(keep) < len(leaves):
         parts.append(f"[{len(leaves) - len(keep)} more turns in this unit; read them with: omarchy-memstore content {unit_id}]")
+    if any(store.has_full(lid) for lid in cited):
+        parts.append(f"[some turns above are shortened; the complete text: omarchy-memstore content {unit_id} --full]")
     return "\n---\n".join(parts), cited
 
 

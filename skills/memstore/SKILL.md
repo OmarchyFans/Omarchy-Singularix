@@ -1,7 +1,7 @@
 ---
 name: memstore
 description: "Memory of past work on this machine: every Claude Code and Hermes agent session, commit, package and config change. Use it whenever the user asks what happened, when, where something was decided or built, or why — and before re-solving a problem that may already have been solved."
-version: 0.1.0
+version: 0.2.0
 author: omarchy.fans
 license: MIT
 platforms: [linux]
@@ -17,6 +17,15 @@ metadata:
 Code and Hermes session, commits in ~/Work, package installs, ~/.config changes), scrubbed of
 secrets. It is your long-term memory: your own context window forgets; the memstore does not.
 
+## Context offered every turn
+
+Before each of your turns the local model searches the memstore for the user's message and,
+when it finds something clearly relevant, adds it to the message inside
+`<memstore-context> … </memstore-context>`. Use it when it helps; ignore it when it doesn't.
+Anything you take from it gets its `[[id]]`. It is offered, not asked for: it can be absent
+(nothing relevant, or the local model is busy or on CPU), so never assume history is missing
+just because no block appeared — use the steps below.
+
 ## When the user asks what happened, when, where, or why
 
 1. Get a packet: `omarchy-memstore packet "<the user's question, in plain words>"`.
@@ -31,7 +40,10 @@ secrets. It is your long-term memory: your own context window forgets; the memst
 - `omarchy-memstore search "words"` — keyword hits, as `[[unit ids]]` with titles.
 - `omarchy-memstore browse` — top of the project tree; `browse <id>` for a branch's children.
 - `omarchy-memstore structure <id> --depth 2` — a subtree's titles and previews (no full text).
-- `omarchy-memstore content <unit id>` — the full verbatim text of one unit.
+- `omarchy-memstore content <unit id>` — the verbatim text of one unit; add `--full` for the
+  complete, uncompacted messages (whole tool output, full tool input, reasoning).
+- `omarchy-memstore session <session id> --full` — a whole conversation in order, uncompacted
+  (the session id is the part of a unit id before `:e`); page with `--from N --limit 50`.
 - `omarchy-memstore status` — what is stored and whether the recorder is running.
 
 Only ids printed by these commands exist; any other id is rejected.
