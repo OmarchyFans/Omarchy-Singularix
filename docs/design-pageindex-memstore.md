@@ -722,3 +722,25 @@ because the boards do not link across each other.
 - Jev (TypeSafe) decision API: https://openrouter.ai/blog/insights/what-is-jev/
 - Strands Decider 2B: https://venturebeat.com/technology/amazon-unveils-a-free-fast-open-source-jev-killer-strands-decider-2b-makes-decisions-in-fractions-of-a-second
 - Open-Jev-27B: https://zefan-cai.github.io/open-jev/ · openjev: https://github.com/zhihz/openjev
+
+## 15. 0.2.0 (2026-10-06): full text, the recent branch, and context every turn
+
+User direction after 0.1.0:
+1. **Keep every chat uncompacted.** Leaves still have the short view that search, the tree and
+   packets use (unchanged, so N0's numbers hold), and a new `leaf_full` table keeps the complete,
+   scrubbed message: whole tool output, full tool input (file contents of writes and edits), and
+   reasoning. Reasoning-only Claude records are stored as `thinking` leaves, in the transcript
+   but not in the tree. All chat history is ~654 MB of text, ~182 MB compressed.
+   `omarchy-memstore session <id> --full` prints a whole conversation; `content <unit> --full` one
+   unit; `backfill-full` re-reads every source so older messages get their full text.
+2. **The local model offers context before every Rix turn.** A Hermes `pre_llm_call` shell hook
+   (`omarchy-memstore context-hook`) runs the Navigator on the user's message and adds a compact
+   packet (≤ 2 units, p ≥ 0.5, ~1.5k tokens) inside `<memstore-context>` markers. It says nothing
+   for short messages, keyword-only retrieval or weak matches, never repeats a unit within a
+   session, and fails open. The recorder strips the markers, so packets never loop back into the
+   store. The launcher writes the hook into Rix's config.yaml when the memstore is installed.
+3. **Near-real-time.** The scribe polls chats every 2 s (an unchanged file costs one `stat`) and
+   machine changes every 30–60 s. New messages go straight into a `recent` branch under the root
+   (`shape.fresh()`): chunked and previewed like the main tree and found by the Navigator
+   immediately. The full shape still runs at most every 10 minutes and folds the recent branch
+   into the main tree.

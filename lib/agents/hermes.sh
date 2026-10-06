@@ -95,6 +95,14 @@ agent_provision() { # agent_provision <name>
     echo "skills:"
     echo "  disabled: []"
     echo "hooks_auto_accept: true"   # shell hooks (if any) run without a consent prompt
+    # Per-turn memory: before every Rix turn the local model crawls the memstore and offers
+    # what is relevant to whatever model Rix runs on (memstore context hook, fails open).
+    if [[ $(profile_get "$name" role) == chief-of-staff ]] && command -v omarchy-memstore >/dev/null 2>&1; then
+      echo "hooks:"
+      echo "  pre_llm_call:"
+      echo "    - command: \"$(command -v omarchy-memstore) context-hook --agent $name\""
+      echo "      timeout: 20"
+    fi
   } >"$home/config.yaml"
 
   # Secrets: only the one key this agent needs, never the whole secrets file.

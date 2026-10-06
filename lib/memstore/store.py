@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS shape_runs(
   duplicate_views INTEGER, status TEXT, note TEXT);
 CREATE TABLE IF NOT EXISTS handoffs(id TEXT PRIMARY KEY, agent TEXT, created REAL, consumed REAL);
 CREATE INDEX IF NOT EXISTS handoffs_agent ON handoffs(agent, consumed);
+CREATE TABLE IF NOT EXISTS leaf_full(id TEXT PRIMARY KEY, body BLOB NOT NULL, chars INTEGER, added REAL);
 """
 
 
@@ -69,6 +70,7 @@ class Store:
         self.db.execute("INSERT OR IGNORE INTO meta VALUES('schema', ?)", (str(SCHEMA_VERSION),))
         self.db.commit()
         self.added = 0
+        self.full_added = 0
 
     # ------------------------------------------------------------ writes
 
@@ -83,8 +85,15 @@ class Store:
             raise
 
     def add_leaf(self, lid: str, session: str, ord_: float, ts: float | None, role: str, text: str,
-                 files: list[str] | None = None) -> bool:
-        """Append one leaf. Scrubbed before it is written. Returns False if it already exists."""
+                 files: list[str] | None = None, full: str | None = None) -> bool:
+        """Append one leaf. Scrubbed before it is written. Returns False if it already exists.
+
+        `text` is the short view that search, the tree and packets use. `full` is the complete,
+        uncompacted message (whole tool output, full tool input, reasoning) when it differs from
+        `text`; it is kept once, scrubbed, in leaf_full. Re-ingesting an existing leaf with
+        `full` fills it in, so a backfill is just a re-read of the sources."""
+        if full is not None and full != text:
+            self.add_full(lid, full)
         body = clean(text)
         h = hashlib.sha256(body.encode()).hexdigest()[:16]
         cur = self.db.execute(
@@ -96,6 +105,16 @@ class Store:
             self.db.execute("INSERT INTO leaves_fts(id, text) VALUES(?,?)", (lid, body))
             self.db.execute("UPDATE sessions SET dirty=1 WHERE id=?", (session,))
             self.added += 1
+            return True
+        return False
+
+    def add_full(self, lid: str, full: str) -> bool:
+        """Keep the complete text of a message (scrubbed). Written once; never changed."""
+        body = clean(full)
+        cur = self.db.execute("INSERT OR IGNORE INTO leaf_full(id, body, chars, added) VALUES(?,?,?,?)",
+                              (lid, zlib.compress(body.encode(), 6), len(body), time.time()))
+        if cur.rowcount:
+            self.full_added += 1
             return True
         return False
 
@@ -168,6 +187,14 @@ class Store:
         row = self.db.execute("SELECT body FROM leaves WHERE id=?", (lid,)).fetchone()
         return zlib.decompress(row[0]).decode() if row else None
 
+    def full_text(self, lid: str) -> str | None:
+        """The complete message if one was kept, else the short view."""
+        row = self.db.execute("SELECT body FROM leaf_full WHERE id=?", (lid,)).fetchone()
+        return zlib.decompress(row[0]).decode() if row else self.leaf_text(lid)
+
+    def has_full(self, lid: str) -> bool:
+        return bool(self.db.execute("SELECT 1 FROM leaf_full WHERE id=?", (lid,)).fetchone())
+
     def leaves_of(self, session: str):
         for lid, ord_, ts, role, body, tokens, files in self.db.execute(
                 "SELECT id, ord, ts, role, body, tokens, files FROM leaves WHERE session=? ORDER BY ord, id",
@@ -214,6 +241,8 @@ class Store:
                               "ORDER BY id DESC LIMIT 1").fetchone()
         cursors = dict(self.db.execute("SELECT source, updated FROM cursors").fetchall())
         return {"path": self.path, "sessions": by_source, "leaves": one("SELECT count(*) FROM leaves"),
+                "full_texts": one("SELECT count(*) FROM leaf_full"),
+                "full_chars": one("SELECT coalesce(sum(chars),0) FROM leaf_full"),
                 "tokens": one("SELECT coalesce(sum(tokens),0) FROM leaves"),
                 "nodes": one("SELECT count(*) FROM nodes"),
                 "last_shape": dict(zip(("id", "finished", "nodes", "units", "status", "note"), run)) if run else None,

@@ -479,8 +479,10 @@ omarchy-memstore install    # from a checkout: python3 bin/omarchy-memstore inst
 omarchy-memstore uninstall  # removes the command, service and Rix skill; keeps the data
 ```
 
-Rix gets a `memstore` skill that tells it to answer history questions from a packet and cite
-the `[[ids]]`.
+Every chat is kept in full, uncompacted (`omarchy-memstore session <id> --full`), and new
+messages are searchable within seconds. Before each Rix turn the local model offers the most
+relevant history to whatever model Rix runs on (a Hermes `pre_llm_call` hook), and Rix gets a
+`memstore` skill that tells it to answer history questions from a packet and cite the `[[ids]]`.
 
 ## Contributing
 

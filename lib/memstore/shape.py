@@ -228,6 +228,8 @@ def load(store: Store) -> dict:
         sessions[s["id"]] = s
     for sid in list(sessions):
         for lf in store.leaves_of(sid):
+            if lf["role"] == "thinking":  # reasoning-only records live in the full transcript, not the tree
+                continue
             lf["first"] = lf["text"][:100].replace("\n", " ")
             lf["terms"] = leaf_terms(lf["text"])
             del lf["text"]
@@ -330,3 +332,60 @@ def shape(store: Store) -> dict:
 
 def dirty(store: Store) -> bool:
     return bool(store.db.execute("SELECT 1 FROM sessions WHERE dirty=1 LIMIT 1").fetchone())
+
+
+def fresh(store: Store) -> dict:
+    """The recent branch: messages stored since the last full shape, searchable right away.
+
+    Every leaf that has no unit yet goes into `recent:<session>` units under a `recent` node at
+    the root, chunked and previewed like the main tree. The next full shape() rebuilds the whole
+    derived layer, which folds these leaves into the main tree and clears the recent branch."""
+    rows = store.db.execute(
+        "SELECT l.session FROM leaves l LEFT JOIN unit_leaves u ON u.leaf=l.id "
+        "WHERE (u.leaf IS NULL OR u.unit LIKE 'recent:%') AND l.role != 'thinking' GROUP BY l.session").fetchall()
+    with store.batch():
+        old = [r[0] for r in store.db.execute("SELECT id FROM nodes WHERE id='recent' OR id LIKE 'recent:%'")]
+        store.db.executemany("DELETE FROM unit_leaves WHERE unit=?", [(i,) for i in old])
+        store.db.executemany("DELETE FROM nodes WHERE id=?", [(i,) for i in old])
+        if not rows:
+            return {"recent_sessions": 0, "recent_units": 0}
+        recent = Node("recent", "recent", "recent activity (not yet folded into the tree)")
+        for (sid,) in rows:
+            meta = store.db.execute("SELECT agent, model, title, first_user, section, ts_min FROM sessions WHERE id=?",
+                                    (sid,)).fetchone()
+            agent, model, title, first_user, section, ts0 = meta or ("?", None, None, None, "", None)
+            leaves = []
+            for lf in store.leaves_of(sid):
+                if lf["role"] == "thinking" or store.unit_of(lf["id"]):
+                    continue
+                lf["first"] = lf["text"][:100].replace("\n", " ")
+                lf["terms"] = leaf_terms(lf["text"])
+                leaves.append(lf)
+            if not leaves:
+                continue
+            t0 = leaves[0]["ts"] or ts0 or time.time()
+            line = (title or first_user or "").replace("\n", " ")[:70]
+            sn = Node(f"recent:{sid}", "session", f"{day(t0)} · {agent} · {(model or '-')[:20]} · \"{line}\" (recent)",
+                      section=section or "")
+            for u in chunk(sid, leaves, f"recent:{sid}", lambda u, i, n: f"recent {i + 1}/{n} · {u[0]['first'][:80]}",
+                           section or ""):
+                sn.add(u)
+            files = Counter(os.path.basename(f) for lf in leaves for f in lf["files"])
+            sn.preview = ("files: " + ", ".join(f for f, _ in files.most_common(4))) if files else ""
+            recent.add(sn)
+        if not recent.children:
+            return {"recent_sessions": 0, "recent_units": 0}
+        n_root = store.db.execute("SELECT count(*) FROM nodes WHERE parent='root'").fetchone()[0]
+        stack, units = [(recent, "root", n_root)], 0
+        while stack:
+            n, parent, ordn = stack.pop()
+            store.db.execute("INSERT OR REPLACE INTO nodes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+                n.id, parent, n.kind, n.section, n.title, n.preview, "[]", n.tokens, n.ts_min, n.ts_max,
+                json.dumps(sorted(n.sessions)) if n.kind in ("unit", "session") else "[]", ordn, None))
+            if n.kind == "unit":
+                units += 1
+                store.db.executemany("INSERT OR IGNORE INTO unit_leaves VALUES(?,?)", [(n.id, lf) for lf in n.leaves])
+            for i, c in enumerate(n.children):
+                stack.append((c, n.id, i))
+    return {"recent_sessions": len(recent.children), "recent_units": units}
+

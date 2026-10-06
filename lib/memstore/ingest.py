@@ -18,6 +18,7 @@ import subprocess
 from collections import Counter
 from datetime import datetime
 
+from .context import strip as strip_context
 from .scrub import clean, excluded
 from .store import Store
 
@@ -75,13 +76,19 @@ def ingest_claude(store: Store, win: Window | None = None, roots: list[str] | No
     return added
 
 
+_SEEN: dict[str, int] = {}  # path -> size at our last read, so a 2-second poll skips unchanged files cheaply
+
+
 def _claude_file(store: Store, path: str, win: Window) -> int:
-    key = "claude:" + path
-    cur = store.cursor(key, {"offset": 0})
     try:
         size = os.path.getsize(path)
     except OSError:
         return 0
+    if _SEEN.get(path) == size:
+        return 0
+    _SEEN[path] = size
+    key = "claude:" + path
+    cur = store.cursor(key, {"offset": 0})
     if size < cur["offset"]:  # rewritten file: start over (leaf ids are offsets, so INSERT OR IGNORE keeps us safe)
         cur = {"offset": 0}
     if size == cur["offset"]:
@@ -123,8 +130,10 @@ def _claude_file(store: Store, path: str, win: Window) -> int:
                 s["branch"] = r["gitBranch"]
             if _worktree(cwd):
                 s.setdefault("worktree", _worktree(cwd))
-            role, text, touched = _claude_record(r, t, sub)
-            if not text:
+            role, text, full, touched = _claude_record(r, t, sub)
+            if not text and full:
+                role, text = "thinking", ""  # reasoning-only record: kept in full, not in the search tree
+            if not text and not full:
                 continue
             if role == "user" and not s.get("first_user") and not text.startswith("<"):
                 s["first_user"] = text[:200]
@@ -137,7 +146,7 @@ def _claude_file(store: Store, path: str, win: Window) -> int:
                 s["ts_min"] = min(x for x in (s["ts_min"], ts) if x is not None)
                 s["ts_max"] = max(x for x in (s["ts_max"], ts) if x is not None)
             store.add_leaf(f"claude:{sid}:{tag}:{line_off}", s["id"], ts or 0.0, ts, role,
-                           text[: CAP.get(role, 2000)], touched)
+                           text[: CAP.get(role, 2000)], touched, full=full)
         for s in sessions.values():
             if s["ts_min"] is not None or s.get("title"):
                 store.upsert_session(s)
@@ -147,22 +156,28 @@ def _claude_file(store: Store, path: str, win: Window) -> int:
 
 
 def _claude_record(r: dict, t: str, sub: bool):
+    """-> (role, short view, full uncompacted text, files touched). The short view is what search,
+    the tree and packets use (unchanged since 0.1.0); the full text keeps everything."""
     content = (r.get("message") or {}).get("content")
-    role, parts, touched = None, [], []
+    role, parts, full, touched = None, [], [], []
     if t == "user":
         if isinstance(content, str):
-            role, parts = "user", [content]
+            content = strip_context(content)
+            role, parts, full = "user", [content], [content]
         elif isinstance(content, list):
             for b in content:
                 if b.get("type") == "text":
                     role = role or "user"
                     parts.append(b.get("text", ""))
+                    full.append(b.get("text", ""))
                 elif b.get("type") == "tool_result":
                     role = role or "tool"
                     c = b.get("content")
                     if isinstance(c, list):
                         c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
-                    parts.append(("ERROR " if b.get("is_error") else "") + str(c or "")[: CAP["tool"]])
+                    out = ("ERROR " if b.get("is_error") else "") + str(c or "")
+                    parts.append(out[: CAP["tool"]])
+                    full.append(out)
         if role == "user" and sub:
             role = "subagent_task"
     else:
@@ -171,6 +186,9 @@ def _claude_record(r: dict, t: str, sub: bool):
             bt = b.get("type")
             if bt == "text":
                 parts.append(b.get("text", ""))
+                full.append(b.get("text", ""))
+            elif bt == "thinking" and b.get("thinking"):
+                full.append("[thinking]\n" + b["thinking"])
             elif bt == "tool_use":
                 inp = b.get("input") or {}
                 p = inp.get("file_path") or inp.get("path") or inp.get("notebook_path")
@@ -178,7 +196,8 @@ def _claude_record(r: dict, t: str, sub: bool):
                     touched.append(p)
                 arg = inp.get("command") or p or json.dumps(inp)[:300]
                 parts.append(f"TOOL {b.get('name')}: {str(arg)[: CAP['tool_use']]}")
-    return role, "\n".join(x for x in parts if x).strip(), touched
+                full.append(f"TOOL {b.get('name')}: " + json.dumps(inp, ensure_ascii=False))
+    return (role, "\n".join(x for x in parts if x).strip(), "\n".join(x for x in full if x).strip(), touched)
 
 
 # ---------------------------------------------------------------------- S2: Hermes
@@ -201,7 +220,10 @@ def ingest_hermes(store: Store, win: Window | None = None, homes=None) -> int:
         last = store.cursor(key, {"msg_id": 0})["msg_id"]
         try:
             c = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10)
-            rows = c.execute("SELECT m.id, m.session_id, m.role, m.content, m.tool_calls, m.timestamp "
+            cols = {r[1] for r in c.execute("PRAGMA table_info(messages)")}
+            reason = "coalesce(m.reasoning_content, m.reasoning)" if {"reasoning", "reasoning_content"} <= cols \
+                else ("m.reasoning" if "reasoning" in cols else "NULL")
+            rows = c.execute(f"SELECT m.id, m.session_id, m.role, m.content, m.tool_calls, m.timestamp, {reason} "
                              "FROM messages m WHERE m.id > ? ORDER BY m.id LIMIT 20000", (last,)).fetchall()
             meta = {}
             for sid in {r[1] for r in rows}:
@@ -214,7 +236,7 @@ def ingest_hermes(store: Store, win: Window | None = None, homes=None) -> int:
         files: dict[str, Counter] = {}
         sess: dict[str, dict] = {}
         with store.batch():
-            for mid, sid, role, content, calls, ts in rows:
+            for mid, sid, role, content, calls, ts, reasoning in rows:
                 last = max(last, mid)
                 s_id = f"hermes:{agent}:{sid}"
                 if s_id in win.skip or not win.ok(ts):
@@ -225,7 +247,8 @@ def ingest_hermes(store: Store, win: Window | None = None, homes=None) -> int:
                                            "worktree": _worktree(cwd), "section": f"agent/{agent}",
                                            "ts_min": None, "ts_max": None})
                 text, touched = _hermes_text(content, calls)
-                if not text:
+                full = _hermes_full(content, calls, reasoning)
+                if not text and not full:
                     continue
                 r = "tool" if role == "tool" else role
                 if r == "user" and not s.get("first_user"):
@@ -236,7 +259,8 @@ def ingest_hermes(store: Store, win: Window | None = None, homes=None) -> int:
                 if ts:
                     s["ts_min"] = min(x for x in (s["ts_min"], ts) if x is not None)
                     s["ts_max"] = max(x for x in (s["ts_max"], ts) if x is not None)
-                store.add_leaf(f"{s_id}:{mid}", s_id, float(ts or mid), ts, r, text[: CAP.get(r, 2000)], touched)
+                store.add_leaf(f"{s_id}:{mid}", s_id, float(ts or mid), ts, r if text else "thinking",
+                               text[: CAP.get(r, 2000)], touched, full=full)
             for s in sess.values():
                 store.upsert_session(s)
                 store.merge_files(s["id"], files.get(s["id"], {}))
@@ -245,7 +269,7 @@ def ingest_hermes(store: Store, win: Window | None = None, homes=None) -> int:
 
 
 def _hermes_text(content, calls):
-    parts, touched = [content or ""], []
+    parts, touched = [strip_context(content or "")], []
     if calls:
         try:
             for tc in json.loads(calls):
@@ -263,6 +287,21 @@ def _hermes_text(content, calls):
         except (json.JSONDecodeError, TypeError, AttributeError):
             pass
     return "\n".join(x for x in parts if x).strip(), touched
+
+
+def _hermes_full(content, calls, reasoning) -> str:
+    """The whole message: content, every tool call with its full arguments, and reasoning."""
+    parts = [strip_context(content or "")]
+    if calls:
+        try:
+            for tc in json.loads(calls):
+                fn = tc.get("function") or {}
+                parts.append(f"TOOL {fn.get('name')}: {fn.get('arguments') or ''}")
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            parts.append(str(calls))
+    if reasoning:
+        parts.append("[thinking]\n" + str(reasoning))
+    return "\n".join(x for x in parts if x).strip()
 
 
 # ---------------------------------------------------------------------- S4: machine changes
@@ -300,7 +339,9 @@ def ingest_commits(store: Store, win: Window | None = None, repos=None) -> int:
                 files = [os.path.join(d, n) for n in names.split("\n") if n.strip()]
                 text = (f"commit {sha[:10]} in {repo}: {subj}\n{body.strip()}\nfiles: "
                         + ", ".join(os.path.relpath(f, d) for f in files[:20]))
-                if store.add_leaf(sid + ":0", sid, ts, ts, "commit", text[: CAP["commit"]], files):
+                full = (f"commit {sha} in {repo}: {subj}\n{body.strip()}\nfiles:\n"
+                        + "\n".join(os.path.relpath(f, d) for f in files))
+                if store.add_leaf(sid + ":0", sid, ts, ts, "commit", text[: CAP["commit"]], files, full=full):
                     store.upsert_session({"id": sid, "source": "git", "agent": "git", "title": subj, "ts_min": ts,
                                           "ts_max": ts, "cwd": d, "section": f"project/{repo}",
                                           "files": {f: 1 for f in files[:60]}})
@@ -430,8 +471,9 @@ def ingest_config(store: Store, state_dir: str, allow=CONFIG_ALLOW, config_root:
         if first:
             names = sorted(want)
             text = f"baseline snapshot of {len(names)} config files:\n" + "\n".join(names[:300])
+            full = f"baseline snapshot of {len(names)} config files:\n" + "\n".join(names)
             store.add_leaf(f"{sid}:{sha[:10]}:baseline", sid, ts, ts, "change", text[: CAP["change"]],
-                           [os.path.join(root, n) for n in names[:60]])
+                           [os.path.join(root, n) for n in names[:60]], full=full)
         else:
             stat = subprocess.run(g + ["show", "--numstat", "--format=", "HEAD"], capture_output=True,
                                   text=True).stdout.strip().splitlines()
@@ -444,7 +486,7 @@ def ingest_config(store: Store, state_dir: str, allow=CONFIG_ALLOW, config_root:
                                       text=True).stdout
                 text = f"change ~/.config/{rel} +{add}/-{rem}\n" + "\n".join(diff.splitlines()[4:])
                 store.add_leaf(f"{sid}:{sha[:10]}:{rel}", sid, ts, ts, "change", text[: CAP["change"]],
-                               [os.path.join(root, rel)])
+                               [os.path.join(root, rel)], full=text)
     return store.added - before
 
 
