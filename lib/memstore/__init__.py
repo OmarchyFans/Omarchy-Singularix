@@ -4,4 +4,4 @@ Design: docs/design-pageindex-memstore.md; the retrieval method was chosen by sp
 (docs/spike-n0-results.md). Standard library only.
 """
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"

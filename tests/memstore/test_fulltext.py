@@ -88,6 +88,41 @@ class FullTextTest(unittest.TestCase):
         ingest.ingest_claude(self.s, roots=[self.root])
         self.assertEqual(self.s.db.execute("select count(*) from leaf_full").fetchone()[0], before)
 
+    def test_small_commits_keep_sessions_and_counts_right(self):
+        from unittest import mock
+        with mock.patch.object(ingest, "COMMIT_EVERY", 2):
+            ingest.ingest_claude(self.s, roots=[self.root])
+        self.assertEqual(self.s.db.execute("select count(*) from leaves").fetchone()[0], 4)
+        title, first = self.s.db.execute("select title, first_user from sessions where id='claude:S'").fetchone()
+        self.assertEqual(first, "build it")
+        files = json.loads(self.s.db.execute("select files from sessions where id='claude:S'").fetchone()[0])
+        self.assertEqual(files.get("/tmp/x.py"), 1)  # counted once, not once per flush
+        self.assertEqual(self.s.cursor("claude:" + self.f)["offset"], os.path.getsize(self.f))
+
+    def test_backfill_walks_hermes_past_plain_messages(self):
+        home = os.path.join(self.t, "rixb", "hermes")
+        os.makedirs(home)
+        c = sqlite3.connect(os.path.join(home, "state.db"))
+        c.executescript("""create table sessions(id text primary key, model text, title text, cwd text, git_branch text, started_at real);
+            create table messages(id integer primary key autoincrement, session_id text, role text, content text,
+            tool_calls text, timestamp real);""")
+        c.execute("insert into sessions values('s1','m','t',null,null,1)")
+        for i in range(5):  # short messages: nothing to add to leaf_full ...
+            c.execute("insert into messages(session_id, role, content, timestamp) values('s1','user','hi there',?)", (i,))
+        c.execute("insert into messages(session_id, role, content, timestamp) values('s1','user',?,9)", ("x" * 9000,))
+        c.commit()
+        from unittest import mock
+        with mock.patch.object(ingest, "HERMES_BATCH", 2), \
+                mock.patch.object(cli, "ingest_hermes", lambda st: ingest.ingest_hermes(st, homes=[("rixb", home)])), \
+                mock.patch.object(cli, "ingest_claude", lambda st: 0), \
+                mock.patch.object(cli, "ingest_commits", lambda st: 0), \
+                mock.patch.dict(os.environ, {"MEMSTORE_DB": self.path}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            cli.main(["backfill-full"])  # three passes of 2: the first two add no full text at all
+        # ... but the long one at the end still got its full text
+        lid = self.s.db.execute("select id from leaves where session='hermes:rixb:s1' order by ord desc limit 1").fetchone()[0]
+        self.assertEqual(len(self.s.full_text(lid)), 9000)
+
     def test_hermes_reasoning_and_full_args(self):
         home = os.path.join(self.t, "rix", "hermes")
         os.makedirs(home)
