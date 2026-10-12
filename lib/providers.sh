@@ -15,15 +15,20 @@
 #   openclaw : `openclaw models auth login --provider <id>`; OpenAI uses PKCE in a
 #              browser, Anthropic uses a `claude setup-token` token.
 PROVIDERS=(
-  "anthropic|Anthropic (Claude)|ANTHROPIC_API_KEY|anthropic|y|anthropic|y|-|claude-sonnet-5|claude-opus-5,claude-sonnet-5,claude-haiku-4-5-20251001"
-  "openai|OpenAI (API key)|OPENAI_API_KEY|openai-api|n|openai|n|-|gpt-5.4|gpt-5.4,gpt-5.4-mini,o4-mini"
+  # Subscription / OAuth rows are listed before their metered API-key siblings on purpose:
+  # a signed-in subscription (Claude, ChatGPT, Grok) is already paid for, so the picker
+  # should steer there before a user burns pay-per-token API credit by picking the wrong
+  # row with the same model family (2026-10-11, user request after noticing openai/xai had
+  # no visual preference between their free-subscription and metered rows).
+  "anthropic|Anthropic (Claude, subscription OAuth or API key)|ANTHROPIC_API_KEY|anthropic|y|anthropic|y|-|claude-sonnet-5|claude-opus-5,claude-sonnet-5,claude-haiku-4-5-20251001"
   # ChatGPT-account Codex endpoint. It serves a SMALL probed subset of OpenAI's catalog
   # (OAL_CODEX_MODELS in lib/models.sh, which also filters the live catalog). A "-codex"
   # name means nothing: gpt-5.4-codex, the default here until 0.19.6, is itself rejected.
-  "openai-codex|OpenAI (ChatGPT subscription, OAuth)|-|openai-codex|y|openai|y|-|gpt-5.6-terra|gpt-5.6-terra,gpt-5.6-luna,gpt-5.5"
+  "openai-codex|OpenAI (ChatGPT subscription, OAuth — use before paying per token)|-|openai-codex|y|openai|y|-|gpt-5.6-terra|gpt-5.6-terra,gpt-5.6-luna,gpt-5.5"
+  "openai|OpenAI (API key, pay-per-token — only if no ChatGPT subscription)|OPENAI_API_KEY|openai-api|n|openai|n|-|gpt-5.4|gpt-5.4,gpt-5.4-mini,o4-mini"
   "nous|Nous Portal (OAuth)|NOUS_API_KEY|nous|y|-|n|-|hermes-4-405b|hermes-4-405b,hermes-4-70b"
-  "xai|xAI (Grok)|XAI_API_KEY|xai|n|xai|n|-|grok-4.6|grok-4.6,grok-4.6-fast,grok-4"
-  "xai-oauth|xAI (Grok, browser sign-in)|-|xai-oauth|y|-|n|https://api.x.ai/v1|grok-4.6|grok-4.6,grok-4.6-fast"
+  "xai-oauth|xAI (Grok, subscription browser sign-in — use before paying per token)|-|xai-oauth|y|-|n|https://api.x.ai/v1|grok-4.6|grok-4.6,grok-4.6-fast"
+  "xai|xAI (Grok, API key, pay-per-token — only if no Grok subscription)|XAI_API_KEY|xai|n|xai|n|-|grok-4.6|grok-4.6,grok-4.6-fast,grok-4"
   "openrouter|OpenRouter|OPENROUTER_API_KEY|openrouter|n|openrouter|n|-|anthropic/claude-sonnet-5|anthropic/claude-sonnet-5,openai/gpt-5.4,google/gemini-3-pro,deepseek/deepseek-v4"
   "gemini|Google Gemini|GEMINI_API_KEY|gemini|n|google|n|-|gemini-3-pro|gemini-3-pro,gemini-3-flash"
   "deepseek|DeepSeek|DEEPSEEK_API_KEY|deepseek|n|deepseek|n|-|deepseek-chat|deepseek-chat,deepseek-reasoner"
